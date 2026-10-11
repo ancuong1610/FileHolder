@@ -1,0 +1,567 @@
+{
+  "apiVersion": "2024-11-30",
+  "modelId": "prebuilt-layout",
+  "stringIndexType": "unicodeCodePoint",
+  "content": "Synthetic API Reference Guide (v1) Models API The Models API lists and retrieves model metadata. Endpoints under this section accept the standard authentication header. Completions API guide documentation The Completions API generates text completions from a prompt. Requests must include the model identifier and the prompt text. The completions endpoint limits the maximum number of generated tokens per response. Embeddings API The Embeddings API converts input text into vector representations for downstream retrieval and similarity search.",
+  "pages": [
+    {
+      "pageNumber": 1,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    },
+    {
+      "pageNumber": 2,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    }
+  ],
+  "paragraphs": [
+    {
+      "content": "Synthetic API Reference Guide (v1)",
+      "role": "title",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            0.5,
+            7.7,
+            0.5,
+            7.7,
+            0.8,
+            0.8,
+            0.8
+          ]
+        }
+      ]
+    },
+    {
+      "content": "Models API",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            1.0,
+            7.7,
+            1.0,
+            7.7,
+            1.3,
+            0.8,
+            1.3
+          ]
+        }
+      ]
+    },
+    {
+      "content": "The Models API lists and retrieves model metadata. Endpoints under this section accept the standard authentication header.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            1.4,
+            7.7,
+            1.4,
+            7.7,
+            1.7,
+            0.8,
+            1.7
+          ]
+        }
+      ]
+    },
+    {
+      "content": "Completions API guide documentation",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            2.0,
+            7.7,
+            2.0,
+            7.7,
+            2.3,
+            0.8,
+            2.3
+          ]
+        }
+      ]
+    },
+    {
+      "content": "The Completions API generates text completions from a prompt. Requests must include the model identifier and the prompt text.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            2.4,
+            7.7,
+            2.4,
+            7.7,
+            2.7,
+            0.8,
+            2.7
+          ]
+        }
+      ]
+    },
+    {
+      "content": "The completions endpoint limits the maximum number of generated tokens per response.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            3.0,
+            7.7,
+            3.0,
+            7.7,
+            3.3,
+            0.8,
+            3.3
+          ]
+        }
+      ]
+    },
+    {
+      "content": "Embeddings API",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            3.5,
+            7.7,
+            3.5,
+            7.7,
+            3.8,
+            0.8,
+            3.8
+          ]
+        }
+      ]
+    },
+    {
+      "content": "The Embeddings API converts input text into vector representations for downstream retrieval and similarity search.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            3.9,
+            7.7,
+            3.9,
+            7.7,
+            4.2,
+            0.8,
+            4.2
+          ]
+        }
+      ]
+    }
+  ],
+  "tables": [
+    {
+      "rowCount": 4,
+      "columnCount": 4,
+      "cells": [
+        {
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Parameter",
+          "kind": "columnHeader",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                0.5,
+                2.525,
+                0.5,
+                2.525,
+                1.05,
+                0.8,
+                1.05
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Type",
+          "kind": "columnHeader",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                2.525,
+                0.5,
+                4.25,
+                0.5,
+                4.25,
+                1.05,
+                2.525,
+                1.05
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Required",
+          "kind": "columnHeader",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                4.25,
+                0.5,
+                5.975,
+                0.5,
+                5.975,
+                1.05,
+                4.25,
+                1.05
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 3,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Description",
+          "kind": "columnHeader",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                5.975,
+                0.5,
+                7.7,
+                0.5,
+                7.7,
+                1.05,
+                5.975,
+                1.05
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "model",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                1.05,
+                2.525,
+                1.05,
+                2.525,
+                1.6,
+                0.8,
+                1.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "string",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                2.525,
+                1.05,
+                4.25,
+                1.05,
+                4.25,
+                1.6,
+                2.525,
+                1.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "yes",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                4.25,
+                1.05,
+                5.975,
+                1.05,
+                5.975,
+                1.6,
+                4.25,
+                1.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 3,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Model identifier",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                5.975,
+                1.05,
+                7.7,
+                1.05,
+                7.7,
+                1.6,
+                5.975,
+                1.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "prompt",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                1.6,
+                2.525,
+                1.6,
+                2.525,
+                2.15,
+                0.8,
+                2.15
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "string",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                2.525,
+                1.6,
+                4.25,
+                1.6,
+                4.25,
+                2.15,
+                2.525,
+                2.15
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "yes",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                4.25,
+                1.6,
+                5.975,
+                1.6,
+                5.975,
+                2.15,
+                4.25,
+                2.15
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 3,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Input prompt text",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                5.975,
+                1.6,
+                7.7,
+                1.6,
+                7.7,
+                2.15,
+                5.975,
+                2.15
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "temperature",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                2.15,
+                2.525,
+                2.15,
+                2.525,
+                2.7,
+                0.8,
+                2.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "number",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                2.525,
+                2.15,
+                4.25,
+                2.15,
+                4.25,
+                2.7,
+                2.525,
+                2.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "no",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                4.25,
+                2.15,
+                5.975,
+                2.15,
+                5.975,
+                2.7,
+                4.25,
+                2.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 3,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Sampling temperature (0 to 2)",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                5.975,
+                2.15,
+                7.7,
+                2.15,
+                7.7,
+                2.7,
+                5.975,
+                2.7
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 2,
+          "polygon": [
+            0.8,
+            0.5,
+            7.7,
+            0.5,
+            7.7,
+            2.7,
+            0.8,
+            2.7
+          ]
+        }
+      ]
+    }
+  ]
+}

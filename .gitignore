@@ -1,0 +1,18 @@
+# Local secrets - never commit; the template stays tracked.
+.env
+!.env.example
+
+# Runtime / generated workspace output.
+workspace/
+output/
+runtime/
+temp/
+cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Dropped input PDFs (keep the placeholder that preserves the directory).
+input/*.pdf
+input/document/
+!input/.gitkeep

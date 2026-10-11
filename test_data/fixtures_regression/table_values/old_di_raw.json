@@ -1,0 +1,1744 @@
+{
+  "apiVersion": "2024-11-30",
+  "modelId": "prebuilt-layout",
+  "stringIndexType": "unicodeCodePoint",
+  "content": "",
+  "pages": [
+    {
+      "pageNumber": 1,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    },
+    {
+      "pageNumber": 2,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    },
+    {
+      "pageNumber": 3,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    },
+    {
+      "pageNumber": 4,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    },
+    {
+      "pageNumber": 5,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    },
+    {
+      "pageNumber": 6,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    },
+    {
+      "pageNumber": 7,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    },
+    {
+      "pageNumber": 8,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    },
+    {
+      "pageNumber": 9,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    },
+    {
+      "pageNumber": 10,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    }
+  ],
+  "paragraphs": [],
+  "tables": [
+    {
+      "rowCount": 3,
+      "columnCount": 3,
+      "cells": [
+        {
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Asset class",
+          "boundingRegions": [
+            {
+              "pageNumber": 1,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Risk weight",
+          "boundingRegions": [
+            {
+              "pageNumber": 1,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Notes",
+          "boundingRegions": [
+            {
+              "pageNumber": 1,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Sovereigns",
+          "boundingRegions": [
+            {
+              "pageNumber": 1,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "0 percent",
+          "boundingRegions": [
+            {
+              "pageNumber": 1,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Standard",
+          "boundingRegions": [
+            {
+              "pageNumber": 1,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Corporates",
+          "boundingRegions": [
+            {
+              "pageNumber": 1,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "100 percent",
+          "boundingRegions": [
+            {
+              "pageNumber": 1,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Standard",
+          "boundingRegions": [
+            {
+              "pageNumber": 1,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            0.6,
+            7.7,
+            0.6,
+            7.7,
+            1.8000000000000003,
+            0.8,
+            1.8000000000000003
+          ]
+        }
+      ]
+    },
+    {
+      "rowCount": 3,
+      "columnCount": 3,
+      "cells": [
+        {
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Exposure",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Limit",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Comment",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Wholesale",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "100",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Approved",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Retail",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "50",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Approved",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 2,
+          "polygon": [
+            0.8,
+            0.6,
+            7.7,
+            0.6,
+            7.7,
+            1.8000000000000003,
+            0.8,
+            1.8000000000000003
+          ]
+        }
+      ]
+    },
+    {
+      "rowCount": 4,
+      "columnCount": 3,
+      "cells": [
+        {
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Segment",
+          "boundingRegions": [
+            {
+              "pageNumber": 3,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Threshold",
+          "boundingRegions": [
+            {
+              "pageNumber": 3,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Status",
+          "boundingRegions": [
+            {
+              "pageNumber": 3,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Gold",
+          "boundingRegions": [
+            {
+              "pageNumber": 3,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "10",
+          "boundingRegions": [
+            {
+              "pageNumber": 3,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Active",
+          "boundingRegions": [
+            {
+              "pageNumber": 3,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Silver",
+          "boundingRegions": [
+            {
+              "pageNumber": 3,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "20",
+          "boundingRegions": [
+            {
+              "pageNumber": 3,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Active",
+          "boundingRegions": [
+            {
+              "pageNumber": 3,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Bronze",
+          "boundingRegions": [
+            {
+              "pageNumber": 3,
+              "polygon": [
+                0.8,
+                1.8000000000000003,
+                7.7,
+                1.8000000000000003,
+                7.7,
+                2.1,
+                0.8,
+                2.1
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "30",
+          "boundingRegions": [
+            {
+              "pageNumber": 3,
+              "polygon": [
+                0.8,
+                1.8000000000000003,
+                7.7,
+                1.8000000000000003,
+                7.7,
+                2.1,
+                0.8,
+                2.1
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Retired",
+          "boundingRegions": [
+            {
+              "pageNumber": 3,
+              "polygon": [
+                0.8,
+                1.8000000000000003,
+                7.7,
+                1.8000000000000003,
+                7.7,
+                2.1,
+                0.8,
+                2.1
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 3,
+          "polygon": [
+            0.8,
+            0.6,
+            7.7,
+            0.6,
+            7.7,
+            2.2,
+            0.8,
+            2.2
+          ]
+        }
+      ]
+    },
+    {
+      "rowCount": 4,
+      "columnCount": 3,
+      "cells": [
+        {
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Stage",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Owner",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Deadline",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Intake",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Alice",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Day 1",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Review",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Bob",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Day 5",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Publish",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                0.8,
+                1.8000000000000003,
+                7.7,
+                1.8000000000000003,
+                7.7,
+                2.1,
+                0.8,
+                2.1
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Carol",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                0.8,
+                1.8000000000000003,
+                7.7,
+                1.8000000000000003,
+                7.7,
+                2.1,
+                0.8,
+                2.1
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Day 9",
+          "boundingRegions": [
+            {
+              "pageNumber": 4,
+              "polygon": [
+                0.8,
+                1.8000000000000003,
+                7.7,
+                1.8000000000000003,
+                7.7,
+                2.1,
+                0.8,
+                2.1
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 4,
+          "polygon": [
+            0.8,
+            0.6,
+            7.7,
+            0.6,
+            7.7,
+            2.2,
+            0.8,
+            2.2
+          ]
+        }
+      ]
+    },
+    {
+      "rowCount": 2,
+      "columnCount": 3,
+      "cells": [
+        {
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Control",
+          "boundingRegions": [
+            {
+              "pageNumber": 5,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Frequency",
+          "boundingRegions": [
+            {
+              "pageNumber": 5,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Evidence",
+          "boundingRegions": [
+            {
+              "pageNumber": 5,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Backup",
+          "boundingRegions": [
+            {
+              "pageNumber": 5,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Daily",
+          "boundingRegions": [
+            {
+              "pageNumber": 5,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Log",
+          "boundingRegions": [
+            {
+              "pageNumber": 5,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 5,
+          "polygon": [
+            0.8,
+            0.6,
+            7.7,
+            0.6,
+            7.7,
+            1.4,
+            0.8,
+            1.4
+          ]
+        }
+      ]
+    },
+    {
+      "rowCount": 3,
+      "columnCount": 2,
+      "cells": [
+        {
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Region",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Volume",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "North",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "10",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "South",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "20",
+          "boundingRegions": [
+            {
+              "pageNumber": 6,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 6,
+          "polygon": [
+            0.8,
+            0.6,
+            7.7,
+            0.6,
+            7.7,
+            1.8000000000000003,
+            0.8,
+            1.8000000000000003
+          ]
+        }
+      ]
+    },
+    {
+      "rowCount": 4,
+      "columnCount": 2,
+      "cells": [
+        {
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Group",
+          "boundingRegions": [
+            {
+              "pageNumber": 9,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Value",
+          "boundingRegions": [
+            {
+              "pageNumber": 9,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "rowSpan": 2,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Merged",
+          "boundingRegions": [
+            {
+              "pageNumber": 9,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.6,
+                0.8,
+                1.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Alpha",
+          "boundingRegions": [
+            {
+              "pageNumber": 9,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Other",
+          "boundingRegions": [
+            {
+              "pageNumber": 9,
+              "polygon": [
+                0.8,
+                1.7999999999999998,
+                7.7,
+                1.7999999999999998,
+                7.7,
+                2.0999999999999996,
+                0.8,
+                2.0999999999999996
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Gamma",
+          "boundingRegions": [
+            {
+              "pageNumber": 9,
+              "polygon": [
+                0.8,
+                1.7999999999999998,
+                7.7,
+                1.7999999999999998,
+                7.7,
+                2.0999999999999996,
+                0.8,
+                2.0999999999999996
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Beta",
+          "boundingRegions": [
+            {
+              "pageNumber": 9,
+              "polygon": [
+                0.8,
+                1.4,
+                7.7,
+                1.4,
+                7.7,
+                1.7,
+                0.8,
+                1.7
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 9,
+          "polygon": [
+            0.8,
+            0.6,
+            7.7,
+            0.6,
+            7.7,
+            2.2,
+            0.8,
+            2.2
+          ]
+        }
+      ]
+    },
+    {
+      "rowCount": 2,
+      "columnCount": 2,
+      "cells": [
+        {
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Item",
+          "boundingRegions": [
+            {
+              "pageNumber": 10,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": "columnHeader",
+          "content": "Description",
+          "boundingRegions": [
+            {
+              "pageNumber": 10,
+              "polygon": [
+                0.8,
+                0.6,
+                7.7,
+                0.6,
+                7.7,
+                0.8999999999999999,
+                0.8,
+                0.8999999999999999
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Widget",
+          "boundingRegions": [
+            {
+              "pageNumber": 10,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "kind": null,
+          "content": "Co-operating units are counted separately",
+          "boundingRegions": [
+            {
+              "pageNumber": 10,
+              "polygon": [
+                0.8,
+                1.0,
+                7.7,
+                1.0,
+                7.7,
+                1.3,
+                0.8,
+                1.3
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 10,
+          "polygon": [
+            0.8,
+            0.6,
+            7.7,
+            0.6,
+            7.7,
+            1.4,
+            0.8,
+            1.4
+          ]
+        }
+      ]
+    }
+  ]
+}

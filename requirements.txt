@@ -1,0 +1,21 @@
+# Public, installable dependencies for the comparison engine, service and tests.
+#
+# The internal company hub SDK is intentionally NOT listed here. It is only
+# installable from an approved internal package index and is needed solely for
+# real Stage 13 with LLM_PROVIDER=bbk_ai_hub and for the internal local-chat
+# path. See README.md for internal-install guidance.
+azure-core>=1.30.0
+pip-system-certs
+
+regex>=2024.0.0
+fastapi>=0.110
+uvicorn>=0.29
+httpx>=0.27,<1
+python-multipart>=0.0.9
+fastmcp>=3.4,<4
+langchain-core>=0.3,<2
+python-dotenv>=1.0,<2
+azure-ai-documentintelligence>=1.0.0
+pymupdf>=1.24
+openai>=1.30
+reportlab>=4.0

@@ -1,0 +1,536 @@
+{
+  "description": "Synthetic, hand-authored s07 matching-diagnostics fixture. Each scenario uses a distinct element_type so candidate retrieval cannot cross scenarios. The expected truth pairs below were authored before running the pipeline; they are not inferred from current matcher output.",
+  "provenance": {
+    "synthetic": true,
+    "not_a_pdf_comparison": true,
+    "purpose": "matching_diagnostics",
+    "element_types_are_scenario_partitions": true
+  },
+  "exact": {
+    "schema_version": "0.2.0",
+    "comparison_stage": "exact_element_matching_with_provisional_context",
+    "processing": {
+      "authoritative_hierarchy_used": false
+    },
+    "old_document": {},
+    "new_document": {},
+    "unmatched_old": [
+      {
+        "element_id": "OLD-PARA-001",
+        "element_type": "paragraph",
+        "text": "Backups shall be retained for a minimum of 30 days before rotation.",
+        "normalized_text": "Backups shall be retained for a minimum of 30 days before rotation.",
+        "comparison_text": "Backups shall be retained for a minimum of 30 days before rotation.",
+        "reading_order": 0,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:retention policy"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "OLD-HEAD-001",
+        "element_type": "heading",
+        "text": "Wireless encryption key rotation schedule quarterly",
+        "normalized_text": "Wireless encryption key rotation schedule quarterly",
+        "comparison_text": "Wireless encryption key rotation schedule quarterly",
+        "reading_order": 1,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": [],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "OLD-LOST-001",
+        "element_type": "list_item",
+        "text": "Records archived offsite annually",
+        "normalized_text": "Records archived offsite annually",
+        "comparison_text": "Records archived offsite annually",
+        "reading_order": 2,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": [],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "OLD-SCORE-001",
+        "element_type": "table_cell",
+        "text": "Quarterly audit confirms full compliance with all internal controls",
+        "normalized_text": "Quarterly audit confirms full compliance with all internal controls",
+        "comparison_text": "Quarterly audit confirms full compliance with all internal controls",
+        "reading_order": 3,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": [],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "OLD-AMB-001",
+        "element_type": "caption",
+        "text": "The board shall not amend this policy",
+        "normalized_text": "The board shall not amend this policy",
+        "comparison_text": "The board shall not amend this policy",
+        "reading_order": 4,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": [],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "OLD-CAP-001",
+        "element_type": "footnote",
+        "text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "normalized_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "comparison_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "reading_order": 5,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "OLD-RFLOOR-001",
+        "element_type": "text_box",
+        "text": "Data retention schedules are reviewed annually by the privacy office",
+        "normalized_text": "Data retention schedules are reviewed annually by the privacy office",
+        "comparison_text": "Data retention schedules are reviewed annually by the privacy office",
+        "reading_order": 6,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:records management"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "OLD-AUTO-001",
+        "element_type": "body_text",
+        "text": "Access requests are reviewed by the security operations team each week",
+        "normalized_text": "Access requests are reviewed by the security operations team each week",
+        "comparison_text": "Access requests are reviewed by the security operations team each week",
+        "reading_order": 7,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:service levels"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "OLD-MAR-001",
+        "element_type": "list",
+        "text": "The recovery time objective for critical services is four hours",
+        "normalized_text": "The recovery time objective for critical services is four hours",
+        "comparison_text": "The recovery time objective for critical services is four hours",
+        "reading_order": 8,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:recovery objectives"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "OLD-FALL-001",
+        "element_type": "definition",
+        "text": "Encryption at rest is mandatory for all stored records",
+        "normalized_text": "Encryption at rest is mandatory for all stored records",
+        "comparison_text": "Encryption at rest is mandatory for all stored records",
+        "reading_order": 9,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:data handling"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      }
+    ],
+    "unmatched_new": [
+      {
+        "element_id": "NEW-PARA-001",
+        "element_type": "paragraph",
+        "text": "Backups shall be retained for a minimum of 60 days before rotation.",
+        "normalized_text": "Backups shall be retained for a minimum of 60 days before rotation.",
+        "comparison_text": "Backups shall be retained for a minimum of 60 days before rotation.",
+        "reading_order": 0,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:retention policy"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-HEAD-001",
+        "element_type": "heading",
+        "text": "Wireless encryption key rotation schedule monthly",
+        "normalized_text": "Wireless encryption key rotation schedule monthly",
+        "comparison_text": "Wireless encryption key rotation schedule monthly",
+        "reading_order": 1,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": [],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-LOST-001",
+        "element_type": "list_item",
+        "text": "Documents stored remotely yearly",
+        "normalized_text": "Documents stored remotely yearly",
+        "comparison_text": "Documents stored remotely yearly",
+        "reading_order": 2,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": [],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-SCORE-001",
+        "element_type": "table_cell",
+        "text": "The quarterly review verifies complete adherence to external standards",
+        "normalized_text": "The quarterly review verifies complete adherence to external standards",
+        "comparison_text": "The quarterly review verifies complete adherence to external standards",
+        "reading_order": 3,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": [],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-AMB-001",
+        "element_type": "caption",
+        "text": "The board may not amend this policy",
+        "normalized_text": "The board may not amend this policy",
+        "comparison_text": "The board may not amend this policy",
+        "reading_order": 4,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": [],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-CAP-001",
+        "element_type": "footnote",
+        "text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "normalized_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "comparison_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "reading_order": 5,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-CAP-002",
+        "element_type": "footnote",
+        "text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "normalized_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "comparison_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "reading_order": 6,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-CAP-003",
+        "element_type": "footnote",
+        "text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "normalized_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "comparison_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "reading_order": 7,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-CAP-004",
+        "element_type": "footnote",
+        "text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "normalized_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "comparison_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "reading_order": 8,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-CAP-005",
+        "element_type": "footnote",
+        "text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "normalized_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "comparison_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "reading_order": 9,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-CAP-006",
+        "element_type": "footnote",
+        "text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "normalized_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "comparison_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "reading_order": 10,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-CAP-007",
+        "element_type": "footnote",
+        "text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "normalized_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "comparison_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "reading_order": 11,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-CAP-008",
+        "element_type": "footnote",
+        "text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "normalized_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "comparison_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "reading_order": 12,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-CAP-009",
+        "element_type": "footnote",
+        "text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "normalized_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "comparison_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "reading_order": 13,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-CAP-010",
+        "element_type": "footnote",
+        "text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "normalized_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "comparison_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "reading_order": 14,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-CAP-011",
+        "element_type": "footnote",
+        "text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "normalized_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "comparison_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "reading_order": 15,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-CAP-012",
+        "element_type": "footnote",
+        "text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "normalized_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "comparison_text": "Alpha beta gamma delta epsilon zeta eta theta",
+        "reading_order": 16,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-CAP-TRUE-001",
+        "element_type": "footnote",
+        "text": "Alpha zeta",
+        "normalized_text": "Alpha zeta",
+        "comparison_text": "Alpha zeta",
+        "reading_order": 17,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:appendix glossary"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-RFLOOR-001",
+        "element_type": "text_box",
+        "text": "Data retention schedule reviewed yearly by privacy team",
+        "normalized_text": "Data retention schedule reviewed yearly by privacy team",
+        "comparison_text": "Data retention schedule reviewed yearly by privacy team",
+        "reading_order": 18,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:records management"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-AUTO-001",
+        "element_type": "body_text",
+        "text": "Access requests are reviewed by security operations teams weekly",
+        "normalized_text": "Access requests are reviewed by security operations teams weekly",
+        "comparison_text": "Access requests are reviewed by security operations teams weekly",
+        "reading_order": 19,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:service levels"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-MAR-A",
+        "element_type": "list",
+        "text": "The recovery time objective for critical services is six hours",
+        "normalized_text": "The recovery time objective for critical services is six hours",
+        "comparison_text": "The recovery time objective for critical services is six hours",
+        "reading_order": 20,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:recovery objectives"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-MAR-B",
+        "element_type": "list",
+        "text": "The recovery time objective for critical services is two business days",
+        "normalized_text": "The recovery time objective for critical services is two business days",
+        "comparison_text": "The recovery time objective for critical services is two business days",
+        "reading_order": 21,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:recovery objectives"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-FALL-CTX",
+        "element_type": "definition",
+        "text": "Gardening advice spring planting soil preparation",
+        "normalized_text": "Gardening advice spring planting soil preparation",
+        "comparison_text": "Gardening advice spring planting soil preparation",
+        "reading_order": 22,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": ["heading:data handling"],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      },
+      {
+        "element_id": "NEW-FALL-TOKEN",
+        "element_type": "definition",
+        "text": "Encryption at rest is required for all archived records",
+        "normalized_text": "Encryption at rest is required for all archived records",
+        "comparison_text": "Encryption at rest is required for all archived records",
+        "reading_order": 23,
+        "provisional_anchor_context": {
+          "recent_anchor_keys": [],
+          "context_is_authoritative_hierarchy": false
+        },
+        "exact_unmatched_reason": "no_exact_counterpart"
+      }
+    ]
+  },
+  "truth_pairs": [
+    {
+      "old_element_id": "OLD-PARA-001",
+      "new_element_id": "NEW-PARA-001",
+      "expected_disposition": "modified_alignment_candidate",
+      "scenario": "numeric_wording_context_retrieval",
+      "note": "30 -> 60 days; shared provisional anchor so context retrieval should reach it."
+    },
+    {
+      "old_element_id": "OLD-HEAD-001",
+      "new_element_id": "NEW-HEAD-001",
+      "expected_disposition": "modified_alignment_candidate",
+      "scenario": "token_fallback_retrieval",
+      "note": "No anchor on either side; only rare informative tokens can retrieve it."
+    },
+    {
+      "old_element_id": "OLD-LOST-001",
+      "new_element_id": "NEW-LOST-001",
+      "expected_disposition": null,
+      "scenario": "lost_retrieval",
+      "note": "Semantic paraphrase sharing no anchor and no informative token; retrieval loss expected."
+    },
+    {
+      "old_element_id": "OLD-SCORE-001",
+      "new_element_id": "NEW-SCORE-001",
+      "expected_disposition": null,
+      "scenario": "lost_scoring",
+      "note": "One shared informative token retrieves it, but the expensive score is below the review floor."
+    },
+    {
+      "old_element_id": "OLD-AMB-001",
+      "new_element_id": "NEW-AMB-001",
+      "expected_disposition": "modified_alignment_review",
+      "scenario": "ambiguous_negatives_short_text_review",
+      "note": "shall not -> may not; short text forces review even at high similarity."
+    },
+    {
+      "old_element_id": "OLD-CAP-001",
+      "new_element_id": "NEW-CAP-TRUE-001",
+      "expected_disposition": null,
+      "scenario": "lost_shortlist",
+      "note": "True counterpart is retrieved by context but capped out of the top-12 shortlist."
+    },
+    {
+      "old_element_id": "OLD-RFLOOR-001",
+      "new_element_id": "NEW-RFLOOR-001",
+      "expected_disposition": "modified_alignment_review",
+      "scenario": "review_floor_sensitivity",
+      "note": "Score sits between the 0.72 default and the 0.74 variant, so the review-floor sweep changes its stage."
+    },
+    {
+      "old_element_id": "OLD-AUTO-001",
+      "new_element_id": "NEW-AUTO-001",
+      "expected_disposition": "modified_alignment_review",
+      "scenario": "automatic_threshold_sensitivity",
+      "note": "Score sits between the 0.84 and 0.86 automatic threshold, so the automatic sweep changes its disposition."
+    },
+    {
+      "old_element_id": "OLD-MAR-001",
+      "new_element_id": "NEW-MAR-A",
+      "expected_disposition": "modified_alignment_candidate",
+      "scenario": "margin_sensitivity",
+      "note": "Margin is just above the 0.10 default and below the 0.12 variant, so the margin sweep changes its disposition."
+    },
+    {
+      "old_element_id": "OLD-FALL-001",
+      "new_element_id": "NEW-FALL-TOKEN",
+      "expected_disposition": "modified_alignment_review",
+      "scenario": "context_then_token_fallback",
+      "note": "Context retrieval returns only the unrelated anchored new element, which scores below the floor, so s07 retries via rare-token fallback and finds the true counterpart."
+    }
+  ]
+}

@@ -1,0 +1,669 @@
+{
+  "engine_python": [
+    {
+      "original_byte_identical": true,
+      "path": "agent_poc/__init__.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "agent_poc/agent.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "agent_poc/agent_tools.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "agent_poc/api_client.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "agent_poc/config.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "agent_poc/local_reviewer.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "agent_poc/mcp_gateway.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "agent_poc/prompts.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "agent_poc/tia_client.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/__init__.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/__main__.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/authorization.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/cli.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/common.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/diff_annotations.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/domain.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/evaluate.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/gt_benchmark.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/lang_profile.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/matching_diagnostics.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/mcp_server.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/mutations.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/reconcile.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/redline.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/redline_pdf.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/release_audit.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/render_spans.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/route_identity.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/service.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/__init__.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s01_extract.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s02_validate_extraction.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s03_internal_schema.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s04_normalize.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s05_anchors.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s06_exact_matching.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s07_modified_matching.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s08_candidates.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s09_movement.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s10_tables.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s11_routing.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s12_packets.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s13_llm_evaluator.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s14_canonical_result.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/stages/s15_serve.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/summary.py"
+    },
+    {
+      "original_byte_identical": true,
+      "path": "crr_compare/validation.py"
+    }
+  ],
+  "excluded_roots": [
+    "companyPDF",
+    "output_sample",
+    "private",
+    "workspace"
+  ],
+  "export_specific_differences": [
+    "README.md",
+    "docs/phase1-matching.md",
+    "docs/phase1-status.md",
+    "test_data/fixtures_general/crr3/README.md",
+    "test_data/fixtures_general/internal_policy_report/README.md",
+    "test_data/fixtures_general/scai_api_guide/README.md",
+    "tests/test_matching_stage_module.py",
+    "tests/test_optimized_validation.py",
+    "tests/test_stage_import_safety.py",
+    "tests/test_table_stage_module.py"
+  ],
+  "file_count": 91,
+  "files": [
+    {
+      "bytes": 846,
+      "path": ".env.example",
+      "sha256": "83cb994a72b4034d360c92a46a326e6ca5b7923d5a5b5e6a0f0c2481580a4df9"
+    },
+    {
+      "bytes": 314,
+      "path": ".gitignore",
+      "sha256": "34a631558a4e7fcb71da1726a37720f3a2d09a8feb520003bcdaa8f509c400a8"
+    },
+    {
+      "bytes": 11686,
+      "path": "README.md",
+      "sha256": "322fb64544afc40ae0a7d84056e52be0d75068b10c5c61f4021d8f9406dac45f"
+    },
+    {
+      "bytes": 75,
+      "path": "agent_poc/__init__.py",
+      "sha256": "7019c821fadc792e1244e1a11a79763049dcf09f09c0a129b8dcf9470432d192"
+    },
+    {
+      "bytes": 2951,
+      "path": "agent_poc/agent.py",
+      "sha256": "11b9c3f7dcba813c6ef78234c2ba261375fbc7d0b1d5ee0ae63f319da6cb1d07"
+    },
+    {
+      "bytes": 3966,
+      "path": "agent_poc/agent_tools.py",
+      "sha256": "1d5572fe9b478f120c58603c3759c8a6d959e4355ca3eb90871ffc750486bb82"
+    },
+    {
+      "bytes": 2953,
+      "path": "agent_poc/api_client.py",
+      "sha256": "0709a8136c8a8f8d1d317838106c3c906f076c4747f134d22ba11c8427f515df"
+    },
+    {
+      "bytes": 1441,
+      "path": "agent_poc/config.py",
+      "sha256": "3f14d3413cfb881de733334e7f25a3e3221ed1ee9b665a0164c01534150de1ed"
+    },
+    {
+      "bytes": 10219,
+      "path": "agent_poc/local_reviewer.py",
+      "sha256": "392914edb574212fa99eca5d3681d0b6bdfcb06f0a1f8474d1b914d05f2daa61"
+    },
+    {
+      "bytes": 4479,
+      "path": "agent_poc/mcp_gateway.py",
+      "sha256": "3d4de4b7afcbb2695e0e619d8479f77c5b6e2f00629d01fd89ec8be99d84c563"
+    },
+    {
+      "bytes": 1713,
+      "path": "agent_poc/prompts.py",
+      "sha256": "2c93dbec9f18fa2b4f74b3c177cc0b195be5985aabcf37f1acaf6c063f2f5006"
+    },
+    {
+      "bytes": 1408,
+      "path": "agent_poc/tia_client.py",
+      "sha256": "89a16b1fb880d305469715dd32603f7331dc4be71566d4f9ceaca87ba82665e5"
+    },
+    {
+      "bytes": 63,
+      "path": "crr_compare/__init__.py",
+      "sha256": "cce6d1f9c71f9d09980047a813b6ada2cea813f6f7670790b139b6ed1508ce1c"
+    },
+    {
+      "bytes": 41,
+      "path": "crr_compare/__main__.py",
+      "sha256": "f4de8e90e1c712a68b52dd2e20517649087ac5804371be0dd5c49dd6baba05f1"
+    },
+    {
+      "bytes": 16200,
+      "path": "crr_compare/authorization.py",
+      "sha256": "822c7d556e688a8a4ed020d2e6c0f566a887fd999da071f49d610a9f566ff485"
+    },
+    {
+      "bytes": 9472,
+      "path": "crr_compare/cli.py",
+      "sha256": "d8e03040862c8e80655b7b89ab11ce4c15814114a2fec13fe7637cec79c515d9"
+    },
+    {
+      "bytes": 2338,
+      "path": "crr_compare/common.py",
+      "sha256": "ac0118dab5d6506fd4ba01b0d45a2513ad0e496b39ec295759d5eef45b1c4915"
+    },
+    {
+      "bytes": 16990,
+      "path": "crr_compare/diff_annotations.py",
+      "sha256": "7bdd0e8c94660a00ec61065aa19f1ee4e7ed3f6db2098ef7f3e68900ebeba24a"
+    },
+    {
+      "bytes": 3470,
+      "path": "crr_compare/domain.py",
+      "sha256": "8ab6fbec6e070345daa015f861642d5f970f710d58eaac5b32e3c2e4a5826b83"
+    },
+    {
+      "bytes": 35975,
+      "path": "crr_compare/evaluate.py",
+      "sha256": "b884263bcbb02b11f1c38437292d3b1aab9c71b583296032e6b477dafa108dd2"
+    },
+    {
+      "bytes": 9444,
+      "path": "crr_compare/gt_benchmark.py",
+      "sha256": "30f81b0a400ef0371d18e54131fdd3317b90e141e84c3098eb5671e74cd395f4"
+    },
+    {
+      "bytes": 1553,
+      "path": "crr_compare/lang_profile.py",
+      "sha256": "c58cd6095d572f6d46a9a059d633280fac5ee3fe1163f6d5c9e0c69e458b73cc"
+    },
+    {
+      "bytes": 20767,
+      "path": "crr_compare/matching_diagnostics.py",
+      "sha256": "c5666b68740334de5a9f774fe0554388a13645fdf02726cffa38c4742f53b6d6"
+    },
+    {
+      "bytes": 3383,
+      "path": "crr_compare/mcp_server.py",
+      "sha256": "de9cc658da9de9b0fb978799994c0485f56db5472cda3154373c1a034c9f8b26"
+    },
+    {
+      "bytes": 7619,
+      "path": "crr_compare/mutations.py",
+      "sha256": "8d07e8ea9db6fc33f881e7dc78cb2b3db413ec4ad81abce82e7e1263227b3e12"
+    },
+    {
+      "bytes": 5475,
+      "path": "crr_compare/reconcile.py",
+      "sha256": "4f1fcb953aaedf34210ec6e9b9b2ac67291276b9535b159a54c16de56d90c195"
+    },
+    {
+      "bytes": 22639,
+      "path": "crr_compare/redline.py",
+      "sha256": "865287d73ebcb98595acd7bf3e058c931621340560e0ff0b4c374d91236e52f4"
+    },
+    {
+      "bytes": 11503,
+      "path": "crr_compare/redline_pdf.py",
+      "sha256": "20bc3c96c8f6537e1a57dd229a030a4b4e517066380b91f3671bb79ac8b78c7e"
+    },
+    {
+      "bytes": 5640,
+      "path": "crr_compare/release_audit.py",
+      "sha256": "43db418e845fea5dd6fbe1d73ad0c59519f8cf6b86854d474f184507633256f6"
+    },
+    {
+      "bytes": 5927,
+      "path": "crr_compare/render_spans.py",
+      "sha256": "eb4da841f9b04b757d2a2f4b0399bd2113468f477b692642cedcce22466f0bd6"
+    },
+    {
+      "bytes": 2203,
+      "path": "crr_compare/route_identity.py",
+      "sha256": "a091e96cdce2c4f469a72377bdeb1dd04f5e5e98b078ba8c1ea8401f49ee4684"
+    },
+    {
+      "bytes": 10693,
+      "path": "crr_compare/service.py",
+      "sha256": "4f22ecbefe14142b618acc20eaa4e4b296695641c1cc1531027083c2d70eba78"
+    },
+    {
+      "bytes": 0,
+      "path": "crr_compare/stages/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 22445,
+      "path": "crr_compare/stages/s01_extract.py",
+      "sha256": "aa3a36243f4081661fee311e4bb37e673cc7439b8f059df5355a5ee388de6623"
+    },
+    {
+      "bytes": 27374,
+      "path": "crr_compare/stages/s02_validate_extraction.py",
+      "sha256": "a3e088dd4a194532030a902bb9555758d3d29e7e6a59f06a529319cd92431db0"
+    },
+    {
+      "bytes": 30935,
+      "path": "crr_compare/stages/s03_internal_schema.py",
+      "sha256": "a32fe05fa03e71253f4463f5ba7fda598c1f17c8a69f7b75104a2c19511bc17c"
+    },
+    {
+      "bytes": 16970,
+      "path": "crr_compare/stages/s04_normalize.py",
+      "sha256": "7fcc6c70b9d1a8de3bab1d6b97debeb5bcf564db74d3320cb22b75d70ba77a5a"
+    },
+    {
+      "bytes": 23553,
+      "path": "crr_compare/stages/s05_anchors.py",
+      "sha256": "0127874b7881f131120eb79872ebd646a19213966f2b659236d70878763aebaf"
+    },
+    {
+      "bytes": 20574,
+      "path": "crr_compare/stages/s06_exact_matching.py",
+      "sha256": "a2e6edc4fe33f7233fc324ecfee6638d6797f4b242f730bda1a83689608764cf"
+    },
+    {
+      "bytes": 30010,
+      "path": "crr_compare/stages/s07_modified_matching.py",
+      "sha256": "c7c83de7869a51a63703bd9f469ae23cc716f700f0e8883062ed5ec7d65f7036"
+    },
+    {
+      "bytes": 20460,
+      "path": "crr_compare/stages/s08_candidates.py",
+      "sha256": "e1b1bfa4c62ac270ef35a8e8b438c72d182cc781b5bba6596f3e636707a5a512"
+    },
+    {
+      "bytes": 34686,
+      "path": "crr_compare/stages/s09_movement.py",
+      "sha256": "061e987f87366666b28654ec24d13a6d9ed5466e718c822419bbaed4bd419fb8"
+    },
+    {
+      "bytes": 62352,
+      "path": "crr_compare/stages/s10_tables.py",
+      "sha256": "aa5bf5e7b57a25d07c2722a9617a999d4c5825cf54c5db39e9c64748d4e3f901"
+    },
+    {
+      "bytes": 43084,
+      "path": "crr_compare/stages/s11_routing.py",
+      "sha256": "317c0691c52fa2f3e73d6b6ab102cf0a9acc1284fe2a02647f3b2ef8d3bfb38d"
+    },
+    {
+      "bytes": 22972,
+      "path": "crr_compare/stages/s12_packets.py",
+      "sha256": "e1116f53171dce67421269d72fc98ea96adfb7d6c64e791797cfba18ca203282"
+    },
+    {
+      "bytes": 17773,
+      "path": "crr_compare/stages/s13_llm_evaluator.py",
+      "sha256": "4ee811c6d39a6167bf230107cf1ac549da78f99f9ea46ee23c1abeaf80711e27"
+    },
+    {
+      "bytes": 33610,
+      "path": "crr_compare/stages/s14_canonical_result.py",
+      "sha256": "fc51844b6a68f99d17dfeb7d488612cefe042a9889d71d746a0c87aefc0f25b6"
+    },
+    {
+      "bytes": 10682,
+      "path": "crr_compare/stages/s15_serve.py",
+      "sha256": "08eb3d3a59bbf9966219d04eec7812fca7e67feae6fe5d95e32aba657014b833"
+    },
+    {
+      "bytes": 6813,
+      "path": "crr_compare/summary.py",
+      "sha256": "1c408bbe3bc130305c9b3d5638e8f7277ec9c204a9f9e47286473ebf721e5d85"
+    },
+    {
+      "bytes": 653,
+      "path": "crr_compare/validation.py",
+      "sha256": "6f9ca0f95da4353e076b1809e21f9c625d17caaae77e243aac58c13e015b10b3"
+    },
+    {
+      "bytes": 6846,
+      "path": "docs/phase1-matching.md",
+      "sha256": "02bd8c4f2698eff7d8e9338d78c65d5150889610f275edaba23caffbc20b1e40"
+    },
+    {
+      "bytes": 1826,
+      "path": "docs/phase1-status.md",
+      "sha256": "86dbb00cdeed551dab8e067126a8cdabad516dec83b18ab85ac5bd8e3db3bca4"
+    },
+    {
+      "bytes": 0,
+      "path": "input/.gitkeep",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 629,
+      "path": "requirements.txt",
+      "sha256": "8752d16c0ea2a1070f3096b135f6d3df9dfcf711a85aa10dcdfc2ac645d719bd"
+    },
+    {
+      "bytes": 143,
+      "path": "run_local.py",
+      "sha256": "5c67b7046b455301895f03c97e563ae1217a821723ccd48d9bae5835cafb35f3"
+    },
+    {
+      "bytes": 4003,
+      "path": "test_data/fixtures_general/crr3/README.md",
+      "sha256": "1f00e233555f33da35af8aa6162946a6bbcb3535ef7188d13826041d3ba24d68"
+    },
+    {
+      "bytes": 12074,
+      "path": "test_data/fixtures_general/crr3/new_di_raw.json",
+      "sha256": "30eb682926e7c7da799aeaeffd6532e6bcc0c61403e7bc956967c76abfd7c82e"
+    },
+    {
+      "bytes": 11571,
+      "path": "test_data/fixtures_general/crr3/old_di_raw.json",
+      "sha256": "6c391f50427119b2b2b07a73929ebdc01bfd5418989f42f66221530279bcb79e"
+    },
+    {
+      "bytes": 3560,
+      "path": "test_data/fixtures_general/internal_policy_report/README.md",
+      "sha256": "e08a5eb73577a1c6265dd5fe80185257d2b6f0206a00c3a1e1a3525dcfdc9d53"
+    },
+    {
+      "bytes": 12470,
+      "path": "test_data/fixtures_general/internal_policy_report/new_di_raw.json",
+      "sha256": "d7a65f716cc21e4bf1a240574ce2eca76965a66c1e8e7aee5fe25a161bd94077"
+    },
+    {
+      "bytes": 12416,
+      "path": "test_data/fixtures_general/internal_policy_report/old_di_raw.json",
+      "sha256": "a4c3bf8f8b639883a9845546e6cf860425ec0d1c4cbb546c95e447b9405ed876"
+    },
+    {
+      "bytes": 4236,
+      "path": "test_data/fixtures_general/scai_api_guide/README.md",
+      "sha256": "d65c9eb6fe4bad7076b223c1ab032a8da6e50f69176e048bbe6329602281322d"
+    },
+    {
+      "bytes": 12389,
+      "path": "test_data/fixtures_general/scai_api_guide/new_di_raw.json",
+      "sha256": "3c40840d2f26b291f5e1feb715a78e08575f73084ee92f0ca3a2a8b7946abebc"
+    },
+    {
+      "bytes": 11965,
+      "path": "test_data/fixtures_general/scai_api_guide/old_di_raw.json",
+      "sha256": "564653e3529789a5662b0ecc2ae9646c195a3ace5cce7f010b5d2cb5b38cf374"
+    },
+    {
+      "bytes": 23219,
+      "path": "test_data/fixtures_regression/matching_pairs.json",
+      "sha256": "dee45c8fa7cc54baf1c77b4beb18684d845d30db94ecdb13221b75a43516e082"
+    },
+    {
+      "bytes": 40163,
+      "path": "test_data/fixtures_regression/table_values/new_di_raw.json",
+      "sha256": "06d096d410eccc804e3aec972f665f67f652705f8cb2f986053763838d880f29"
+    },
+    {
+      "bytes": 37282,
+      "path": "test_data/fixtures_regression/table_values/old_di_raw.json",
+      "sha256": "4321ad855c3b18988f5eb533ce37cb04947af89a88b97442a9823809ff1cd73f"
+    },
+    {
+      "bytes": 7602,
+      "path": "test_data/fixtures_regression/text_values/new_di_raw.json",
+      "sha256": "809d406d74496b37d358fee74926e4cac4bfcbbf4cd7697ceaa7b22ec2a42a8f"
+    },
+    {
+      "bytes": 7606,
+      "path": "test_data/fixtures_regression/text_values/old_di_raw.json",
+      "sha256": "6380fe13103120366619b3f150d8ef8dc08689e4a3f7599ea7abf38081d72954"
+    },
+    {
+      "bytes": 0,
+      "path": "tests/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 14466,
+      "path": "tests/regression_support.py",
+      "sha256": "4c7aecee98504844a91daf45b8f175f37e7be23de90e42466dba3bbb48fc450e"
+    },
+    {
+      "bytes": 503,
+      "path": "tests/synthetic_stage_support.py",
+      "sha256": "be45b82061adc8f1cbdfcf1b1cbbd9f3db13a44b3ee38f93273dbb5b072022e0"
+    },
+    {
+      "bytes": 18192,
+      "path": "tests/test_diff_annotations.py",
+      "sha256": "2fac9f7791a583727d6d4cae8244804766d9e9e8c3537f8122f814e487b0cccd"
+    },
+    {
+      "bytes": 11396,
+      "path": "tests/test_evaluation_metrics.py",
+      "sha256": "6844a8f05419c0aca10bc1754d3d7200fd72a70f962458607268a0baf1e276b0"
+    },
+    {
+      "bytes": 8807,
+      "path": "tests/test_extraction_retry.py",
+      "sha256": "c67cb66683652a4cf3b3202b55dc2dbd0373e06f0bac0fbfacf1ad43ac22f0bf"
+    },
+    {
+      "bytes": 19633,
+      "path": "tests/test_hyphen_wrap_output.py",
+      "sha256": "28d0b02d5147b1f10a40fb7999b46e0dbf625a4efcb37c67807ff58d4f32c90a"
+    },
+    {
+      "bytes": 21679,
+      "path": "tests/test_local_flow.py",
+      "sha256": "21173e6bde20e1ef34819bdd830a7d41eec444fa73c23580cb98b5caeb347b8a"
+    },
+    {
+      "bytes": 16254,
+      "path": "tests/test_matching_diagnostics.py",
+      "sha256": "49b4a590acdb388a92fc6fb6bf225ff2768d4e4e3868637ccbb2717a5fb745ac"
+    },
+    {
+      "bytes": 4195,
+      "path": "tests/test_matching_stage_module.py",
+      "sha256": "9491a9b9efefd7df65ce1cf1cfa31183d64bddd7c2f474ebdce7cc1820fd008b"
+    },
+    {
+      "bytes": 1859,
+      "path": "tests/test_mcp.py",
+      "sha256": "3bc64de64379e1ddaf9199205c480f68e38ef479da5616b4c9548307922d3142"
+    },
+    {
+      "bytes": 7409,
+      "path": "tests/test_normalize_hyphenation.py",
+      "sha256": "f9d353bcc935de617d06b0472d5913e96a12ccea11efdf94d281b81cb42e17d1"
+    },
+    {
+      "bytes": 9490,
+      "path": "tests/test_offline_setup.py",
+      "sha256": "bcfc502b0bf2561ac0ffe91573de120f1708387f3b3e8f6163035e8d4cdd9f81"
+    },
+    {
+      "bytes": 3699,
+      "path": "tests/test_optimized_validation.py",
+      "sha256": "18d9474cc969f5a7072edbd8ad13482b736648bf272f8c236f7580206a93dbff"
+    },
+    {
+      "bytes": 5573,
+      "path": "tests/test_pipeline.py",
+      "sha256": "e5caa228e8750e5fa986b8fe704f6c0b6bd61e2560481636491f732c7f5917d8"
+    },
+    {
+      "bytes": 18495,
+      "path": "tests/test_redline_pdf.py",
+      "sha256": "07596132d8f8df5af557416bd32120070375266887679540341e1d590c9098c9"
+    },
+    {
+      "bytes": 23386,
+      "path": "tests/test_regression_fixtures.py",
+      "sha256": "18cb37cb1d99f068f0d9112f19cf11c6ad7082915230688b244c4541c7c7c6f9"
+    },
+    {
+      "bytes": 10942,
+      "path": "tests/test_route_identity.py",
+      "sha256": "23a1d11710355fa5c8b886e4f4402b15da7a21e4a554df6e75b59e13c08a81fc"
+    },
+    {
+      "bytes": 2097,
+      "path": "tests/test_runtime_validation.py",
+      "sha256": "16e2da0b0700066c88381359616069861dc291c4fa95198da9be05f455b0e099"
+    },
+    {
+      "bytes": 7807,
+      "path": "tests/test_service.py",
+      "sha256": "bcf0c3b0760e0e6827af68f8b232d780511575513003afe0484a38a4c69ce27c"
+    },
+    {
+      "bytes": 7385,
+      "path": "tests/test_stage_import_safety.py",
+      "sha256": "4b96b49db1bb79ec8da8adc0ab3b06f555525aae7591b805d2804e1e2bff981e"
+    },
+    {
+      "bytes": 7861,
+      "path": "tests/test_table_stage_module.py",
+      "sha256": "a96e581de259daa8f643679b132a566a745ff9b13af98d689ff998bdab5ae372"
+    }
+  ],
+  "format": "public-export-manifest-v1"
+}

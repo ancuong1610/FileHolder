@@ -1,0 +1,532 @@
+{
+  "apiVersion": "2024-11-30",
+  "modelId": "prebuilt-layout",
+  "stringIndexType": "unicodeCodePoint",
+  "content": "Regulation (EU) No 575/2013 - Consolidated text (synthetic excerpt) Artikel 4 Begriffsbestimmungen Für die Zwecke dieser Verordnung gelten die Begriffsbestimmungen des Artikels 4 der Richtlinie 2013/36/EU entsprechend. Artikel 92 Eigenmittelanforderungen für Kreditinstitute Die Institute müssen die in diesem Kapitel festgelegten Eigenmittelanforderungen jederzeit erfüllen und nach den Methoden dieser Verordnung berechnen. Artikel 430 Meldepflichten Die Institute übermitteln den zuständigen Behörden die Informationen, die für die Überwachung der Einhaltung der Anforderungen dieser Verordnung erforderlich sind. Die zuständige Behörde kann von den Instituten verlangen, zusätzliche Informationen monatlich zu melden. Artikel 2 Anwendungsbereich Artikel 92a Eigenmittelanforderungen für Krypto-Asset-Positionen Institute mit Krypto-Asset-Positionen berechnen ihre Eigenmittelanforderungen nach der in diesem Artikel festgelegten Methodik.",
+  "pages": [
+    {
+      "pageNumber": 1,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    },
+    {
+      "pageNumber": 2,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    }
+  ],
+  "paragraphs": [
+    {
+      "content": "Regulation (EU) No 575/2013 - Consolidated text (synthetic excerpt)",
+      "role": "title",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            0.5,
+            7.7,
+            0.5,
+            7.7,
+            0.8,
+            0.8,
+            0.8
+          ]
+        }
+      ]
+    },
+    {
+      "content": "Artikel 4 Begriffsbestimmungen",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            1.0,
+            7.7,
+            1.0,
+            7.7,
+            1.3,
+            0.8,
+            1.3
+          ]
+        }
+      ]
+    },
+    {
+      "content": "Für die Zwecke dieser Verordnung gelten die Begriffsbestimmungen des Artikels 4 der Richtlinie 2013/36/EU entsprechend.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            1.4,
+            7.7,
+            1.4,
+            7.7,
+            1.7,
+            0.8,
+            1.7
+          ]
+        }
+      ]
+    },
+    {
+      "content": "Artikel 92 Eigenmittelanforderungen für Kreditinstitute",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            2.0,
+            7.7,
+            2.0,
+            7.7,
+            2.3,
+            0.8,
+            2.3
+          ]
+        }
+      ]
+    },
+    {
+      "content": "Die Institute müssen die in diesem Kapitel festgelegten Eigenmittelanforderungen jederzeit erfüllen und nach den Methoden dieser Verordnung berechnen.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            2.4,
+            7.7,
+            2.4,
+            7.7,
+            2.7,
+            0.8,
+            2.7
+          ]
+        }
+      ]
+    },
+    {
+      "content": "Artikel 430 Meldepflichten",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            3.0,
+            7.7,
+            3.0,
+            7.7,
+            3.3,
+            0.8,
+            3.3
+          ]
+        }
+      ]
+    },
+    {
+      "content": "Die Institute übermitteln den zuständigen Behörden die Informationen, die für die Überwachung der Einhaltung der Anforderungen dieser Verordnung erforderlich sind.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            3.4,
+            7.7,
+            3.4,
+            7.7,
+            3.7,
+            0.8,
+            3.7
+          ]
+        }
+      ]
+    },
+    {
+      "content": "Die zuständige Behörde kann von den Instituten verlangen, zusätzliche Informationen monatlich zu melden.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            4.0,
+            7.7,
+            4.0,
+            7.7,
+            4.3,
+            0.8,
+            4.3
+          ]
+        }
+      ]
+    },
+    {
+      "content": "Artikel 2 Anwendungsbereich",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            4.5,
+            7.7,
+            4.5,
+            7.7,
+            4.8,
+            0.8,
+            4.8
+          ]
+        }
+      ]
+    },
+    {
+      "content": "Artikel 92a Eigenmittelanforderungen für Krypto-Asset-Positionen",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            5.0,
+            7.7,
+            5.0,
+            7.7,
+            5.3,
+            0.8,
+            5.3
+          ]
+        }
+      ]
+    },
+    {
+      "content": "Institute mit Krypto-Asset-Positionen berechnen ihre Eigenmittelanforderungen nach der in diesem Artikel festgelegten Methodik.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            5.4,
+            7.7,
+            5.4,
+            7.7,
+            5.7,
+            0.8,
+            5.7
+          ]
+        }
+      ]
+    }
+  ],
+  "tables": [
+    {
+      "rowCount": 4,
+      "columnCount": 3,
+      "cells": [
+        {
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Anlageklasse",
+          "kind": "columnHeader",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                0.5,
+                3.1,
+                0.5,
+                3.1,
+                1.05,
+                0.8,
+                1.05
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Risikogewicht",
+          "kind": "columnHeader",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                3.1,
+                0.5,
+                5.4,
+                0.5,
+                5.4,
+                1.05,
+                3.1,
+                1.05
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 0,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Anmerkungen",
+          "kind": "columnHeader",
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                5.4,
+                0.5,
+                7.7,
+                0.5,
+                7.7,
+                1.05,
+                5.4,
+                1.05
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Zentralregierungen",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                1.05,
+                3.1,
+                1.05,
+                3.1,
+                1.6,
+                0.8,
+                1.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "0%",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                3.1,
+                1.05,
+                5.4,
+                1.05,
+                5.4,
+                1.6,
+                3.1,
+                1.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 1,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Standard",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                5.4,
+                1.05,
+                7.7,
+                1.05,
+                7.7,
+                1.6,
+                5.4,
+                1.6
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Unternehmen",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                1.6,
+                3.1,
+                1.6,
+                3.1,
+                2.15,
+                0.8,
+                2.15
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "100%",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                3.1,
+                1.6,
+                5.4,
+                1.6,
+                5.4,
+                2.15,
+                3.1,
+                2.15
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 2,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Standard",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                5.4,
+                1.6,
+                7.7,
+                1.6,
+                7.7,
+                2.15,
+                5.4,
+                2.15
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 0,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Privatkunden",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                0.8,
+                2.15,
+                3.1,
+                2.15,
+                3.1,
+                2.7,
+                0.8,
+                2.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 1,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "65%",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                3.1,
+                2.15,
+                5.4,
+                2.15,
+                5.4,
+                2.7,
+                3.1,
+                2.7
+              ]
+            }
+          ]
+        },
+        {
+          "rowIndex": 3,
+          "columnIndex": 2,
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "content": "Standard",
+          "kind": null,
+          "boundingRegions": [
+            {
+              "pageNumber": 2,
+              "polygon": [
+                5.4,
+                2.15,
+                7.7,
+                2.15,
+                7.7,
+                2.7,
+                5.4,
+                2.7
+              ]
+            }
+          ]
+        }
+      ],
+      "boundingRegions": [
+        {
+          "pageNumber": 2,
+          "polygon": [
+            0.8,
+            0.5,
+            7.7,
+            0.5,
+            7.7,
+            2.7,
+            0.8,
+            2.7
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,368 @@
+{
+  "apiVersion": "2024-11-30",
+  "modelId": "prebuilt-layout",
+  "stringIndexType": "unicodeCodePoint",
+  "content": "Synthetic Regression Policy (offline)Section 1: RetentionBackups of critical systems shall be retained for a minimum of 60 days before rotation.Section 2: Effective DateThis policy takes effect on 15 March 2027 and is reviewed annually thereafter.Section 3: AllocationEach business unit shall allocate 35 percent of its operating budget to resilience measures.Section 4: ReferencesPersonnel shall follow the requirements of Article 15 when handling restricted records.Section 5: AccessRecords shall not be released to third parties without prior review.Temporary staff must enter the server room unescorted.Section 6: AmendmentsThe board may amend this policy following an incident review.",
+  "pages": [
+    {
+      "pageNumber": 1,
+      "angle": 0,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch"
+    }
+  ],
+  "paragraphs": [
+    {
+      "content": "Synthetic Regression Policy (offline)",
+      "role": "title",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            0.5,
+            7.7,
+            0.5,
+            7.7,
+            0.8,
+            0.8,
+            0.8
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 0,
+          "length": 37
+        }
+      ]
+    },
+    {
+      "content": "Section 1: Retention",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            1.05,
+            7.7,
+            1.05,
+            7.7,
+            1.35,
+            0.8,
+            1.35
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 37,
+          "length": 20
+        }
+      ]
+    },
+    {
+      "content": "Backups of critical systems shall be retained for a minimum of 60 days before rotation.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            1.6,
+            7.7,
+            1.6,
+            7.7,
+            1.9000000000000001,
+            0.8,
+            1.9000000000000001
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 57,
+          "length": 87
+        }
+      ]
+    },
+    {
+      "content": "Section 2: Effective Date",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            2.1500000000000004,
+            7.7,
+            2.1500000000000004,
+            7.7,
+            2.45,
+            0.8,
+            2.45
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 144,
+          "length": 25
+        }
+      ]
+    },
+    {
+      "content": "This policy takes effect on 15 March 2027 and is reviewed annually thereafter.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            2.7,
+            7.7,
+            2.7,
+            7.7,
+            3.0,
+            0.8,
+            3.0
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 169,
+          "length": 78
+        }
+      ]
+    },
+    {
+      "content": "Section 3: Allocation",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            3.25,
+            7.7,
+            3.25,
+            7.7,
+            3.55,
+            0.8,
+            3.55
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 247,
+          "length": 21
+        }
+      ]
+    },
+    {
+      "content": "Each business unit shall allocate 35 percent of its operating budget to resilience measures.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            3.8000000000000003,
+            7.7,
+            3.8000000000000003,
+            7.7,
+            4.1000000000000005,
+            0.8,
+            4.1000000000000005
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 268,
+          "length": 92
+        }
+      ]
+    },
+    {
+      "content": "Section 4: References",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            4.3500000000000005,
+            7.7,
+            4.3500000000000005,
+            7.7,
+            4.65,
+            0.8,
+            4.65
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 360,
+          "length": 21
+        }
+      ]
+    },
+    {
+      "content": "Personnel shall follow the requirements of Article 15 when handling restricted records.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            4.9,
+            7.7,
+            4.9,
+            7.7,
+            5.2,
+            0.8,
+            5.2
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 381,
+          "length": 87
+        }
+      ]
+    },
+    {
+      "content": "Section 5: Access",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            5.45,
+            7.7,
+            5.45,
+            7.7,
+            5.75,
+            0.8,
+            5.75
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 468,
+          "length": 17
+        }
+      ]
+    },
+    {
+      "content": "Records shall not be released to third parties without prior review.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            6.0,
+            7.7,
+            6.0,
+            7.7,
+            6.3,
+            0.8,
+            6.3
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 485,
+          "length": 68
+        }
+      ]
+    },
+    {
+      "content": "Temporary staff must enter the server room unescorted.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            6.550000000000001,
+            7.7,
+            6.550000000000001,
+            7.7,
+            6.8500000000000005,
+            0.8,
+            6.8500000000000005
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 553,
+          "length": 54
+        }
+      ]
+    },
+    {
+      "content": "Section 6: Amendments",
+      "role": "sectionHeading",
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            7.1000000000000005,
+            7.7,
+            7.1000000000000005,
+            7.7,
+            7.4,
+            0.8,
+            7.4
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 607,
+          "length": 21
+        }
+      ]
+    },
+    {
+      "content": "The board may amend this policy following an incident review.",
+      "role": null,
+      "boundingRegions": [
+        {
+          "pageNumber": 1,
+          "polygon": [
+            0.8,
+            7.65,
+            7.7,
+            7.65,
+            7.7,
+            7.95,
+            0.8,
+            7.95
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "offset": 628,
+          "length": 61
+        }
+      ]
+    }
+  ],
+  "tables": []
+}
