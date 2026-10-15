@@ -1,6 +1,6 @@
 {
   "schema_version": "2.0.0",
-  "purpose": "Phase 1 generic local/company handover candidate; excludes private artifacts",
+  "purpose": "Generic PDF comparison with three-tool MCP/agent reader pilot; excludes private artifacts",
   "source_files": [
     {
       "path": ".env.example",
@@ -12,7 +12,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "b78cd144198dd1615bc0a403d504faa22202a97362c23a4134c1729c136089a1"
+      "sha256": "93d36103d82b5c11ab7b174ddedfa55ec205567ebf5fd954cdb97ae7daefacc5"
     },
     {
       "path": "agent_poc/__init__.py",
@@ -20,11 +20,11 @@
     },
     {
       "path": "agent_poc/agent.py",
-      "sha256": "11b9c3f7dcba813c6ef78234c2ba261375fbc7d0b1d5ee0ae63f319da6cb1d07"
+      "sha256": "7206aefc6ce82d1f7c22bd5506f674941a56773778f261cc5fae8235d39101cf"
     },
     {
       "path": "agent_poc/agent_tools.py",
-      "sha256": "1d5572fe9b478f120c58603c3759c8a6d959e4355ca3eb90871ffc750486bb82"
+      "sha256": "66e7e7addfdaffa96801e0aa99bf8b8d0b4f40038a707f27e2a39557507d9ba4"
     },
     {
       "path": "agent_poc/api_client.py",
@@ -36,15 +36,19 @@
     },
     {
       "path": "agent_poc/local_reviewer.py",
-      "sha256": "392914edb574212fa99eca5d3681d0b6bdfcb06f0a1f8474d1b914d05f2daa61"
+      "sha256": "d93842bc2dc4498661699ea8814c1d7ce2a6aea2a17f49efb2354399e19decdf"
     },
     {
       "path": "agent_poc/mcp_gateway.py",
-      "sha256": "3d4de4b7afcbb2695e0e619d8479f77c5b6e2f00629d01fd89ec8be99d84c563"
+      "sha256": "03416ab4aae8b1454e5f835e0961ab484cf4a039c8f7a9e936fbd987931088ae"
+    },
+    {
+      "path": "agent_poc/mock_reader.py",
+      "sha256": "9994cc45b4bd1a4afb4087317d6fefa3eef9712231e4815fe874279b07282464"
     },
     {
       "path": "agent_poc/prompts.py",
-      "sha256": "2c93dbec9f18fa2b4f74b3c177cc0b195be5985aabcf37f1acaf6c063f2f5006"
+      "sha256": "95ffbba3b5e6931cdba2bc7bb9b032ae0c0152d99c3c892379d102da1ae00fc6"
     },
     {
       "path": "agent_poc/tia_client.py",
@@ -119,6 +123,10 @@
       "sha256": "ce38498b723b13f27b4dca60f3168867b7ace8760ab445cc5edfd1d9bd808536"
     },
     {
+      "path": "crr_compare/reader_mcp_server.py",
+      "sha256": "3da503e7b2a0060050392d3d476fd50f04bf06201aa5c5541297fd8be647d19b"
+    },
+    {
       "path": "crr_compare/reconcile.py",
       "sha256": "77e359eb267f81c2c202ffe450b34abe328b03349ed20a4b586d831b71a69e0a"
     },
@@ -135,12 +143,16 @@
       "sha256": "eb4da841f9b04b757d2a2f4b0399bd2113468f477b692642cedcce22466f0bd6"
     },
     {
+      "path": "crr_compare/result_reader.py",
+      "sha256": "39cec277179e8527d5a16a0edbde107657f8c45526422f6c9d4fa4b7fbd1ee40"
+    },
+    {
       "path": "crr_compare/route_identity.py",
       "sha256": "a091e96cdce2c4f469a72377bdeb1dd04f5e5e98b078ba8c1ea8401f49ee4684"
     },
     {
       "path": "crr_compare/service.py",
-      "sha256": "56e57839a58ac28a7745126717c509e86e38c6b13f9d36f3425e923931cdb00e"
+      "sha256": "7f61ede55a26a15958d24b750314001dcf2a8a116c34603d0da93c4479fa4ff2"
     },
     {
       "path": "crr_compare/stages/__init__.py",
@@ -225,6 +237,10 @@
     {
       "path": "docs/PHASE1_HANDOVER_RELEASE.md",
       "sha256": "e0939ca39b78c49de72855d8b694f9d65bc7d052cee8733d62e144886259daa5"
+    },
+    {
+      "path": "docs/THREE_TOOL_READER.md",
+      "sha256": "e4341622e7fc4a4299ed507409c80c1165ccdcd2823a1942f024d6ac0e3ce7b6"
     },
     {
       "path": "requirements.txt",
@@ -351,6 +367,10 @@
       "sha256": "898459048b71c7c05892a3611d08521167c4b56fd6ee80b47bb1d3d3426a8aca"
     },
     {
+      "path": "tests/test_agent_reader.py",
+      "sha256": "2d8a60c490b2f7abf96c6041ac5bcbf5cedb3ebe7d204175aad75c08a4bd669a"
+    },
+    {
       "path": "tests/test_di_chunk_references.py",
       "sha256": "ed7ac4e1d9bb4542de63aa33eb803f0e19071fe307591fc9c8e767b9701bd0a0"
     },
@@ -423,6 +443,10 @@
       "sha256": "e5caa228e8750e5fa986b8fe704f6c0b6bd61e2560481636491f732c7f5917d8"
     },
     {
+      "path": "tests/test_reader.py",
+      "sha256": "5c083db48868a5c62ba6fd77242f735ebcbb2f557e5ab5c8d97f55892dac552a"
+    },
+    {
       "path": "tests/test_reconcile.py",
       "sha256": "cc6a9a7b70a7ea690db11287848cb897378941ec3fa5a1bf2b8e50434f3a509e"
     },
@@ -444,7 +468,7 @@
     },
     {
       "path": "tests/test_service.py",
-      "sha256": "16bae686ca75d3b2541ae726e0082c98809cd0166da5155cb2ca1d2f93e38a26"
+      "sha256": "9fc3260c5c5e1673b874f3b4a0471c258ebdbd96b1814fbaf87fa3e55997d0ee"
     },
     {
       "path": "tests/test_stage_import_safety.py",
@@ -470,5 +494,19 @@
   "additional_artifacts": [
     "comparison_inline.pdf",
     "inline_pdf_audit.json"
-  ]
+  ],
+  "base_phase1_commit": "0a57a89ac7e7e3a22d77eb8fcea75c58ee453666",
+  "reader_tools": [
+    "summarize",
+    "search",
+    "details"
+  ],
+  "workflow_mcp_preserved": true,
+  "verification": {
+    "tests_collected": 618,
+    "tests_passed": 607,
+    "optional_private_fixture_skips": 11,
+    "scripted_real_transport_mock_scenarios_passed": 12,
+    "real_llm_reasoning_evaluated": false
+  }
 }

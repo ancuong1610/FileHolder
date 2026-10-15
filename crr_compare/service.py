@@ -13,6 +13,9 @@ Endpoints:
   GET  /jobs/{id}/artifacts/{name}     download an artifact (redline html, index, ...)
   GET  /jobs/{id}/changes              canonical changes, optional filters
   GET  /jobs/{id}/review-queue.csv    BU triage export
+  GET  /jobs/{id}/read/summary         bounded read summary (safe for unfinished jobs)
+  GET  /jobs/{id}/read/search          typed literal search + cursor pagination
+  GET  /jobs/{id}/read/details         canonical values + bounded document context
 
 Jobs run in a background thread via `python -m crr_compare run` inside an
 isolated job workspace (workspace/jobs/<id>/), so a job can never corrupt
@@ -35,6 +38,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, PlainTextResponse
 
+from crr_compare import result_reader as reader
 from crr_compare.common import REPO_ROOT
 from crr_compare.summary import build_summary
 
@@ -312,3 +316,176 @@ def get_review_queue(job_id: str) -> dict:
 @app.get("/jobs/{job_id}/review-queue.csv")
 def review_queue_csv(job_id: str):
     return get_artifact(job_id, "review_queue_export.csv")
+
+
+# ---------------------------------------------------------------------------
+# Reader read endpoints: one reusable projection over the saved canonical result.
+# ---------------------------------------------------------------------------
+
+_READER_HTTP_STATUS = {
+    "not_found": 404,
+    "not_ready": 409,
+    "invalid_arguments": 422,
+    "invalid_cursor": 400,
+    "stale_cursor": 409,
+    "invalid_artifact": 409,
+    "response_too_large": 413,
+}
+
+
+def _reader_http(exc: reader.ReaderError) -> HTTPException:
+    return HTTPException(_READER_HTTP_STATUS.get(exc.code, 400), detail=exc.as_dict())
+
+
+def _validate_read_job_id(job_id: str) -> str:
+    try:
+        return reader.validate_job_id(job_id)
+    except reader.ReaderError as exc:
+        raise _reader_http(exc) from exc
+
+
+def _read_status(job_id: str) -> dict:
+    if not JOB_ID_RE.fullmatch(job_id):
+        raise _reader_http(reader.ReaderError("invalid_arguments", "invalid job_id"))
+    try:
+        status = _read_job(job_id)
+    except HTTPException as exc:
+        code = "not_found" if exc.status_code == 404 else "invalid_artifact"
+        raise _reader_http(reader.ReaderError(code, "unknown or unreadable job")) from exc
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _reader_http(reader.ReaderError("invalid_artifact", "job status is unreadable")) from exc
+    if not isinstance(status, dict):
+        raise _reader_http(reader.ReaderError("invalid_artifact", "job status is not an object"))
+    stored_job_id = status.get("job_id")
+    if stored_job_id is not None and stored_job_id != job_id:
+        raise _reader_http(reader.ReaderError("invalid_artifact", "job status does not match this job"))
+    state = status.get("state")
+    if state is not None and not isinstance(state, str):
+        raise _reader_http(reader.ReaderError("invalid_artifact", "job state is malformed"))
+    return status
+
+
+def _reader_canonical(job_id: str, status: dict) -> dict:
+    if status.get("state") != "done":
+        raise _reader_http(reader.ReaderError("not_ready", "job is not done"))
+    try:
+        return _load_canonical(job_id)
+    except HTTPException as exc:
+        raise _reader_http(reader.ReaderError("invalid_artifact", "comparison result is not readable")) from exc
+
+
+def _available_artifacts(job_id: str) -> list[str]:
+    out = _job_dir(job_id) / "output"
+    if not out.exists():
+        return []
+    return sorted(p.name for p in out.iterdir() if p.is_file() and p.name in reader.ARTIFACT_LINK_NAMES)
+
+
+def _extraction_limitations(job_id: str) -> list[str]:
+    limitations: list[str] = []
+    out = _job_dir(job_id) / "output"
+    for side in ("old", "new"):
+        path = out / f"{side}_extraction_validation.json"
+        if not path.is_file():
+            limitations.append(f"{side}_extraction_validation_missing")
+            continue
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            limitations.append(f"{side}_extraction_validation_unreadable")
+            continue
+        if isinstance(report, dict) and report.get("requires_review"):
+            limitations.append(f"{side}_extraction_requires_review")
+    return limitations
+
+
+def _structured_elements(job_id: str, side: str) -> list[dict[str, Any]] | None:
+    path = _job_dir(job_id) / "output" / f"{side}_document_structured.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    document = data.get("document") if isinstance(data, dict) else None
+    elements = document.get("elements") if isinstance(document, dict) else None
+    return elements if isinstance(elements, list) else None
+
+
+@app.get("/jobs/{job_id}/read/summary")
+def read_summary(job_id: str) -> dict:
+    _validate_read_job_id(job_id)
+    status = _read_status(job_id)
+    state = str(status.get("state") or "queued")
+    if state != "done":
+        return reader.summarize(job_id, state)
+    canonical = _reader_canonical(job_id, status)
+    return reader.summarize(
+        job_id,
+        state,
+        canonical,
+        artifacts=_available_artifacts(job_id),
+        limitations=_extraction_limitations(job_id),
+    )
+
+
+@app.get("/jobs/{job_id}/read/search")
+def read_search(
+    job_id: str,
+    query: str | None = None,
+    kind: str | None = None,
+    status: str | None = None,
+    change_type: str | None = None,
+    cursor: str | None = None,
+    limit: int | None = None,
+) -> dict:
+    _validate_read_job_id(job_id)
+    job_status = _read_status(job_id)
+    canonical = _reader_canonical(job_id, job_status)
+    try:
+        return reader.search(
+            job_id,
+            canonical,
+            query=query,
+            kind=kind,
+            status=status,
+            change_type=change_type,
+            cursor=cursor,
+            limit=limit,
+        )
+    except reader.ReaderError as exc:
+        raise _reader_http(exc) from exc
+
+
+@app.get("/jobs/{job_id}/read/details")
+def read_details(
+    job_id: str,
+    kind: str,
+    record_id: str,
+    context_window: int = 1,
+    cell_offset: int = 0,
+    cell_limit: int = reader.DEFAULT_CELL_LIMIT,
+    text_offset: int = 0,
+    text_limit: int = reader.DEFAULT_TEXT_LIMIT,
+    context_source_offset: int = 0,
+) -> dict:
+    _validate_read_job_id(job_id)
+    job_status = _read_status(job_id)
+    canonical = _reader_canonical(job_id, job_status)
+    try:
+        return reader.details(
+            job_id,
+            canonical,
+            kind=kind,
+            record_id=record_id,
+            context_window=context_window,
+            cell_offset=cell_offset,
+            cell_limit=cell_limit,
+            text_offset=text_offset,
+            text_limit=text_limit,
+            context_source_offset=context_source_offset,
+            old_elements=_structured_elements(job_id, "old"),
+            new_elements=_structured_elements(job_id, "new"),
+        )
+    except reader.ReaderError as exc:
+        raise _reader_http(exc) from exc

@@ -8,7 +8,7 @@ from fastmcp import Client
 from fastmcp.client.transports import PythonStdioTransport
 from crr_compare.service import MAX_UPLOAD_BYTES
 from agent_poc.agent import TiaComparisonAgent
-from agent_poc.mcp_gateway import StdioMcpGateway, _unwrap as unwrap
+from agent_poc.mcp_gateway import StdioMcpGateway, StdioReaderGateway, _unwrap as unwrap
 from agent_poc.tia_client import TiaTextClient
 
 PDF_MAGIC = b"%PDF-"
@@ -191,7 +191,9 @@ async def main(root: Path | None = None) -> None:
 
     api = _start_api(child_env, root, api_base, api_port)
     server_file = str(root / "crr_compare" / "mcp_server.py")
+    reader_server_file = str(root / "crr_compare" / "reader_mcp_server.py")
     transport = PythonStdioTransport(server_file, env=child_env, cwd=str(root))
+    reader_transport = PythonStdioTransport(reader_server_file, env=child_env, cwd=str(root))
     try:
         async with Client(transport) as client:
             old_pdf, new_pdf = prompt_for_two_pdfs(input_dir)
@@ -203,14 +205,16 @@ async def main(root: Path | None = None) -> None:
             print(f"redline: {api_base}/jobs/{job_id}/artifacts/comparison_redline.pdf")
 
             loop = asyncio.get_running_loop()
-            gateway = StdioMcpGateway(client, loop)
             tia = TiaTextClient(os.environ["TIA_API_KEY"])
-            agent = TiaComparisonAgent(tia, gateway, max_steps=5, result_limit=8)
-            while True:
-                question = await asyncio.to_thread(input, "you> ")
-                if question.strip() in {"quit", "exit"}:
-                    break
-                answer = await asyncio.to_thread(agent.ask, question, job_id)
-                print("agent:", answer)
+            # Q&A uses a separate reader MCP surface: exactly summarize/search/details.
+            async with Client(reader_transport) as reader_client:
+                reader_gateway = StdioReaderGateway(reader_client, loop)
+                agent = TiaComparisonAgent(tia, reader_gateway, max_steps=5, result_limit=8)
+                while True:
+                    question = await asyncio.to_thread(input, "you> ")
+                    if question.strip() in {"quit", "exit"}:
+                        break
+                    answer = await asyncio.to_thread(agent.ask, question, job_id)
+                    print("agent:", answer)
     finally:
         _stop_process(api)

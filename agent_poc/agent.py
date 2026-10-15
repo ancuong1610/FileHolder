@@ -6,18 +6,19 @@ from typing import Any
 from langchain_core.runnables import RunnableLambda
 
 from agent_poc.agent_tools import build_tools
-from agent_poc.mcp_gateway import ComparisonGateway
+from agent_poc.mcp_gateway import ReaderGateway
 from agent_poc.prompts import PLANNER_SYSTEM, planner_prompt
 from agent_poc.tia_client import TiaTextClient
 
 
 class TiaComparisonAgent:
-    """LangChain-controlled action loop over comparison MCP data."""
+    """LangChain-controlled action loop over the three reader result tools."""
 
-    def __init__(self, tia: TiaTextClient, gateway: ComparisonGateway, max_steps: int = 5, result_limit: int = 8) -> None:
+    def __init__(self, tia: TiaTextClient, gateway: ReaderGateway, max_steps: int = 5, result_limit: int = 10) -> None:
         self.tia = tia
         self.tools = build_tools(gateway, result_limit=result_limit)
         self.max_steps = max_steps
+        self.result_limit = result_limit
         self.planner = RunnableLambda(self._plan)
 
     def _plan(self, values: dict[str, Any]) -> dict[str, Any]:
@@ -25,7 +26,11 @@ class TiaComparisonAgent:
             planner_prompt(
                 values["question"],
                 values["job_id"],
-                values["observations"],
+                 values["observations"],
+                tool_schemas={
+                    name: tool.args_schema.model_json_schema()
+                    for name, tool in self.tools.items()
+                },
             ),
             PLANNER_SYSTEM,
         )
@@ -72,4 +77,3 @@ class TiaComparisonAgent:
                 result = {"error": type(exc).__name__, "message": str(exc)}
             observations.append({"action": action, "arguments": arguments, "result": result})
         raise RuntimeError("Agent reached its step limit without producing a final answer.")
-

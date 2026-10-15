@@ -269,6 +269,48 @@ PYTHONHASHSEED=0 python -m crr_compare benchmark-performance \
 
 ## Real run: `python run_local.py`
 
+### Three-tool Q&A and offline MCP/agent mock
+
+The Q&A agent now uses a separate read-only MCP surface with exactly three
+tools: **`summarize`**, **`search`**, **`details`**. The existing five-tool
+`crr_compare.mcp_server` remains the orchestration/legacy interface; submission
+and polling are not planner actions. `run_local.py` opens the workflow client
+for submission/polling and the reader client for Q&A.
+
+Run the complete offline contract demonstration (synthetic, no credentials or
+DI/model/provider calls):
+
+```bash
+python -m agent_poc.mock_reader --out workspace/reader-mock
+```
+
+`--out` must be absent or empty; existing files are never deleted. Use a new
+destination to repeat a run. The demonstration starts an owned loopback HTTP
+service on a free port and the actual reader MCP stdio process, then runs the
+agent with a scripted planner. It prints per-scenario PASS/FAIL and writes
+`report.json` with independent expected/observed values and actual tool traces.
+Failures return a nonzero exit code; owned service/processes are cleaned up.
+
+The mock verifies the **agent → tools → MCP stdio → HTTP → saved results**
+contract. It does **not** evaluate real-model reasoning, semantic accuracy,
+retrieval recall or prompt-injection resistance. Source context that cannot be
+resolved and incomplete search coverage remain explicit; no-hit is not a proof
+of no relevant review material. Full contract/limits:
+[Three-tool reader](docs/THREE_TOOL_READER.md).
+
+Reader MCP independently (requires the API service to be running):
+
+```bash
+python -m crr_compare.reader_mcp_server
+```
+
+Use `CRR_API_BASE` for the API base as before. The current pilot uses saved local
+artifacts; production DB, durable worker hosting and user/job authorization are
+not decided or implemented by this reader change. A planner-bound job ID is not
+multi-user authentication.
+
+### Interactive company workflow
+
 Put exactly two selected PDFs in `input/` (other PDFs may exist; you choose
 two by filename). Then:
 

@@ -15,6 +15,15 @@ class ComparisonGateway(Protocol):
     def structured_changes(self, job_id: str) -> dict[str, Any]: ...
 
 
+class ReaderGateway(Protocol):
+    """The three-tool read-only result interface used by the Q&A planner."""
+
+    def summarize(self, job_id: str) -> dict[str, Any]: ...
+    def search(self, job_id: str, **filters: Any) -> dict[str, Any]: ...
+    def details(self, job_id: str, kind: str, record_id: str, **options: Any) -> dict[str, Any]: ...
+
+
+
 class McpHandlerGateway:
     """Calls the same registered functions exposed by crr_compare.mcp_server.
 
@@ -77,17 +86,32 @@ def _unwrap(result: Any) -> Any:
     return result
 
 
+DEFAULT_CALL_TIMEOUT = 60.0
+
+
+def _await_future(future: Any, timeout: float) -> Any:
+    """Bounded wait on a cross-loop future; cancel instead of leaking on timeout."""
+    try:
+        return future.result(timeout=timeout)
+    except TimeoutError:
+        future.cancel()
+        raise
+
+
 class StdioMcpGateway:
     """Sync ComparisonGateway over an active FastMCP stdio Client owned by another loop."""
 
-    def __init__(self, client: Client, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self, client: Client, loop: asyncio.AbstractEventLoop, timeout: float = DEFAULT_CALL_TIMEOUT
+    ) -> None:
         self._client = client
         self._loop = loop
+        self._timeout = timeout
 
     def _call_sync(self, name: str, arguments: dict[str, Any]) -> Any:
         coro = self._client.call_tool(name, arguments)
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        result = _unwrap(future.result())
+        result = _unwrap(_await_future(future, self._timeout))
         return result if isinstance(result, dict) else json.loads(result)
 
     def status(self, job_id: str) -> dict[str, Any]:
@@ -98,6 +122,80 @@ class StdioMcpGateway:
 
     def structured_changes(self, job_id: str) -> dict[str, Any]:
         return self._call_sync("retrieve_structured_changes", {"job_id": job_id})
+
+
+class StdioReaderGateway:
+    """ReaderGateway over an active reader FastMCP stdio Client (three tools).
+
+    Kept separate from ``StdioMcpGateway`` so submission/polling never reaches
+    the Q&A planner and results are never filtered from a full report client.
+    """
+
+    def __init__(
+        self, client: Client, loop: asyncio.AbstractEventLoop, timeout: float = DEFAULT_CALL_TIMEOUT
+    ) -> None:
+        self._client = client
+        self._loop = loop
+        self._timeout = timeout
+
+    def _call_sync(self, name: str, arguments: dict[str, Any]) -> Any:
+        coro = self._client.call_tool(name, arguments)
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        result = _unwrap(_await_future(future, self._timeout))
+        return result if isinstance(result, dict) else json.loads(result)
+
+    def summarize(self, job_id: str) -> dict[str, Any]:
+        return self._call_sync("summarize", {"job_id": job_id})
+
+    def search(
+        self,
+        job_id: str,
+        query: str = "",
+        kind: str = "all",
+        status: str = "all",
+        change_type: str = "",
+        cursor: str | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "job_id": job_id,
+            "query": query,
+            "kind": kind,
+            "status": status,
+            "change_type": change_type,
+            "limit": limit,
+        }
+        if cursor is not None:
+            arguments["cursor"] = cursor
+        return self._call_sync("search", arguments)
+
+    def details(
+        self,
+        job_id: str,
+        kind: str,
+        record_id: str,
+        context_window: int = 1,
+        cell_offset: int = 0,
+        cell_limit: int = 20,
+        text_offset: int = 0,
+        text_limit: int = 4000,
+        context_source_offset: int = 0,
+    ) -> dict[str, Any]:
+        return self._call_sync(
+            "details",
+            {
+                "job_id": job_id,
+                "kind": kind,
+                "record_id": record_id,
+                "context_window": context_window,
+                "cell_offset": cell_offset,
+                "cell_limit": cell_limit,
+                "text_offset": text_offset,
+                "text_limit": text_limit,
+                "context_source_offset": context_source_offset,
+            },
+        )
+
 
 
 def canonical_from(payload: dict[str, Any]) -> dict[str, Any]:
