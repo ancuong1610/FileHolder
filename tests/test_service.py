@@ -134,5 +134,19 @@ class SummaryEndpointTest(unittest.TestCase):
         self.assertTrue(response.headers["content-type"].startswith("application/json"))
         self.assertIn("bu_comparison_review_manifest.json", service.ARTIFACT_NAMES)
 
+    def test_artifact_inline_pdf_serves_with_media_type(self):
+        with _mocked_job_dir({"comparison_inline.pdf": b"%PDF-1.4\n"}):
+            response = TestClient(service.app).get("/jobs/a1b2c3d4e5f6/artifacts/comparison_inline.pdf")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("application/pdf"))
+        self.assertIn("comparison_inline.pdf", service.ARTIFACT_NAMES)
+
+    def test_artifact_inline_audit_json_serves_with_media_type(self):
+        with _mocked_job_dir({"inline_pdf_audit.json": b'{"schema_version":"1.0.0"}'}):
+            response = TestClient(service.app).get("/jobs/a1b2c3d4e5f6/artifacts/inline_pdf_audit.json")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("application/json"))
+        self.assertIn("inline_pdf_audit.json", service.ARTIFACT_NAMES)
+
 if __name__ == "__main__":
     unittest.main()

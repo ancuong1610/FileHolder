@@ -23,8 +23,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.synthetic_stage_support import seed_internal_policy_stages
-
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = Path(sys.executable)
 STAGES = [
@@ -40,6 +38,10 @@ STAGES = [
 
 S08 = ROOT / "crr_compare" / "stages" / "s08_candidates.py"
 S09 = ROOT / "crr_compare" / "stages" / "s09_movement.py"
+SAMPLE_EXACT = ROOT / "output_sample" / "exact_element_matches.json"
+SAMPLE_MODIFIED = ROOT / "output_sample" / "modified_element_matches.json"
+_SAMPLE_FILES = ("exact_element_matches.json", "modified_element_matches.json")
+_MISSING_SAMPLES = [name for name in _SAMPLE_FILES if not (ROOT / "output_sample" / name).is_file()]
 
 
 def _import_script(stage: str) -> str:
@@ -150,6 +152,11 @@ print("HELPERS_OK")
             self.assertFalse(empty.exists(), "import created the workspace root")
 
 
+@unittest.skipUnless(
+    not _MISSING_SAMPLES,
+    "private output_sample fixtures are unavailable in this checkout: "
+    + ", ".join(_MISSING_SAMPLES),
+)
 class StageExecutionSmokeTest(unittest.TestCase):
     """s08 then s09 must run as CLI-equivalent __main__ scripts.
 
@@ -161,7 +168,10 @@ class StageExecutionSmokeTest(unittest.TestCase):
     def test_s08_and_s09_run_end_to_end_on_sample_seeds(self):
         with tempfile.TemporaryDirectory(prefix="crr-s89-smoke-") as directory:
             root = Path(directory)
-            seed_internal_policy_stages(root, 7)
+            output = root / "output"
+            output.mkdir()
+            shutil.copyfile(SAMPLE_EXACT, output / "exact_element_matches.json")
+            shutil.copyfile(SAMPLE_MODIFIED, output / "modified_element_matches.json")
             script = f"""
 import json, os, runpy
 from pathlib import Path

@@ -2,11 +2,10 @@
 
 Auto-converted from 12_build_special_case_packets_v2.ipynb (code cells only).
 
-Generic packets are document-neutral: they carry old/new text plus
-matching/structural evidence, never authorization, CRR/CRR3, or
-legal-verification content. CRR evidence may be added only when the caller
-passes a crr3 domain profile AND the route already carries it (attached by
-the s11 enrichment boundary); this module never loads verifier/evidence.
+Packets are document-neutral: they carry old/new text plus matching/structural
+evidence, never domain verification. CRR-looking source text is legitimate
+document content and is preserved verbatim; no vocabulary filtering and no
+verification joins are applied.
 
 Imports are side-effect free: all file access happens inside ``main()`` or
 lazily inside ``payload_for_route`` for real s11 routes.
@@ -15,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -32,8 +30,6 @@ GENERIC_OUTCOMES = ["REAL_CHANGE", "ARTIFACT", "UNCERTAIN"]
 # Initial per-field cap on the review text fields so old/new content survives
 # the whole-packet bound; the serialized ``text`` is hard-bounded regardless.
 FIELD_TEXT_CAP = 1200
-# CRR/authorization vocabulary that must never appear in a generic packet.
-_CRR_VOCAB_RE = re.compile(r"authorization|crr3|legal[-_ ]?verification", re.IGNORECASE)
 
 # Keys whose string values are identifiers/types and must not be truncated.
 _IDENTIFIER_KEYS = frozenset({
@@ -323,18 +319,20 @@ def _build_payload(route: dict[str, Any]) -> dict[str, Any]:
 def _review_reasons(
     route: dict[str, Any], domain_profile: dict[str, Any] | None
 ) -> list[str]:
-    """Route review reasons; CRR/authorization vocabulary is stripped unless
-    the crr3 profile makes it additive domain evidence."""
-    reasons = list(route.get("review_reasons") or [])
-    if (domain_profile or {}).get("mode") == "crr3":
-        return reasons
-    return [r for r in reasons if not _CRR_VOCAB_RE.search(str(r))]
+    """Route review reasons, preserved verbatim.
+
+    ``domain_profile`` is accepted for signature compatibility only. Review
+    reasons and source text are never vocabulary-filtered: words such as
+    ``authorization`` or ``legal verification`` are legitimate document
+    content.
+    """
+    return list(route.get("review_reasons") or [])
 
 
 def _build_body(
     route: dict[str, Any], domain_profile: dict[str, Any] | None
 ) -> dict[str, Any]:
-    """Full review body: evidence + identity metadata + optional crr3 domain verification."""
+    """Full review body: generic evidence + identity metadata only."""
     body = _build_payload(route)
     body.update({
         "route_id": route.get("route_id"),
@@ -345,18 +343,6 @@ def _build_body(
     })
     if route.get("source_candidate_id") is not None:
         body["source_candidate_id"] = route["source_candidate_id"]
-    if (domain_profile or {}).get("mode") != "crr3":
-        # Generic packets must not carry CRR/authorization vocabulary anywhere,
-        # including upstream reasons copied from the movement evidence.
-        upstream = body.get("upstream_review_reasons")
-        if isinstance(upstream, list):
-            body["upstream_review_reasons"] = [
-                r for r in upstream if not _CRR_VOCAB_RE.search(str(r))
-            ]
-    if (domain_profile or {}).get("mode") == "crr3":
-        domain = route.get("domain_verification")
-        if domain is not None:
-            body["domain_verification"] = domain
     return body
 
 
@@ -447,9 +433,6 @@ def _minimal_body(body: dict[str, Any]) -> dict[str, Any]:
     classification = body.get("classification")
     if classification is not None:
         result["classification"] = classification
-    domain = body.get("domain_verification")
-    if domain is not None:
-        result["domain_verification"] = domain
     return result
 
 
@@ -476,8 +459,7 @@ def payload_for_route(
     The returned packet contains envelope metadata plus a single ``text``
     field whose value is a valid, canonical, deterministic JSON string
     bounded so that the full packet serializes to <= ``MAX_TEXT_CHARS``.
-    CRR evidence is added only when ``domain_profile`` mode is ``crr3``
-    and the route already carries it.
+    No domain verification or evidence is added.
     """
     domain_profile = domain_profile or {"mode": "generic"}
     body = _build_body(route, domain_profile)
@@ -520,29 +502,12 @@ def main() -> None:
 
     domain_profile = routing.get("domain_profile") or {"mode": "generic"}
 
-    if domain_profile.get("mode") == "crr3":
-        # Use enriched verification records by route_id so crr3 evidence is
-        # included. Missing enrichment records are processed generically
-        # (no domain verification claim) rather than silently invented.
-        records = (routing.get("domain_verification") or {}).get("records") or []
-        records_by_route_id = {
-            r.get("route_id"): r for r in records if r.get("route_id")
-        }
-        merged_routes = []
-        for route in routes:
-            record = records_by_route_id.get(route.get("route_id"))
-            if record is not None:
-                merged_routes.append({**route, **record})
-            else:
-                merged_routes.append(dict(route))
-        routes = merged_routes
-    else:
-        # Generic mode must never carry authorization/CRR/legal-verification
-        # content, even if a stale route object contains it.
-        routes = [
-            {k: v for k, v in route.items() if k not in ("domain_verification", "authorization")}
-            for route in routes
-        ]
+    # Packets never carry legacy domain metadata, even if a stale routing
+    # artifact attached verification/authorization fields to a route object.
+    routes = [
+        {k: v for k, v in route.items() if k not in ("domain_verification", "authorization")}
+        for route in routes
+    ]
 
     eligible = [
         route for route in routes

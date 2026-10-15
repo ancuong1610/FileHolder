@@ -14,6 +14,8 @@ import json
 from collections import Counter
 
 from crr_compare.common import find_project_root, output_dir
+from crr_compare.inline_pdf import build_audit as build_inline_audit
+from crr_compare.inline_pdf import render_pdf as render_inline_pdf
 from crr_compare.redline import anchor_label_map, render as render_redline
 from crr_compare.redline_pdf import render_pdf
 
@@ -109,8 +111,6 @@ def build_phase2_index(comparison: dict, old_doc: dict, new_doc: dict) -> dict:
             },
             "token_operations": compact_diff_ops(change.get("token_diff")),
         }
-        if change.get("domain_verification"):
-            unit["domain_verification"] = change["domain_verification"]
         units.append(unit)
 
     for record in comparison.get("table_changes") or []:
@@ -150,8 +150,6 @@ def build_phase2_index(comparison: dict, old_doc: dict, new_doc: dict) -> dict:
             },
             "changed_cells": changed_cells[:200],
         }
-        if record.get("domain_verification"):
-            unit["domain_verification"] = record["domain_verification"]
         units.append(unit)
 
     return {
@@ -208,12 +206,25 @@ def main() -> None:
     pdf_path = render_pdf(comparison, out / "comparison_redline.pdf")
     print(f"Saved: {pdf_path}")
 
+    # Additive inline one-flow PDF (report-only) plus its omission/join audit.
+    # This never changes the redline path above or the canonical comparison.
+    inline_pdf_path = render_inline_pdf(comparison, out / "comparison_inline.pdf")
+    print(f"Saved: {inline_pdf_path}")
+    inline_audit_path = out / "inline_pdf_audit.json"
+    inline_audit_path.write_text(
+        json.dumps(build_inline_audit(comparison), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(f"Saved: {inline_audit_path}")
+
     manifest = {
         "schema_version": "1.0.0",
         "source_comparison": final_path.name,
         "phase2_index": index_path.name,
         "redline_html": "bu_comparison_redline.html",
         "redline_pdf": "comparison_redline.pdf",
+        "inline_pdf": "comparison_inline.pdf",
+        "inline_pdf_audit": "inline_pdf_audit.json",
         "units": len(phase2["change_units"]),
         "changes": len(comparison.get("changes") or []),
         "table_changes": len(comparison.get("table_changes") or []),

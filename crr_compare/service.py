@@ -53,6 +53,8 @@ ARTIFACT_NAMES = {
     "release_audit.json",
     "release_audit_packet.json",
     "comparison_redline.pdf",
+    "comparison_inline.pdf",
+    "inline_pdf_audit.json",
     "bu_comparison_review_manifest.json",
 }
 

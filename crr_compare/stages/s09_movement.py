@@ -272,6 +272,22 @@ def external_crossing_count(
     return crossings
 
 
+def is_structural_candidate(
+    candidate: dict[str, Any],
+    side: str,
+) -> bool:
+    """True when the candidate's element on ``side`` is a structural element.
+
+    Structural residuals are owned by exact structural split/merge discovery,
+    so the generic 1:1 resegmentation reconciler must leave them alone.
+    """
+    element = candidate.get(side)
+    return (
+        isinstance(element, dict)
+        and element.get("element_type") in STRUCTURAL_TYPES
+    )
+
+
 def ordered_residual_structural(
     candidates: list[dict[str, Any]],
     side: str,
@@ -502,10 +518,63 @@ def main() -> None:
     # Pair leftover delete/add candidates that are near-twins (DI paragraph
     # splits, list-marker prefixes, hyphenation artifacts) so they surface as a
     # single RESEGMENTATION_REVIEW item instead of noisy ADD+DELETE pairs.
-    resegmentation_pairs, remaining_deleted, remaining_added = reconcile_residuals(
-        remaining_deleted,
-        remaining_added,
+    #
+    # Structural residuals are excluded from this generic 1:1 reconciler and
+    # stay owned by the exact structural split/merge discovery below.  Without
+    # that ownership split, a deleted structural element next to two added
+    # structural fragments (e.g. "Alpha beta gamma" vs "Alpha beta" + "gamma")
+    # is consumed here as one near-twin pair, hiding the exact 1:2 (or 2:1)
+    # relationship; and a structural numeric edit (e.g. "Alpha beta 21" vs
+    # "Alpha beta" + "99") is swallowed as an equivalence because the tokenizer
+    # drops short numeric tokens.  Structural split/merge evidence is
+    # review-only: it never consumes a candidate.
+    protected_deleted_ids = {
+        candidate["candidate_id"]
+        for candidate in remaining_deleted
+        if is_structural_candidate(candidate, "old")
+    }
+    protected_added_ids = {
+        candidate["candidate_id"]
+        for candidate in remaining_added
+        if is_structural_candidate(candidate, "new")
+    }
+
+    (
+        resegmentation_pairs,
+        reconciled_leftover_deleted,
+        reconciled_leftover_added,
+    ) = reconcile_residuals(
+        [
+            candidate
+            for candidate in remaining_deleted
+            if candidate["candidate_id"] not in protected_deleted_ids
+        ],
+        [
+            candidate
+            for candidate in remaining_added
+            if candidate["candidate_id"] not in protected_added_ids
+        ],
     )
+
+    # Recombine in the original input order.  Protected structural residuals are
+    # never consumed; the reconciler only owns non-structural candidates, so
+    # the two owners stay non-overlapping and exactly-once accounting holds.
+    kept_deleted_ids = protected_deleted_ids | {
+        candidate["candidate_id"] for candidate in reconciled_leftover_deleted
+    }
+    kept_added_ids = protected_added_ids | {
+        candidate["candidate_id"] for candidate in reconciled_leftover_added
+    }
+    remaining_deleted = [
+        candidate
+        for candidate in remaining_deleted
+        if candidate["candidate_id"] in kept_deleted_ids
+    ]
+    remaining_added = [
+        candidate
+        for candidate in remaining_added
+        if candidate["candidate_id"] in kept_added_ids
+    ]
     print("Residual pairs reconciled as RESEGMENTATION_REVIEW:", len(resegmentation_pairs))
 
     structural_pairs = paired_structural_candidates(comparison_candidates)

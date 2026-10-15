@@ -1,93 +1,56 @@
-"""Conservative domain profile detection for the comparison pipeline.
+"""Domain profile resolution for the generic-only comparison pipeline.
 
-Resolves the domain mode (``auto|generic|crr3``) as metadata only. CRR3 is
-resolved only when both documents independently carry strong, consistent
-evidence identifying Regulation (EU) No 575/2013 specifically: its CELEX
-code ``32013R0575`` (or equivalent separators/casing) or the
-consolidated-regulation citation. The CRR3 amendment Regulation (EU)
-2024/1623 may support but can never replace that base evidence. Everything
-else falls back to ``generic`` with ``confidence: uncertain``.
+The production pipeline is generic only. ``generic`` (and the legacy
+absent/blank/``auto`` spellings) always resolve to a generic profile without
+inspecting document content, so CRR-looking source text is ordinary content,
+never a trigger for legal verification. The retired CRR3 mode fails with an
+actionable configuration error instead of silently implying verification.
 
 Metadata-only invariant: this module performs no matching, routing,
-acceptance, authorization, environment, network, or filesystem access;
-stdlib ``re`` only.
+acceptance, authorization, environment, network, or filesystem access.
 """
 from __future__ import annotations
 
-import re
+GENERIC_MODE = "generic"
 
-VALID_MODES = ("auto", "generic", "crr3")
-
-CRR3_CELEX = "32013R0575"
-CRR3_INSTRUMENT = "Regulation (EU) No 575/2013"
-
-# CELEX regulation-code shape 3ddddRdddd with flexible separators/casing;
-# a match counts as base evidence only when it normalizes to CRR3_CELEX.
-_CELEX_RE = re.compile(r"\b3\d{4}[-\s]*R[-\s]*\d{4}\b", re.IGNORECASE)
-# Consolidated-regulation citation; the "(EU)" marker is required so bare
-# "575/2013" or "Regulation No 575/2013" stays ambiguous.
-_CITATION_RE = re.compile(
-    r"Regulation\s*\(EU\)\s*(?:No\.?\s*)?575\s*/\s*2013\b", re.IGNORECASE
-)
+# Legacy values that used to select the generic profile; ``auto`` no longer
+# inspects document content and is treated as generic.
+_LEGACY_GENERIC_VALUES = frozenset({"", "auto", "generic"})
+_RETIRED_VALUES = frozenset({"crr3"})
 
 
 def parse_domain_mode(value) -> str:
-    """Normalize a domain mode value; blank/absent defaults to ``auto``."""
+    """Normalize a domain mode value to ``generic`` or fail actionably.
+
+    Absent/blank, legacy ``auto``, and ``generic`` all resolve to
+    ``generic``. Explicit retired CRR values and unknown values raise
+    ``ValueError`` so a misconfiguration never silently implies legal
+    verification.
+    """
     normalized = str(value or "").strip().lower()
-    if not normalized:
-        return "auto"
-    if normalized not in VALID_MODES:
+    if normalized in _LEGACY_GENERIC_VALUES:
+        return GENERIC_MODE
+    if normalized in _RETIRED_VALUES:
         raise ValueError(
-            f"Invalid domain mode {value!r}; expected one of: {', '.join(VALID_MODES)}."
+            f"Domain mode {value!r} is retired: this build supports generic "
+            "comparison only. Unset CRR_DOMAIN_MODE or set it to 'generic'; "
+            "CRR amendment verification is no longer a production capability."
         )
-    return normalized
+    raise ValueError(
+        f"Invalid domain mode {value!r}; expected 'generic' (or unset). "
+        "CRR-specific domain modes are retired."
+    )
 
 
-def _iter_strings(value):
-    """Yield every string value in a nested dict/list document model."""
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _iter_strings(item)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            yield from _iter_strings(item)
+def resolve_domain_profile(mode, old=None, new=None) -> dict:
+    """Resolve the final domain profile; always generic.
 
-
-def _has_base_evidence(model) -> bool:
-    """True when the document carries qualifying Regulation (EU) No 575/2013 evidence."""
-    for text in _iter_strings(model):
-        if _CITATION_RE.search(text):
-            return True
-        for match in _CELEX_RE.finditer(text):
-            if re.sub(r"[^A-Z0-9]", "", match.group(0).upper()) == CRR3_CELEX:
-                return True
-    return False
-
-
-def detect_crr3(old_model, new_model) -> dict:
-    """Auto-detect the domain profile from the two internal-schema documents."""
-    if _has_base_evidence(old_model) and _has_base_evidence(new_model):
-        return {
-            "mode": "crr3",
-            "source": "auto",
-            "confidence": "confident",
-            "instrument": CRR3_INSTRUMENT,
-        }
-    return {"mode": "generic", "source": "auto", "confidence": "uncertain"}
-
-
-def resolve_domain_profile(mode, old, new) -> dict:
-    """Resolve the final domain profile; an explicit mode always wins."""
-    resolved = parse_domain_mode(mode)
-    if resolved == "auto":
-        return detect_crr3(old, new)
-    if resolved == "crr3":
-        return {
-            "mode": "crr3",
-            "source": "explicit",
-            "confidence": "confident",
-            "instrument": CRR3_INSTRUMENT,
-        }
-    return {"mode": "generic", "source": "explicit", "confidence": "confident"}
+    ``old``/``new`` are accepted for signature compatibility only and are
+    never inspected: no document content can activate a specialized domain.
+    """
+    parse_domain_mode(mode)
+    return {
+        "mode": GENERIC_MODE,
+        "source": "explicit",
+        "confidence": "confident",
+    }

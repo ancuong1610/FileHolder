@@ -1,0 +1,650 @@
+{
+  "document_id": "DOC-NUMERIC-ONE-HEADING",
+  "page_count": 2,
+  "pages": [
+    {
+      "page_number": 1,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch",
+      "angle": 0
+    },
+    {
+      "page_number": 2,
+      "width": 8.5,
+      "height": 11.0,
+      "unit": "inch",
+      "angle": 0
+    }
+  ],
+  "elements": [
+    {
+      "element_id": "P-00001",
+      "source_type": "paragraph",
+      "source_reference": {
+        "collection": "paragraphs",
+        "index": 0
+      },
+      "element_type": "heading",
+      "text": "Quarterly figures",
+      "normalized_text": "Quarterly figures",
+      "original_role": "title",
+      "heading_evidence": {
+        "di_role": "title",
+        "di_role_is_heading_like": true,
+        "di_role_is_non_content": false,
+        "lexical_signal": null,
+        "status": "di_heading_evidence",
+        "hierarchy_level": null,
+        "hierarchy_level_known": false,
+        "authoritative_structure_created": false
+      },
+      "spans": [
+        {
+          "offset": 0,
+          "length": 30
+        }
+      ],
+      "bounding_regions": [
+        {
+          "page_number": 1,
+          "polygon": [
+            0.8,
+            1.0,
+            7.7,
+            1.0,
+            7.7,
+            1.3,
+            0.8,
+            1.3
+          ]
+        }
+      ],
+      "primary_page": 1,
+      "primary_polygon": [
+        0.8,
+        1.0,
+        7.7,
+        1.0,
+        7.7,
+        1.3,
+        0.8,
+        1.3
+      ],
+      "source_order": 0,
+      "reading_order": 0,
+      "section_path": [],
+      "structure_heading": null,
+      "structure_status": "not_inferred_in_step_3",
+      "inside_table": false,
+      "represented_by_table_id": null,
+      "comparison_eligible": true,
+      "exclusion_reasons": [],
+      "extraction_validation": {
+        "requires_extraction_review": false,
+        "extraction_warning_flags": [],
+        "extraction_review_flags": []
+      },
+      "confidence": {
+        "mean_word_confidence": null,
+        "minimum_word_confidence": null,
+        "word_count_with_confidence": 0
+      },
+      "table": null
+    },
+    {
+      "element_id": "T-00001",
+      "source_type": "table",
+      "source_reference": {
+        "collection": "tables",
+        "index": 1
+      },
+      "element_type": "table",
+      "text": "Section\tPage\nIntroduction\t10\nNorth\t12\nSouth\t8",
+      "normalized_text": "Section\tPage\nIntroduction\t10\nNorth\t12\nSouth\t8",
+      "original_role": null,
+      "heading_evidence": null,
+      "spans": [
+        {
+          "offset": 40,
+          "length": 30
+        }
+      ],
+      "bounding_regions": [
+        {
+          "page_number": 1,
+          "polygon": [
+            0.8,
+            1.0,
+            7.7,
+            1.0,
+            7.7,
+            1.3,
+            0.8,
+            1.3
+          ]
+        }
+      ],
+      "primary_page": 1,
+      "primary_polygon": [
+        0.8,
+        1.0,
+        7.7,
+        1.0,
+        7.7,
+        1.3,
+        0.8,
+        1.3
+      ],
+      "source_order": 1,
+      "reading_order": 1,
+      "section_path": [],
+      "structure_heading": null,
+      "structure_status": "not_inferred_in_step_3",
+      "inside_table": false,
+      "represented_by_table_id": null,
+      "comparison_eligible": true,
+      "exclusion_reasons": [],
+      "extraction_validation": {
+        "requires_extraction_review": false,
+        "extraction_warning_flags": [],
+        "extraction_review_flags": []
+      },
+      "confidence": {
+        "mean_word_confidence": null,
+        "minimum_word_confidence": null,
+        "word_count_with_confidence": 0
+      },
+      "table": {
+        "row_count": 4,
+        "column_count": 2,
+        "cells": [
+          {
+            "cell_id": "T-00001-C0001",
+            "row_index": 0,
+            "column_index": 0,
+            "row_span": 1,
+            "column_span": 1,
+            "kind": "columnHeader",
+            "text": "Section",
+            "normalized_text": "Section",
+            "spans": [
+              {
+                "offset": 40,
+                "length": 30
+              }
+            ],
+            "bounding_regions": [
+              {
+                "page_number": 1,
+                "polygon": [
+                  0.8,
+                  1.0,
+                  7.7,
+                  1.0,
+                  7.7,
+                  1.3,
+                  0.8,
+                  1.3
+                ]
+              }
+            ],
+            "primary_page": 1,
+            "primary_polygon": [
+              0.8,
+              1.0,
+              7.7,
+              1.0,
+              7.7,
+              1.3,
+              0.8,
+              1.3
+            ]
+          },
+          {
+            "cell_id": "T-00001-C0002",
+            "row_index": 0,
+            "column_index": 1,
+            "row_span": 1,
+            "column_span": 1,
+            "kind": "columnHeader",
+            "text": "Page",
+            "normalized_text": "Page",
+            "spans": [
+              {
+                "offset": 40,
+                "length": 30
+              }
+            ],
+            "bounding_regions": [
+              {
+                "page_number": 1,
+                "polygon": [
+                  0.8,
+                  1.0,
+                  7.7,
+                  1.0,
+                  7.7,
+                  1.3,
+                  0.8,
+                  1.3
+                ]
+              }
+            ],
+            "primary_page": 1,
+            "primary_polygon": [
+              0.8,
+              1.0,
+              7.7,
+              1.0,
+              7.7,
+              1.3,
+              0.8,
+              1.3
+            ]
+          },
+          {
+            "cell_id": "T-00001-C0003",
+            "row_index": 1,
+            "column_index": 0,
+            "row_span": 1,
+            "column_span": 1,
+            "kind": "content",
+            "text": "Introduction",
+            "normalized_text": "Introduction",
+            "spans": [
+              {
+                "offset": 40,
+                "length": 30
+              }
+            ],
+            "bounding_regions": [
+              {
+                "page_number": 1,
+                "polygon": [
+                  0.8,
+                  1.0,
+                  7.7,
+                  1.0,
+                  7.7,
+                  1.3,
+                  0.8,
+                  1.3
+                ]
+              }
+            ],
+            "primary_page": 1,
+            "primary_polygon": [
+              0.8,
+              1.0,
+              7.7,
+              1.0,
+              7.7,
+              1.3,
+              0.8,
+              1.3
+            ]
+          },
+          {
+            "cell_id": "T-00001-C0004",
+            "row_index": 1,
+            "column_index": 1,
+            "row_span": 1,
+            "column_span": 1,
+            "kind": "content",
+            "text": "10",
+            "normalized_text": "10",
+            "spans": [
+              {
+                "offset": 40,
+                "length": 30
+              }
+            ],
+            "bounding_regions": [
+              {
+                "page_number": 1,
+                "polygon": [
+                  0.8,
+                  1.0,
+                  7.7,
+                  1.0,
+                  7.7,
+                  1.3,
+                  0.8,
+                  1.3
+                ]
+              }
+            ],
+            "primary_page": 1,
+            "primary_polygon": [
+              0.8,
+              1.0,
+              7.7,
+              1.0,
+              7.7,
+              1.3,
+              0.8,
+              1.3
+            ]
+          },
+          {
+            "cell_id": "T-00001-C0005",
+            "row_index": 2,
+            "column_index": 0,
+            "row_span": 1,
+            "column_span": 1,
+            "kind": "content",
+            "text": "North",
+            "normalized_text": "North",
+            "spans": [
+              {
+                "offset": 40,
+                "length": 30
+              }
+            ],
+            "bounding_regions": [
+              {
+                "page_number": 1,
+                "polygon": [
+                  0.8,
+                  1.0,
+                  7.7,
+                  1.0,
+                  7.7,
+                  1.3,
+                  0.8,
+                  1.3
+                ]
+              }
+            ],
+            "primary_page": 1,
+            "primary_polygon": [
+              0.8,
+              1.0,
+              7.7,
+              1.0,
+              7.7,
+              1.3,
+              0.8,
+              1.3
+            ]
+          },
+          {
+            "cell_id": "T-00001-C0006",
+            "row_index": 2,
+            "column_index": 1,
+            "row_span": 1,
+            "column_span": 1,
+            "kind": "content",
+            "text": "12",
+            "normalized_text": "12",
+            "spans": [
+              {
+                "offset": 40,
+                "length": 30
+              }
+            ],
+            "bounding_regions": [
+              {
+                "page_number": 1,
+                "polygon": [
+                  0.8,
+                  1.0,
+                  7.7,
+                  1.0,
+                  7.7,
+                  1.3,
+                  0.8,
+                  1.3
+                ]
+              }
+            ],
+            "primary_page": 1,
+            "primary_polygon": [
+              0.8,
+              1.0,
+              7.7,
+              1.0,
+              7.7,
+              1.3,
+              0.8,
+              1.3
+            ]
+          },
+          {
+            "cell_id": "T-00001-C0007",
+            "row_index": 3,
+            "column_index": 0,
+            "row_span": 1,
+            "column_span": 1,
+            "kind": "content",
+            "text": "South",
+            "normalized_text": "South",
+            "spans": [
+              {
+                "offset": 40,
+                "length": 30
+              }
+            ],
+            "bounding_regions": [
+              {
+                "page_number": 1,
+                "polygon": [
+                  0.8,
+                  1.0,
+                  7.7,
+                  1.0,
+                  7.7,
+                  1.3,
+                  0.8,
+                  1.3
+                ]
+              }
+            ],
+            "primary_page": 1,
+            "primary_polygon": [
+              0.8,
+              1.0,
+              7.7,
+              1.0,
+              7.7,
+              1.3,
+              0.8,
+              1.3
+            ]
+          },
+          {
+            "cell_id": "T-00001-C0008",
+            "row_index": 3,
+            "column_index": 1,
+            "row_span": 1,
+            "column_span": 1,
+            "kind": "content",
+            "text": "8",
+            "normalized_text": "8",
+            "spans": [
+              {
+                "offset": 40,
+                "length": 30
+              }
+            ],
+            "bounding_regions": [
+              {
+                "page_number": 1,
+                "polygon": [
+                  0.8,
+                  1.0,
+                  7.7,
+                  1.0,
+                  7.7,
+                  1.3,
+                  0.8,
+                  1.3
+                ]
+              }
+            ],
+            "primary_page": 1,
+            "primary_polygon": [
+              0.8,
+              1.0,
+              7.7,
+              1.0,
+              7.7,
+              1.3,
+              0.8,
+              1.3
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "element_id": "P-00002",
+      "source_type": "paragraph",
+      "source_reference": {
+        "collection": "paragraphs",
+        "index": 2
+      },
+      "element_type": "heading",
+      "text": "1. Introduction",
+      "normalized_text": "1. Introduction",
+      "original_role": "sectionHeading",
+      "heading_evidence": {
+        "di_role": "sectionHeading",
+        "di_role_is_heading_like": true,
+        "di_role_is_non_content": false,
+        "lexical_signal": null,
+        "status": "di_heading_evidence",
+        "hierarchy_level": null,
+        "hierarchy_level_known": false,
+        "authoritative_structure_created": false
+      },
+      "spans": [
+        {
+          "offset": 80,
+          "length": 30
+        }
+      ],
+      "bounding_regions": [
+        {
+          "page_number": 1,
+          "polygon": [
+            0.8,
+            1.0,
+            7.7,
+            1.0,
+            7.7,
+            1.3,
+            0.8,
+            1.3
+          ]
+        }
+      ],
+      "primary_page": 1,
+      "primary_polygon": [
+        0.8,
+        1.0,
+        7.7,
+        1.0,
+        7.7,
+        1.3,
+        0.8,
+        1.3
+      ],
+      "source_order": 2,
+      "reading_order": 2,
+      "section_path": [],
+      "structure_heading": null,
+      "structure_status": "not_inferred_in_step_3",
+      "inside_table": false,
+      "represented_by_table_id": null,
+      "comparison_eligible": true,
+      "exclusion_reasons": [],
+      "extraction_validation": {
+        "requires_extraction_review": false,
+        "extraction_warning_flags": [],
+        "extraction_review_flags": []
+      },
+      "confidence": {
+        "mean_word_confidence": null,
+        "minimum_word_confidence": null,
+        "word_count_with_confidence": 0
+      },
+      "table": null
+    },
+    {
+      "element_id": "P-00003",
+      "source_type": "paragraph",
+      "source_reference": {
+        "collection": "paragraphs",
+        "index": 3
+      },
+      "element_type": "paragraph",
+      "text": "Intro body.",
+      "normalized_text": "Intro body.",
+      "original_role": null,
+      "heading_evidence": {
+        "di_role": null,
+        "di_role_is_heading_like": false,
+        "di_role_is_non_content": false,
+        "lexical_signal": null,
+        "status": "no_heading_evidence",
+        "hierarchy_level": null,
+        "hierarchy_level_known": false,
+        "authoritative_structure_created": false
+      },
+      "spans": [
+        {
+          "offset": 120,
+          "length": 30
+        }
+      ],
+      "bounding_regions": [
+        {
+          "page_number": 1,
+          "polygon": [
+            0.8,
+            1.0,
+            7.7,
+            1.0,
+            7.7,
+            1.3,
+            0.8,
+            1.3
+          ]
+        }
+      ],
+      "primary_page": 1,
+      "primary_polygon": [
+        0.8,
+        1.0,
+        7.7,
+        1.0,
+        7.7,
+        1.3,
+        0.8,
+        1.3
+      ],
+      "source_order": 3,
+      "reading_order": 3,
+      "section_path": [],
+      "structure_heading": null,
+      "structure_status": "not_inferred_in_step_3",
+      "inside_table": false,
+      "represented_by_table_id": null,
+      "comparison_eligible": true,
+      "exclusion_reasons": [],
+      "extraction_validation": {
+        "requires_extraction_review": false,
+        "extraction_warning_flags": [],
+        "extraction_review_flags": []
+      },
+      "confidence": {
+        "mean_word_confidence": null,
+        "minimum_word_confidence": null,
+        "word_count_with_confidence": 0
+      },
+      "table": null
+    }
+  ]
+}

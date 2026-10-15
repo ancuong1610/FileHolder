@@ -289,6 +289,28 @@ def _table_cells_extraction_uncertain(side: str) -> dict:
     return _table(10, ["Item", "Description"], [["Widget", description]])
 
 
+def _table_cells_deleted_table(side: str) -> dict | None:
+    """A whole table present only in the old document (pure deletion)."""
+    if side != "old":
+        return None
+    return _table(
+        8,
+        ["Withdrawn Control", "Legacy Threshold"],
+        [["Withdrawn backup", "41"], ["Withdrawn restore", "42"]],
+    )
+
+
+def _table_cells_added_table(side: str) -> dict | None:
+    """A whole table present only in the new document (pure addition)."""
+    if side != "new":
+        return None
+    return _table(
+        8,
+        ["Emerging Hazard", "Risk Rating", "Mitigation"],
+        [["Flood exposure", "17", "Drainage"], ["Heat exposure", "18", "Cooling"]],
+    )
+
+
 def _build_table_document(side: str) -> dict:
     tables = [
         _table_cells_changed_cell(side),
@@ -300,6 +322,10 @@ def _build_table_document(side: str) -> dict:
         _table_cells_merged_cells(side),
         _table_cells_extraction_uncertain(side),
     ]
+    for one_sided in (_table_cells_deleted_table, _table_cells_added_table):
+        table = one_sided(side)
+        if table is not None:
+            tables.append(table)
     return {
         "apiVersion": "2024-11-30",
         "modelId": "prebuilt-layout",
@@ -381,6 +407,10 @@ def _load_artifacts(root: Path) -> dict:
         "phase2": json.loads((out / "phase2_change_index.json").read_text(encoding="utf-8")),
         "csv_rows": csv_rows,
         "redline": _redline_text(out / "comparison_redline.pdf"),
+        "redline_pdf_signature": (out / "comparison_redline.pdf").read_bytes()[:5],
+        "inline_pdf_signature": (out / "comparison_inline.pdf").read_bytes()[:5],
+        "inline_text": _redline_text(out / "comparison_inline.pdf"),
+        "inline_audit": json.loads((out / "inline_pdf_audit.json").read_text(encoding="utf-8")),
     }
 
 

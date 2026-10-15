@@ -53,6 +53,18 @@ STEP10_VERSION = "2.0.0-current-provisional-context"
 EXPECTED_STEP9_STAGE = "movement_and_structural_reconciliation_evidence"
 
 
+class ContractError(ValueError):
+    """Malformed table input that violates the Stage-10 input contract.
+
+    Raised instead of silently repairing an ambiguous table. Current cases:
+    two cells sharing one ``(row_index, column_index)`` coordinate, two cells
+    sharing one ``cell_id``, and any cell-accounting mismatch where a cell
+    would otherwise be dropped from the matched/deleted/added comparison.
+    The message carries stage, table, row, column and cell identifiers so the
+    failure can be located in the source extraction artifacts.
+    """
+
+
 # ---- cell 4 ----
 def load_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as file:
@@ -203,6 +215,58 @@ def header_similarity(old_header: tuple[str, ...], new_header: tuple[str, ...]) 
     if not old_header or not new_header:
         return 0.0
     return SequenceMatcher(None, old_header, new_header, autojunk=False).ratio()
+
+
+def validate_fragment_cell_contract(
+    side: str,
+    logical_index: int,
+    fragment: dict[str, Any],
+) -> None:
+    """Reject malformed physical-table cells before any row/column pairing.
+
+    The Stage-10 contract requires every cell of one *physical* table
+    fragment to occupy a unique ``(row_index, column_index)`` coordinate and,
+    when a ``cell_id`` is present, to carry a unique ``cell_id``. Merged cells
+    are expressed through valid ``row_span``/``column_span`` values and still
+    occupy exactly one coordinate, so they never collide here. Repeated-page
+    continuation fragments are *separate* physical tables and are validated
+    independently, so a repeated continuation header never looks like a
+    duplicate coordinate.
+    """
+    element_id = fragment.get("element_id")
+    logical_table_id = f"{side.upper()}-LT{logical_index:04}"
+    coordinates: dict[tuple[int, int], dict[str, Any]] = {}
+    cell_ids: dict[str, dict[str, Any]] = {}
+
+    for cell in table_cells(fragment):
+        row_index = int(cell.get("row_index", 0))
+        column_index = int(cell.get("column_index", 0))
+        coordinate = (row_index, column_index)
+
+        previous = coordinates.get(coordinate)
+        if previous is not None:
+            raise ContractError(
+                "s10: duplicate cell coordinate is not a valid table pairing "
+                f"(side={side}, logical_table={logical_table_id}, "
+                f"source_table={element_id!r}, row={row_index}, "
+                f"column={column_index}): cells "
+                f"{previous.get('cell_id')!r} and {cell.get('cell_id')!r} "
+                "share one coordinate; refusing to silently drop one"
+            )
+        coordinates[coordinate] = cell
+
+        cell_id = cell.get("cell_id")
+        if isinstance(cell_id, str) and cell_id:
+            previous_id = cell_ids.get(cell_id)
+            if previous_id is not None:
+                raise ContractError(
+                    "s10: duplicate cell_id is not a valid input identity "
+                    f"(side={side}, logical_table={logical_table_id}, "
+                    f"source_table={element_id!r}, cell_id={cell_id!r}): rows "
+                    f"{int(previous_id.get('row_index', 0))} and {row_index} "
+                    "share one cell_id; refusing to silently drop one"
+                )
+            cell_ids[cell_id] = cell
 
 
 def compact_cell(cell: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -377,6 +441,8 @@ def build_logical_table(
     first_header = header_signature(fragments[0])
 
     for fragment_index, fragment in enumerate(fragments):
+        validate_fragment_cell_contract(side, index, fragment)
+
         header_rows = header_row_indexes(fragment)
         repeated_header = (
             fragment_index > 0
@@ -387,12 +453,15 @@ def build_logical_table(
             ) >= 0.80
         )
 
+        fragment_cells = table_cells(fragment)
         cells_by_row: dict[int, list[dict[str, Any]]] = defaultdict(list)
-        for original_cell in table_cells(fragment):
+        for original_cell in fragment_cells:
             cells_by_row[int(original_cell.get("row_index", 0))].append(
                 original_cell
             )
 
+        placed_cells = 0
+        fragment_omitted_cells = 0
         for source_row_index in range(
             int((fragment.get("table") or {}).get("row_count") or 0)
         ):
@@ -404,6 +473,7 @@ def build_logical_table(
             if repeated_header and source_row_index in header_rows:
                 omitted_header_rows += 1
                 omitted_header_cells += len(row_cells)
+                fragment_omitted_cells += len(row_cells)
                 continue
 
             logical_row_index = len(logical_rows)
@@ -416,6 +486,7 @@ def build_logical_table(
                 copied["_logical_row_index"] = logical_row_index
                 copied_cells.append(copied)
 
+            placed_cells += len(copied_cells)
             logical_rows.append({
                 "logical_row_index": logical_row_index,
                 "source_table_id": fragment.get("element_id"),
@@ -423,6 +494,16 @@ def build_logical_table(
                 "is_header": source_row_index in header_rows,
                 "cells": copied_cells,
             })
+
+        # Every physical cell must be preserved either in a logical row or as
+        # a documented repeated-continuation-header omission.
+        require(
+            placed_cells + fragment_omitted_cells == len(fragment_cells),
+            "s10: physical cell accounting failed for physical table "
+            f"{fragment.get('element_id')!r} (side={side}): "
+            f"source_cells={len(fragment_cells)}, placed_cells={placed_cells}, "
+            f"omitted_repeated_header_cells={fragment_omitted_cells}",
+        )
 
     first = fragments[0]
     extraction_validations = [
@@ -1036,7 +1117,83 @@ def compare_cell(old: dict[str, Any] | None, new: dict[str, Any] | None) -> dict
 
 
 def cells_by_column(row: dict[str, Any]) -> dict[int, dict[str, Any]]:
-    return {int(cell.get("column_index", 0)): cell for cell in row.get("cells") or []}
+    """Map one logical row's cells by column index, rejecting duplicates.
+
+    A plain ``{column_index: cell}`` comprehension silently keeps only the
+    last cell when two share a column, dropping the other from the comparison
+    (for example a changed ``21 -> 99`` cell hidden behind an unchanged
+    duplicate). Malformed input is rejected with actionable identifiers
+    instead of fabricating a pairing.
+    """
+    cells: dict[int, dict[str, Any]] = {}
+    for cell in row.get("cells") or []:
+        column = int(cell.get("column_index", 0))
+        previous = cells.get(column)
+        if previous is not None:
+            raise ContractError(
+                "s10: duplicate cell coordinate in logical row is not a valid "
+                "pairing (source_table="
+                f"{row.get('source_table_id')!r}, "
+                f"source_row={row.get('source_row_index')!r}, column={column}): "
+                f"cells {previous.get('cell_id')!r} and {cell.get('cell_id')!r} "
+                "share one coordinate; refusing to silently drop one"
+            )
+        cells[column] = cell
+    return cells
+
+
+def cell_accounting_identity(cell: dict[str, Any]) -> tuple[Any, Any, int]:
+    """A stable identity for exactly-once cell accounting.
+
+    Works on both logical-row cells (``_source_table_id``/
+    ``_source_row_index``) and their compacted comparison form
+    (``source_table_id``/``source_row_index``), so a cell can be traced from
+    the logical table into the matched/deleted/added change list.
+    """
+    return (
+        cell.get("_source_table_id", cell.get("source_table_id")),
+        cell.get(
+            "_source_row_index",
+            cell.get("source_row_index", cell.get("row_index")),
+        ),
+        int(cell.get("column_index", 0)),
+    )
+
+
+def require_exactly_once_cell_accounting(
+    side: str,
+    table: dict[str, Any],
+    accounted: list[dict[str, Any] | None],
+    index: int,
+) -> int:
+    """Require every logical-row cell to appear exactly once when accounted.
+
+    Compared by cell identity, not by a bare summary count, so a dropped or
+    duplicated cell is named in the raised :class:`ContractError` rather than
+    hidden. Returns the number of logical-row cells that were accounted.
+    """
+    expected = Counter(
+        cell_accounting_identity(cell)
+        for row in table.get("rows") or []
+        for cell in row.get("cells") or []
+    )
+    observed = Counter(
+        cell_accounting_identity(cell)
+        for cell in accounted
+        if cell is not None
+    )
+    if expected != observed:
+        missing = sorted(expected - observed, key=repr)
+        extra = sorted(observed - expected, key=repr)
+        raise ContractError(
+            "s10: exactly-once cell accounting failed for "
+            f"{table.get('logical_table_id')!r} "
+            f"(side={side}, TABLE-MATCH-{index:04}): "
+            f"cells_in_logical_rows={sum(expected.values())}, "
+            f"cells_accounted={sum(observed.values())}, "
+            f"missing={missing}, unexpectedly_accounted={extra}"
+        )
+    return sum(expected.values())
 
 
 # ---- cell 16 ----
@@ -1123,6 +1280,19 @@ def compare_table_match(match: dict[str, Any], index: int) -> dict[str, Any]:
             )
             cell_changes.append(comparison)
 
+    old_cells_accounted = require_exactly_once_cell_accounting(
+        "old",
+        old,
+        [change.get("old") for change in cell_changes],
+        index,
+    )
+    new_cells_accounted = require_exactly_once_cell_accounting(
+        "new",
+        new,
+        [change.get("new") for change in cell_changes],
+        index,
+    )
+
     counts = Counter(change["classification"] for change in cell_changes)
     if counts["MODIFIED"] or counts["ADDED"] or counts["DELETED"]:
         classification = "MODIFIED"
@@ -1187,9 +1357,74 @@ def compare_table_match(match: dict[str, Any], index: int) -> dict[str, Any]:
             "added_rows": len(alignment["added_rows"]),
             "deleted_rows": len(alignment["deleted_rows"]),
         },
+        "cell_accounting": {
+            "basis":
+                "cell identity (source_table_id, source_row_index, column_index)",
+            "old_cells_in_logical_rows": old_cells_accounted,
+            "old_cells_accounted": old_cells_accounted,
+            "new_cells_in_logical_rows": new_cells_accounted,
+            "new_cells_accounted": new_cells_accounted,
+            "old_omitted_repeated_header_cells":
+                old.get("omitted_repeated_header_cells"),
+            "new_omitted_repeated_header_cells":
+                new.get("omitted_repeated_header_cells"),
+        },
         "cell_changes": cell_changes,
     }
 
+
+def compact_unmatched_table(
+    table: dict[str, Any],
+    classification: str,
+) -> dict[str, Any]:
+    """Compact a one-sided (deleted/added) logical table with its cell content.
+
+    A deleted/added table used to be serialized as metadata only, so its real
+    physical cell text and provenance were dropped before the redline even when
+    the source table carried full content. Every logical-row cell becomes
+    exactly one one-sided cell change through the same ``compare_cell`` path and
+    the same exactly-once accounting used for matched tables, so no cell is
+    silently lost and the old/new orientation is preserved.
+
+    ``classification`` is ``DELETED`` (old-only) or ``ADDED`` (new-only). The
+    compacted result keeps ``compact_logical_table``'s metadata shape and adds
+    ``cell_changes`` plus an explicit ``cell_content_status`` of ``available``.
+    """
+    compact = compact_logical_table(table)
+    deleted = classification == "DELETED"
+    side = "old" if deleted else "new"
+    logical_table_id = table.get("logical_table_id")
+    cell_changes: list[dict[str, Any]] = []
+
+    for row in table.get("rows") or []:
+        logical_row_index = row.get("logical_row_index")
+        for column, cell in sorted(cells_by_column(row).items()):
+            comparison = compare_cell(cell, None) if deleted else compare_cell(None, cell)
+            comparison.update({
+                "change_id":
+                    f"TABLE-{classification}-{logical_table_id}"
+                    f"-R{logical_row_index:05}-C{column:03}",
+                "old_row_index": logical_row_index if deleted else None,
+                "new_row_index": None if deleted else logical_row_index,
+                "column_index": column,
+                "row_match_type": "deleted_table" if deleted else "added_table",
+                "row_similarity": None,
+            })
+            cell_changes.append(comparison)
+
+    require_exactly_once_cell_accounting(
+        side,
+        table,
+        [
+            change.get("old") if deleted else change.get("new")
+            for change in cell_changes
+        ],
+        0,
+    )
+
+    compact["cell_changes"] = cell_changes
+    compact["cell_content_status"] = "available"
+    return compact
 
 
 def residual_context_key(
@@ -1524,15 +1759,35 @@ def main() -> None:
                     table["omitted_repeated_header_rows"]
                     for table in new_tables
                 ),
+            "omitted_old_repeated_header_cells":
+                sum(
+                    table["omitted_repeated_header_cells"]
+                    for table in old_tables
+                ),
+            "omitted_new_repeated_header_cells":
+                sum(
+                    table["omitted_repeated_header_cells"]
+                    for table in new_tables
+                ),
+            "matched_old_cells_accounted":
+                sum(
+                    match["cell_accounting"]["old_cells_accounted"]
+                    for match in table_matches
+                ),
+            "matched_new_cells_accounted":
+                sum(
+                    match["cell_accounting"]["new_cells_accounted"]
+                    for match in table_matches
+                ),
         },
         "table_matches": table_matches,
         "unresolved_table_groups": unresolved_table_groups,
         "deleted_table_candidates": [
-            compact_logical_table(table)
+            compact_unmatched_table(table, "DELETED")
             for table in deleted_table_candidates
         ],
         "added_table_candidates": [
-            compact_logical_table(table)
+            compact_unmatched_table(table, "ADDED")
             for table in added_table_candidates
         ],
     }

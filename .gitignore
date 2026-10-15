@@ -1,6 +1,9 @@
 # Local secrets - never commit; the template stays tracked.
 .env
+.env.*
 !.env.example
+.venv/
+venv/
 
 # Runtime / generated workspace output.
 workspace/
@@ -8,6 +11,7 @@ output/
 runtime/
 temp/
 cache/
+output_sample/
 __pycache__/
 *.pyc
 .pytest_cache/

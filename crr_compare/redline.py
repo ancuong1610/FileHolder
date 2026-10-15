@@ -228,11 +228,6 @@ def comment_rows(item: dict, extra_rows: list[tuple[str, str]] | None = None) ->
     reasons = item.get("review_reasons") or []
     if reasons:
         rows.append(("Reasons", _esc(", ".join(reasons))))
-    # Domain verification is additive metadata: shown only when present on the
-    # record and never part of output identity/bucketing.
-    domain = (item.get("domain_verification") or {}).get("status")
-    if domain:
-        rows.append(("Domain status", _esc(domain)))
     rows.extend((k, v) for k, v in (extra_rows or []))
     return "".join(f"<tr><td class='k'>{k}:</td><td>{v}</td></tr>" for k, v in rows)
 
@@ -341,7 +336,6 @@ def render_table_change(record: dict) -> str:
         "needs_review": record.get("needs_review"),
         "review_reasons": record.get("review_reasons") or [],
         "resolution": record.get("resolution") or {},
-        "domain_verification": record.get("domain_verification") or {},
     }
     extra = [
         ("Tables", f"old={','.join(old_t.get('source_table_ids') or old_t.get('table_ids') or []) or '-'} "

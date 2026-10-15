@@ -242,8 +242,52 @@ def main(argv: list[str] | None = None) -> None:
         help=f"Bundled already-extracted DI fixture pair (default: {DEMO_DEFAULT_FIXTURE})",
     )
 
+    bench_p = sub.add_parser(
+        "benchmark-performance",
+        help="Run a controlled synthetic benchmark over a saved Step-3 model (offline)",
+    )
+    bench_p.add_argument(
+        "--artifacts",
+        type=Path,
+        required=True,
+        help="Existing pipeline output directory holding old_document.json (read-only)",
+    )
+    bench_p.add_argument(
+        "--out",
+        type=Path,
+        required=True,
+        help="Fresh output directory for the benchmark bundle",
+    )
+    bench_p.add_argument("--seed", type=int, default=42)
+
+    review_p = sub.add_parser(
+        "review-evidence",
+        help="Build an offline saved-artifact structure/evidence review bundle",
+    )
+    common(review_p)
+    review_p.add_argument(
+        "--artifacts",
+        type=Path,
+        required=True,
+        help="Existing pipeline output directory (read-only saved artifacts)",
+    )
+    review_p.add_argument(
+        "--out",
+        type=Path,
+        required=True,
+        help="Fresh output directory for the review bundle",
+    )
+    review_p.add_argument(
+        "--reference",
+        type=Path,
+        default=None,
+        help="Optional versioned reference annotation JSON",
+    )
+
     args = parser.parse_args(argv)
-    root: Path = args.root.expanduser().resolve()
+    root: Path | None = (
+        args.root.expanduser().resolve() if getattr(args, "root", None) is not None else None
+    )
 
     if args.command == "run":
         run_stages(parse_stage_range(args), root)
@@ -260,6 +304,22 @@ def main(argv: list[str] | None = None) -> None:
         run_gt(root, args.gt.expanduser().resolve())
     elif args.command == "demo":
         run_demo(args.fixture, root)
+    elif args.command == "benchmark-performance":
+        from crr_compare.performance_benchmark import benchmark_performance_command
+
+        benchmark_performance_command(
+            artifacts=args.artifacts,
+            out=args.out,
+            seed=args.seed,
+        )
+    elif args.command == "review-evidence":
+        from crr_compare.evidence_review import review_evidence_command
+
+        review_evidence_command(
+            artifacts=args.artifacts,
+            out=args.out,
+            reference=args.reference,
+        )
 
 
 if __name__ == "__main__":

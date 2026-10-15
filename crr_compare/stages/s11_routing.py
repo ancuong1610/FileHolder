@@ -1,15 +1,14 @@
-"""Deterministic review routing (s11): generic base routing with optional CRR3 enrichment.
+"""Deterministic review routing (s11): generic-only routing.
 
 Auto-converted from 11_review_routing_special_cases_v2_1_selective_llm.ipynb (code cells only).
 
 Generic routing is pure and mode-independent: ``build_generic_routing`` never
-imports authorization and never reads CRR evidence. CRR3 authorization is
-attached only at the orchestration boundary (``main``) as separate
-domain-verification metadata; it never alters routes or the generic review
-list. Missing/unloadable evidence degrades every applicable verification to
-``unsupported``/``evidence_unavailable`` and never aborts the stage.
+imports authorization and never reads CRR evidence. Domain verification is
+retired: the compatibility metadata this stage emits is always
+``not_applicable`` and no verifier is ever invoked. CRR-looking source text is
+ordinary document content and never activates a specialized domain.
 """
-from crr_compare.common import REPO_ROOT, find_project_root, get_page_number, set_page_number
+from crr_compare.common import find_project_root, get_page_number, set_page_number
 from crr_compare.validation import require
 from crr_compare.domain import parse_domain_mode, resolve_domain_profile
 from crr_compare.lang_profile import SUSPENDED_HYPHEN_STOPWORDS
@@ -55,21 +54,8 @@ OUTPUT_DIR = PROJECT_ROOT / "output"
 
 STEP9_PATH = OUTPUT_DIR / "comparison_candidates_with_movement.json"
 STEP10_PATH = OUTPUT_DIR / "table_comparison_result.json"
-OLD_DOC_PATH = OUTPUT_DIR / "old_document.json"
-NEW_DOC_PATH = OUTPUT_DIR / "new_document.json"
 OUTPUT_PATH = OUTPUT_DIR / "review_routing.json"
 
-
-def evidence_dir() -> Path:
-    """Directory holding bundled CRR3 evidence; CRR_EVIDENCE_DIR overrides test_data."""
-    value = os.getenv("CRR_EVIDENCE_DIR", "").strip()
-    if value:
-        return Path(value).expanduser()
-    return REPO_ROOT / "test_data"
-
-
-AUTHORIZATION_INDEX_PATH = evidence_dir() / "crr3_amendments.json"
-CRR3_XHTML_PATH = evidence_dir() / "sources" / "regulation_2024_1623_de.xhtml"
 
 def load_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
@@ -796,119 +782,33 @@ def build_generic_routing(
     }
 
 # ---- cell 5 ----
-def attach_domain_verification(
-    change: dict[str, Any],
-    profile: dict[str, Any],
-    verifier,
-) -> dict[str, Any]:
-    """Return a copy of ``change`` with ``domain_verification`` attached.
-
-    Generic mode: the verifier is never called and the status is
-    ``not_applicable``. crr3 mode: the verifier result is mapped
-    ``authorized`` -> ``verified``; ``ambiguous``/``unsupported``/
-    ``not_applicable`` are preserved; a missing status, a non-dict result,
-    or an exception maps to ``unsupported`` with reason
-    ``evidence_unavailable``. The input is never mutated.
-    """
-    result = dict(change)
-    if (profile or {}).get("mode") != "crr3":
-        result["domain_verification"] = {"status": "not_applicable"}
-        return result
-    try:
-        verification = verifier(change) if verifier is not None else None
-    except Exception:
-        verification = None
-    if not isinstance(verification, dict):
-        result["domain_verification"] = {
-            "status": "unsupported", "reason": "evidence_unavailable",
-        }
-        return result
-    status = verification.get("status")
-    if status == "authorized":
-        status = "verified"
-    elif status not in {"ambiguous", "unsupported", "not_applicable"}:
-        result["domain_verification"] = {
-            "status": "unsupported", "reason": "evidence_unavailable",
-        }
-        return result
-    domain_verification = {"status": status}
-    reason = verification.get("reason")
-    if reason is not None:
-        domain_verification["reason"] = reason
-    elif status == "unsupported":
-        domain_verification["reason"] = "evidence_unavailable"
-    for key, value in verification.items():
-        if key not in ("status", "reason"):
-            domain_verification[key] = value
-    result["domain_verification"] = domain_verification
-    return result
-
-
 def build_domain_verification_records(
     routes: list[dict[str, Any]],
     profile: dict[str, Any],
     verifier,
 ) -> list[dict[str, Any]]:
-    """Return an enriched copy of every generic route with domain_verification.
+    """Return a not-applicable verification record for every route.
 
-    Generic mode returns ``not_applicable`` for every route without calling
-    the verifier. crr3 mode calls the verifier exactly once per route;
-    exceptions and malformed results degrade to ``unsupported`` with reason
-    ``evidence_unavailable``. The generic routes themselves are never altered.
+    Domain verification is retired: the compatibility record always carries
+    ``status == "not_applicable"`` and the ``verifier`` argument is accepted
+    only for signature compatibility; it is never called. Route identity is
+    preserved in each record.
     """
-    return [attach_domain_verification(route, profile, verifier) for route in routes]
+    return [
+        {**route, "domain_verification": {"status": "not_applicable"}}
+        for route in routes
+    ]
 
 
 def build_domain_verification_review(
     records: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Return the subset of verification records that require review.
+    """Return the verification records needing review.
 
-    Only ``ambiguous`` and ``unsupported`` statuses need verification review;
-    ``verified`` and ``not_applicable`` do not. The input ``records`` list is
+    Domain verification is retired, so this is always empty; the input is
     never mutated.
     """
-    return [
-        item
-        for item in records
-        if (item.get("domain_verification") or {}).get("status")
-        in {"ambiguous", "unsupported"}
-    ]
-
-
-def crr3_verifier(movement: dict[str, Any], tables: dict[str, Any], index: dict, official_text: dict[str, str]):
-    """Build the CRR3 verifier: route record -> authorization dict.
-
-    Non-table routes are verified with ``authorize_candidate`` against the
-    pinned evidence; table routes carry the ambiguous mapping (exact CRR3
-    source mapping is not provable for tables); structural evidence routes
-    carry no verifiable legal content (``not_applicable``).
-    """
-    from crr_compare.authorization import authorize_candidate
-
-    non_table = {}
-    for group in NON_TABLE_GROUPS:
-        for candidate in movement.get(group) or []:
-            cid = candidate.get("candidate_id")
-            if cid:
-                non_table[cid] = (group, candidate)
-
-    def verify(route: dict[str, Any]) -> dict[str, Any]:
-        source_kind = route.get("source_kind")
-        if source_kind == "non_table":
-            entry = non_table.get(route.get("candidate_id"))
-            if entry is None:
-                return {"status": "unsupported", "reason": "evidence_unavailable"}
-            group, candidate = entry
-            return authorize_candidate(group, candidate, index, official_text)
-        if source_kind in {"table_match", "table_residual"}:
-            return {
-                "status": "ambiguous",
-                "reason": "table_change_requires_exact_crr3_source_mapping",
-            }
-        return {"status": "not_applicable"}
-
-    return verify
+    return []
 
 
 def main() -> None:
@@ -922,40 +822,18 @@ def main() -> None:
 
     print("Loaded Step 9 + Step 10.")
 
-    # Orchestration boundary: resolve the domain mode and the old/new schema
-    # documents; authorization evidence is loaded lazily only for crr3.
+    # Orchestration boundary: resolve the generic domain profile. No document
+    # content is inspected and no CRR evidence is read.
     mode = parse_domain_mode(os.getenv("CRR_DOMAIN_MODE"))
-    old_doc = load_json(OLD_DOC_PATH) if OLD_DOC_PATH.exists() else {}
-    new_doc = load_json(NEW_DOC_PATH) if NEW_DOC_PATH.exists() else {}
-    profile = resolve_domain_profile(mode, old_doc, new_doc)
+    profile = resolve_domain_profile(mode)
 
     generic = build_generic_routing(movement, tables)
     routes = generic["routes"]
 
-    # Resolve the verifier once, then produce exactly one verification record
-    # per generic route. Generic mode uses ``None`` and marks every route
-    # ``not_applicable`` without calling a verifier.
-    verifier = None
-    evidence_loaded = None
-    evidence_source = None
-    if profile.get("mode") == "crr3":
-        from crr_compare.authorization import load_index, official_text_from_xhtml
-
-        evidence_loaded = True
-        evidence_source = None
-        try:
-            index = load_index(AUTHORIZATION_INDEX_PATH)
-            official_text = official_text_from_xhtml(CRR3_XHTML_PATH)
-            evidence_source = index.get("source")
-            verifier = crr3_verifier(movement, tables, index, official_text)
-        except Exception:
-            # Evidence degrades, never blocks: every applicable verification
-            # becomes unsupported/evidence_unavailable.
-            evidence_loaded = False
-            verifier = lambda change: {"status": "unsupported", "reason": "evidence_unavailable"}  # noqa: E731
-
+    # Exactly one compatibility verification record per route; verification is
+    # retired, so every record is ``not_applicable`` and no verifier runs.
     domain_verification_records = build_domain_verification_records(
-        routes, profile, verifier
+        routes, profile, None
     )
     domain_verification_review = build_domain_verification_review(
         domain_verification_records
@@ -967,13 +845,10 @@ def main() -> None:
             (record.get("domain_verification") or {}).get("status", "not_applicable")
         ] += 1
     domain_verification = {
-        "enabled": profile.get("mode") == "crr3",
+        "enabled": False,
         "records": domain_verification_records,
         "status_counts": dict(status_counts),
     }
-    if profile.get("mode") == "crr3":
-        domain_verification["evidence_loaded"] = evidence_loaded
-        domain_verification["evidence_source"] = evidence_source
 
     route_counts = Counter(item["route"] for item in routes)
     case_counts = Counter(item["case_type"] for item in routes)

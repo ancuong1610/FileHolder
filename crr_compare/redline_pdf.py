@@ -245,6 +245,29 @@ def render_pdf(comparison: dict[str, Any], output_path: Path) -> Path:
         if pages:
             header += f" | {_escape(pages)}"
         story.append(_para(header, _ID_STYLE))
+        # A one-sided table (deleted/added) whose cell content is genuinely
+        # missing is a legacy artifact: say so instead of silently showing only
+        # metadata. A table that truly has zero cells is tagged ``available``
+        # and must not be flagged.
+        one_sided = ctype in {"TABLE_DELETED", "TABLE_ADDED"}
+        table_dimensions = (
+            (old_meta.get("row_count") or 0) * (old_meta.get("column_count") or 0)
+            + (new_meta.get("row_count") or 0) * (new_meta.get("column_count") or 0)
+        )
+        content_unavailable = (
+            one_sided
+            and table_dimensions > 0
+            and (
+                table.get("cell_content_status") == "unavailable"
+                or "cell_changes" not in table
+            )
+        )
+        if content_unavailable:
+            story.append(_para(
+                "Table cell content unavailable (legacy artifact); "
+                "inspect source table.",
+                _STYLE,
+            ))
         for cell in table.get("cell_changes", []):
             old_cell_meta = cell.get("old") or {}
             new_cell_meta = cell.get("new") or {}

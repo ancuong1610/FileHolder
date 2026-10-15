@@ -116,6 +116,36 @@ class TextValueRegressionTest(unittest.TestCase):
         self.assertEqual(manifest["table_changes"], len(self.canonical["table_changes"]))
         self.assertEqual(len(self.artifacts["csv_rows"]), len(self.canonical["review_queue"]))
 
+    def test_stage15_writes_both_pdfs_manifest_and_audit(self):
+        import re
+
+        from crr_compare.service import ARTIFACT_NAMES
+
+        # run_fixture cleans its temporary root after loading the artifacts.
+        # Inspect values captured from the actual files before cleanup.
+        self.assertEqual(self.artifacts["redline_pdf_signature"], b"%PDF-")
+        self.assertEqual(self.artifacts["inline_pdf_signature"], b"%PDF-")
+
+        manifest = self.artifacts["manifest"]
+        self.assertEqual(manifest["redline_pdf"], "comparison_redline.pdf")
+        self.assertEqual(manifest["inline_pdf"], "comparison_inline.pdf")
+        self.assertEqual(manifest["inline_pdf_audit"], "inline_pdf_audit.json")
+        self.assertIn("comparison_inline.pdf", ARTIFACT_NAMES)
+        self.assertIn("inline_pdf_audit.json", ARTIFACT_NAMES)
+
+        audit = self.artifacts["inline_audit"]
+        self.assertEqual(audit["totals"]["changes"], len(self.canonical["changes"]))
+        self.assertEqual(audit["totals"]["review_items"], len(self.canonical["review_queue"]))
+
+        # The inline PDF is a real one-flow render: it carries change ids and the
+        # changed fragments of a known wording case (merged flow, so the full old
+        # literal is intentionally not contiguous).
+        inline_text = re.sub(r"\s+", " ", self.artifacts["inline_text"])
+        self.assertIn("Inline Comparison Redline", inline_text)
+        self.assertIn("CHANGE-", inline_text)
+        self.assertIn("30", inline_text)
+        self.assertIn("60", inline_text)
+
 
 class NumericValueSuppressionDefectTest(unittest.TestCase):
     """Regression for the Task 4 numeric/reference semantic-suppression defect.
@@ -524,6 +554,39 @@ class TableValueRegressionTest(unittest.TestCase):
         self.assertEqual(
             len(self.artifacts["csv_rows"]), len(self.canonical["review_queue"])
         )
+
+    def test_whole_added_deleted_tables_reach_pdf_with_cell_provenance(self):
+        pdf_text = " ".join(self.redline.split())
+        for change_type, side, opposite, count, literals in (
+            ("TABLE_DELETED", "old", "new", 6, ("Withdrawn backup", "41", "42")),
+            ("TABLE_ADDED", "new", "old", 9, ("Flood exposure", "17", "18")),
+        ):
+            with self.subTest(change_type=change_type):
+                changes = [
+                    item for item in self.canonical["table_changes"]
+                    if item["change_type"] == change_type
+                ]
+                self.assertEqual(len(changes), 1)
+                change = changes[0]
+                self.assertEqual(change["cell_content_status"], "available")
+                self.assertEqual(len(change["cell_changes"]), count)
+                texts = []
+                ids = []
+                for cell in change["cell_changes"]:
+                    self.assertIsNone(cell[opposite])
+                    source = cell[side]
+                    ids.append(source["cell_id"])
+                    self.assertIn(
+                        source["source_table_id"], change[side]["source_table_ids"]
+                    )
+                    self.assertIsNotNone(source["source_row_index"])
+                    text = " ".join(source["text"].split())
+                    texts.append(text)
+                    self.assertIn(f"{side} cell: {text}", pdf_text)
+                self.assertEqual(len(set(ids)), count)
+                for literal in literals:
+                    self.assertIn(literal, texts)
+        self.assertNotIn("Table cell content unavailable", self.redline)
 
 
 if __name__ == "__main__":

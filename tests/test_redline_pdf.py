@@ -435,5 +435,276 @@ class PdfClarityTest(unittest.TestCase):
         self.assertEqual(comparison, snapshot)
 
 
+def _numeric_change(change_id, old, new, old_frag, new_frag):
+    """One MODIFIED change whose only difference is ``old_frag`` -> ``new_frag``."""
+    return {
+        "change_id": change_id,
+        "change_type": "MODIFIED",
+        "old": {"text": old},
+        "new": {"text": new},
+        "token_diff": {"comparison_token_diff": {"changes": [
+            _replace_op(old, new, old_frag, new_frag),
+        ]}},
+        "resolution": {"status": "accepted", "needs_review": False},
+    }
+
+
+def _pdf_joined_text(comparison):
+    """Render through the real engine and return whitespace-normalized PDF text."""
+    with TemporaryDirectory() as d:
+        pdf = render_pdf(comparison, Path(d) / "redline.pdf")
+        with fitz.open(pdf) as doc:
+            extracted = "".join(page.get_text() for page in doc)
+    return " ".join(extracted.split())
+
+
+class NumericFidelityTest(unittest.TestCase):
+    """Numbers and Unicode math signs must survive the rendered PDF intact.
+
+    These are fidelity controls over the real renderer, not markup helpers: the
+    values are read back out of the produced PDF with PyMuPDF and checked in
+    their old/new orientation. ReportLab maps U+2212/U+2264/U+2265 through the
+    base-14 Symbol font; none of this may be silently dropped or substituted.
+    """
+
+    def _assert_orientations(self, comparison, expected):
+        joined = _pdf_joined_text(comparison)
+        for old, new in expected:
+            self.assertIn(f"old: {old}", joined)
+            self.assertIn(f"new: {new}", joined)
+        return joined
+
+    def test_ascii_numeric_values_preserved(self):
+        comparison = {"changes": [
+            _numeric_change("C-21", "Der Wert betraegt 21 EUR.", "Der Wert betraegt 99 EUR.", "21", "99"),
+            _numeric_change("C-0", "Anteil 0 Punkte.", "Anteil 1 Punkte.", "0", "1"),
+            _numeric_change("C-neg", "Temperatur -12.5 Grad.", "Temperatur -13.5 Grad.", "-12.5", "-13.5"),
+            _numeric_change("C-plus", "Zuwachs 12 Prozent.", "Zuwachs 13 Prozent.", "12", "13"),
+        ], "table_changes": [], "review_queue": []}
+        joined = self._assert_orientations(comparison, [
+            ("Der Wert betraegt 21 EUR.", "Der Wert betraegt 99 EUR."),
+            ("Anteil 0 Punkte.", "Anteil 1 Punkte."),
+            ("Temperatur -12.5 Grad.", "Temperatur -13.5 Grad."),
+            ("Zuwachs 12 Prozent.", "Zuwachs 13 Prozent."),
+        ])
+        # The changed values must be present, not merely the sentence shells.
+        for token in ("21", "99", "0", "1", "-12.5", "-13.5", "12", "13"):
+            self.assertIn(token, joined)
+
+    def test_decimal_comma_thousands_and_percent_preserved(self):
+        comparison = {"changes": [
+            _numeric_change("C-comma", "Quote 50,5 Basispunkte.", "Quote 50,6 Basispunkte.", "50,5", "50,6"),
+            _numeric_change("C-thousands", "Betrag 1.234,56 EUR.", "Betrag 1.234,57 EUR.", "1.234,56", "1.234,57"),
+            _numeric_change("C-percent", "Zins 12,5 % p.a.", "Zins 13,5 % p.a.", "12,5 %", "13,5 %"),
+        ], "table_changes": [], "review_queue": []}
+        joined = self._assert_orientations(comparison, [
+            ("Quote 50,5 Basispunkte.", "Quote 50,6 Basispunkte."),
+            ("Betrag 1.234,56 EUR.", "Betrag 1.234,57 EUR."),
+            ("Zins 12,5 % p.a.", "Zins 13,5 % p.a."),
+        ])
+        for token in ("50,5", "50,6", "1.234,56", "1.234,57", "12,5 %", "13,5 %"):
+            self.assertIn(token, joined)
+
+    def test_unicode_minus_and_relational_operators_preserved(self):
+        """U+2212 minus, U+2264 <=, U+2265 >= must keep their exact code points."""
+        comparison = {"changes": [
+            _numeric_change("C-min", "Saldo \u221221 Mio.", "Saldo \u221299 Mio.",
+                            "\u221221", "\u221299"),
+            _numeric_change("C-le", "Wert \u226421 Tage.", "Wert \u226522 Tage.",
+                            "\u226421", "\u226522"),
+            _numeric_change("C-ge", "Grenze \u226522 Einheiten.", "Grenze \u226421 Einheiten.",
+                            "\u226522", "\u226421"),
+        ], "table_changes": [], "review_queue": []}
+        joined = _pdf_joined_text(comparison)
+        self.assertIn("old: Saldo \u221221 Mio.", joined)
+        self.assertIn("new: Saldo \u221299 Mio.", joined)
+        self.assertIn("old: Wert \u226421 Tage.", joined)
+        self.assertIn("new: Wert \u226522 Tage.", joined)
+        self.assertIn("old: Grenze \u226522 Einheiten.", joined)
+        self.assertIn("new: Grenze \u226421 Einheiten.", joined)
+        # Exact code points only: no ASCII "-"/"<="/">=" or U+FFFD substitution.
+        for exact in ("\u221221", "\u221299", "\u226421", "\u226522"):
+            self.assertIn(exact, joined)
+        self.assertNotIn("\ufffd", joined)
+        self.assertNotIn("-21 Mio.", joined)
+        self.assertNotIn("<=21", joined)
+        self.assertNotIn(">=22", joined)
+
+    def test_long_wrapped_table_cell_keeps_values(self):
+        old_cell = (
+            "Die massgebliche Obergrenze fuer das Gesamtengagement betraegt "
+            "1.234,56 Millionen Euro und darf den Schwellenwert von \u226421 "
+            "Basispunkten sowie den Saldo von \u221212,50 Prozent keinesfalls "
+            "ueberschreiten, sofern die zustaendige Stelle nichts anderes anordnet."
+        )
+        new_cell = (
+            "Die massgebliche Obergrenze fuer das Gesamtengagement betraegt "
+            "9.876,54 Millionen Euro und darf den Schwellenwert von \u226522 "
+            "Basispunkten sowie den Saldo von \u221299,50 Prozent keinesfalls "
+            "ueberschreiten, sofern die zustaendige Stelle nichts anderes anordnet."
+        )
+        table = {
+            "table_change_id": "TABLE-CHANGE-00042",
+            "change_type": "TABLE_MODIFIED",
+            "classification": "MODIFIED",
+            "old": {"row_count": 2, "column_count": 2, "source_pages": [3]},
+            "new": {"row_count": 2, "column_count": 2, "source_pages": [4]},
+            "cell_changes": [{
+                "classification": "cell_change",
+                "old": {"cell_id": "OLD-T1-C1", "text": old_cell, "primary_page": 3},
+                "new": {"cell_id": "NEW-T1-C1", "text": new_cell, "primary_page": 4},
+                "token_diff": {"source_token_diff": {"changes": [
+                    _replace_op(old_cell, new_cell, "1.234,56", "9.876,54"),
+                    _replace_op(old_cell, new_cell, "\u226421", "\u226522"),
+                    _replace_op(old_cell, new_cell, "\u221212,50", "\u221299,50"),
+                ]}},
+            }],
+        }
+        comparison = {"changes": [], "table_changes": [table], "review_queue": []}
+        joined = _pdf_joined_text(comparison)
+        self.assertIn(f"old cell: {old_cell}", joined)
+        self.assertIn(f"new cell: {new_cell}", joined)
+        for token in ("1.234,56", "9.876,54", "\u226421", "\u226522",
+                      "\u221212,50", "\u221299,50"):
+            self.assertIn(token, joined)
+        self.assertIn("Content differences: 3", joined)
+
+
+def _one_sided_deleted_table(*, status, cell_changes=None, include_cell_changes=True):
+    table = {
+        "table_change_id": "TABLE-CHANGE-00042",
+        "change_type": "TABLE_DELETED",
+        "old": {
+            "logical_table_id": "OLD-LT0009",
+            "row_count": 2,
+            "column_count": 2,
+            "source_pages": [8],
+        },
+        "new": None,
+    }
+    if status is not None:
+        table["cell_content_status"] = status
+    if include_cell_changes:
+        table["cell_changes"] = cell_changes if cell_changes is not None else [
+            {
+                "classification": "DELETED",
+                "change_id": "TABLE-DELETED-OLD-LT0009-R00001-C001",
+                "old": {
+                    "cell_id": "OLD-T0009-C0004",
+                    "text": "41",
+                    "source_table_id": "OLD-T0009",
+                    "primary_page": 8,
+                },
+                "new": None,
+            },
+        ]
+    return table
+
+
+def _one_sided_added_table(*, status, include_cell_changes=True):
+    table = {
+        "table_change_id": "TABLE-CHANGE-00043",
+        "change_type": "TABLE_ADDED",
+        "old": None,
+        "new": {
+            "logical_table_id": "NEW-LT0009",
+            "row_count": 2,
+            "column_count": 2,
+            "source_pages": [8],
+        },
+    }
+    if status is not None:
+        table["cell_content_status"] = status
+    if include_cell_changes:
+        table["cell_changes"] = [
+            {
+                "classification": "ADDED",
+                "change_id": "TABLE-ADDED-NEW-LT0009-R00000-C001",
+                "old": None,
+                "new": {
+                    "cell_id": "NEW-T0010-C0002",
+                    "text": "17",
+                    "source_table_id": "NEW-T0010",
+                    "primary_page": 8,
+                },
+            },
+        ]
+    return table
+
+
+class OneSidedTableContentTest(unittest.TestCase):
+    """A deleted/added table shows its real cell text, not metadata only."""
+
+    def test_deleted_table_renders_cell_text_and_source_id(self):
+        comparison = {
+            "changes": [],
+            "table_changes": [_one_sided_deleted_table(status="available")],
+            "review_queue": [],
+        }
+        joined = _pdf_joined_text(comparison)
+        self.assertIn("old cell: 41", joined)
+        self.assertIn("OLD-T0009-C0004", joined)
+        self.assertNotIn("Table cell content unavailable", joined)
+
+    def test_added_table_renders_cell_text_and_source_id(self):
+        comparison = {
+            "changes": [],
+            "table_changes": [_one_sided_added_table(status="available")],
+            "review_queue": [],
+        }
+        joined = _pdf_joined_text(comparison)
+        self.assertIn("new cell: 17", joined)
+        self.assertIn("NEW-T0010-C0002", joined)
+        self.assertNotIn("Table cell content unavailable", joined)
+
+    def test_legacy_one_sided_table_without_cells_warns(self):
+        """A legacy artifact with no cell content is named, not silently empty."""
+        comparison = {
+            "changes": [],
+            "table_changes": [
+                _one_sided_deleted_table(status=None, include_cell_changes=False),
+                _one_sided_added_table(status=None, include_cell_changes=False),
+            ],
+            "review_queue": [],
+        }
+        joined = _pdf_joined_text(comparison)
+        self.assertIn(
+            "Table cell content unavailable (legacy artifact); inspect source table.",
+            joined,
+        )
+
+    def test_explicit_unavailable_status_warns_even_with_no_cells(self):
+        comparison = {
+            "changes": [],
+            "table_changes": [
+                _one_sided_deleted_table(status="unavailable", include_cell_changes=False),
+            ],
+            "review_queue": [],
+        }
+        joined = _pdf_joined_text(comparison)
+        self.assertIn(
+            "Table cell content unavailable (legacy artifact); inspect source table.",
+            joined,
+        )
+
+    def test_zero_cell_one_sided_table_tagged_available_does_not_warn(self):
+        table = {
+            "table_change_id": "TABLE-CHANGE-00044",
+            "change_type": "TABLE_DELETED",
+            "old": {
+                "logical_table_id": "OLD-LT0009",
+                "row_count": 0,
+                "column_count": 0,
+                "source_pages": [8],
+            },
+            "new": None,
+            "cell_changes": [],
+            "cell_content_status": "available",
+        }
+        comparison = {"changes": [], "table_changes": [table], "review_queue": []}
+        joined = _pdf_joined_text(comparison)
+        self.assertNotIn("Table cell content unavailable", joined)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,10 +1,10 @@
-"""s14 - canonical generic comparison result with optional crr3 domain metadata.
+"""s14 - canonical generic comparison result (generic only).
 
 Auto-converted from 14_build_final_comparison_result_v2.ipynb (code cells only),
 generalized: generic acceptance is domain-agnostic and byte-for-byte
-independent of mode. crr3 verification is additive metadata attached from the
-s11 ``domain_verification.records``; it never alters a generic change,
-resolution, or review entry.
+independent of any domain metadata. CRR verification is retired; no
+verification records are joined or attached, and the compatibility domain
+review list is always empty.
 
 s13 LLM decisions are advisory recommendations preserved for traceability
 only; deterministic route rules decide every resolution. No LLM outcome can
@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from crr_compare.common import REPO_ROOT, find_project_root, output_dir
+from crr_compare.domain import resolve_domain_profile
 from crr_compare.evaluate import build_outcome_migration
 from crr_compare.route_identity import structural_route_identity
 from crr_compare.validation import require
@@ -337,26 +338,6 @@ def _validate_consumed_routed(
         )
 
 
-def _domain_records_by_route(
-    routing: dict[str, Any], routes: list[dict[str, Any]]
-) -> dict[str, Any]:
-    """One domain-verification record per route, keyed by route_id."""
-    records = (routing.get("domain_verification") or {}).get("records") or []
-    record_ids = [record.get("route_id") for record in records]
-    if len(record_ids) != len(set(record_ids)):
-        raise ValueError("domain_verification.records contain duplicate route_ids.")
-    route_ids = {route.get("route_id") for route in routes}
-    record_id_set = set(record_ids)
-    if record_id_set != route_ids:
-        missing = sorted(route_ids - record_id_set)
-        extra = sorted(record_id_set - route_ids)
-        raise ValueError(
-            "domain_verification.records must cover every route exactly once; "
-            f"missing={missing[:5]} extra={extra[:5]}"
-        )
-    return {record.get("route_id"): record for record in records}
-
-
 # ---------------------------------------------------------------------------
 # Canonical build
 # ---------------------------------------------------------------------------
@@ -515,13 +496,24 @@ def _build_changes(
         for table in tables.get(group) or []:
             cid = table["logical_table_id"]
             resolution = _resolve(cid, routes_by_candidate, decisions_by_route)
+            # One-sided table cell content is carried exactly once in
+            # ``cell_changes``; the old/new metadata copy excludes the nested
+            # per-cell detail (and its status) so it is never duplicated.
+            metadata = {
+                key: value
+                for key, value in table.items()
+                if key not in ("cell_changes", "cell_content_status")
+            }
             record = {
                 "table_change_id": f"TABLE-CHANGE-{len(table_changes)+1:05d}",
                 "source_table_match_id": cid,
                 "change_type": ctype,
-                "old": table if group.startswith("deleted") else None,
-                "new": table if group.startswith("added") else None,
-                "cell_changes": [],
+                "old": metadata if group.startswith("deleted") else None,
+                "new": metadata if group.startswith("added") else None,
+                "cell_changes": table.get("cell_changes") or [],
+                "review_reasons": table.get("review_reasons") or [],
+                "cell_content_status":
+                    table.get("cell_content_status") or "unavailable",
                 "resolution": resolution,
             }
 
@@ -585,38 +577,20 @@ def _build_changes(
     return changes, table_changes, review_queue, non_semantic_events, unresolved_table_reviews
 
 
-def _attach_domain_verification(
-    record: dict[str, Any],
-    routes_by_candidate: dict[str, Any],
-    records_by_route_id: dict[str, Any],
-) -> dict[str, Any]:
-    """Attach the route's s11 domain-verification status; never alters resolution."""
-    cid = record.get("source_candidate_id") or record.get("source_table_match_id")
-    route = routes_by_candidate.get(cid)
-    if route is None:
-        return {**record, "domain_verification": {"status": "not_applicable"}}
-    record_for_route = records_by_route_id.get(route["route_id"])
-    verification = (record_for_route or {}).get("domain_verification") or {
-        "status": "not_applicable"
-    }
-    return {**record, "domain_verification": dict(verification)}
-
-
 def generic_projection(
     result: dict[str, Any], *, _in_packet_decision: bool = False
 ) -> dict[str, Any]:
     """Strip all additive domain metadata, preserving generic content.
 
-    Removes domain profile, per-change verification, the separate domain
+    Removes the domain profile, per-change verification, the separate domain
     review list, domain status counts, the outcome-migration evidence, the
     embedded projection itself, and any residual authorization key.
 
     Also strips the mode-derived ``input_hash`` that s12 computes over the
-    bounded packet envelope, because crr3 envelopes include additive
-    ``domain_verification`` evidence.  The full canonical result keeps this
-    hash inside ``resolution.packet_decision``; only the generic projection
-    omits it.  Unrelated ``input_hash`` keys elsewhere are generic content
-    and survive, mirroring the treatment of nested ``authorization``.
+    bounded packet envelope.  The full canonical result keeps this hash inside
+    ``resolution.packet_decision``; only the generic projection omits it.
+    Unrelated ``input_hash`` keys elsewhere are generic content and survive,
+    mirroring the treatment of a nested ``authorization`` source key.
     """
     if isinstance(result, dict):
         projected: dict[str, Any] = {}
@@ -644,7 +618,7 @@ def build_comparison_result(
     decisions: dict[str, Any] | None = None,
     baseline: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Canonical generic result; crr3 metadata is additive and never gates.
+    """Canonical generic result; domain verification is retired and never gates.
 
     ``decisions`` is the s13 output (or {} when the LLM stage did not run);
     ``baseline`` carries the frozen Phase 0 metrics for the outcome-migration
@@ -667,7 +641,6 @@ def build_comparison_result(
         for decision in (decisions.get("decisions") or [])
         if decision.get("route_id")
     }
-    records_by_route_id = _domain_records_by_route(routing, routes)
     _validate_consumed_routed(movement, tables, routes_by_candidate)
 
     # Public resolution_for() reads these indexes.
@@ -678,23 +651,13 @@ def build_comparison_result(
         _build_changes(movement, tables, routes_by_candidate, decisions_by_route)
     )
 
-    changes = [
-        _attach_domain_verification(change, routes_by_candidate, records_by_route_id)
-        for change in changes
-    ]
-    table_changes = [
-        _attach_domain_verification(change, routes_by_candidate, records_by_route_id)
-        for change in table_changes
-    ]
-
     canonical_items = changes + table_changes
     resolution_status_counts = dict(
         Counter(item["resolution"]["status"] for item in canonical_items)
     )
-    domain_status_counts = dict(Counter(
-        (item.get("domain_verification") or {}).get("status", "not_applicable")
-        for item in canonical_items
-    ))
+    # Verification is retired; every canonical item is implicitly
+    # ``not_applicable`` and no verification records are joined or attached.
+    domain_status_counts = {"not_applicable": len(canonical_items)} if canonical_items else {}
 
     migration = build_outcome_migration(
         baseline or {},
@@ -706,29 +669,9 @@ def build_comparison_result(
         },
     )
 
-    # Map domain-verification review entries to the canonical IDs of retained
-    # changes/table changes so the list is actionable; keep it separate from the
-    # generic review queue.  Only ambiguous/unsupported statuses are relevant,
-    # and routes that produced only non-semantic events have no canonical item.
-    route_to_canonical: dict[str, str] = {}
-    for change in changes:
-        route = routes_by_candidate.get(change["source_candidate_id"])
-        if route:
-            route_to_canonical[route["route_id"]] = change["change_id"]
-    for table_change in table_changes:
-        route = routes_by_candidate.get(table_change["source_table_match_id"])
-        if route:
-            route_to_canonical[route["route_id"]] = table_change["table_change_id"]
-
+    # Domain verification is retired: the compatibility review list is always
+    # empty, so legacy routing enrichment can never surface as live review.
     domain_verification_review: list[dict[str, Any]] = []
-    for entry in (routing.get("domain_verification_review") or []):
-        status = (entry.get("domain_verification") or {}).get("status")
-        if status not in {"ambiguous", "unsupported"}:
-            continue
-        canonical_id = route_to_canonical.get(entry.get("route_id"))
-        if canonical_id is None:
-            continue
-        domain_verification_review.append({**entry, "canonical_id": canonical_id})
 
     final = {
         "schema_version": "3.0.0",
@@ -756,7 +699,7 @@ def build_comparison_result(
         "review_queue": review_queue,
         "non_semantic_events": non_semantic_events,
         "unresolved_table_reviews": unresolved_table_reviews,
-        "domain_profile": routing.get("domain_profile"),
+        "domain_profile": resolve_domain_profile(None),
         "domain_verification_review": domain_verification_review,
         "outcome_migration": migration,
     }

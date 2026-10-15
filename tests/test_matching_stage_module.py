@@ -24,10 +24,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.synthetic_stage_support import seed_internal_policy_stages
-
 ROOT = Path(__file__).resolve().parents[1]
 S07 = ROOT / "crr_compare" / "stages" / "s07_modified_matching.py"
+SAMPLE_EXACT = ROOT / "output_sample" / "exact_element_matches.json"
+_SAMPLE_FILES = ("exact_element_matches.json",)
+_MISSING_SAMPLES = [name for name in _SAMPLE_FILES if not (ROOT / "output_sample" / name).is_file()]
 PYTHON = sys.executable
 
 _IMPORT_PROBE = """
@@ -78,12 +79,18 @@ class ImportSafetyTest(unittest.TestCase):
             self.assertFalse(workspace.exists(), "import created the workspace root")
 
 
+@unittest.skipUnless(
+    not _MISSING_SAMPLES,
+    "private output_sample fixtures are unavailable in this checkout: "
+    + ", ".join(_MISSING_SAMPLES),
+)
 class MainScriptTest(unittest.TestCase):
     def test_main_writes_validated_result_and_reports(self):
         with tempfile.TemporaryDirectory(prefix="crr-s07-main-") as directory:
             root = Path(directory)
-            seed_internal_policy_stages(root, 7)
             output = root / "output"
+            output.mkdir()
+            shutil.copyfile(SAMPLE_EXACT, output / "exact_element_matches.json")
             script = f"import runpy\nrunpy.run_path({str(S07)!r}, run_name='__main__')\n"
             completed = subprocess.run(
                 [PYTHON, "-c", script],

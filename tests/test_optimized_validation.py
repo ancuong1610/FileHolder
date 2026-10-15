@@ -3,23 +3,34 @@ import copy
 import os
 import runpy
 import subprocess
-import tempfile
+import sys
 import unittest
 from pathlib import Path
 
-from tests.synthetic_stage_support import seed_internal_policy_stages
-
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON = Path(__import__("sys").executable)
+PYTHON = Path(sys.executable)
+
+# Every test here replays the private ``output_sample`` seeds, so the module is
+# optional in a public checkout that cannot ship those fixtures.
+_SAMPLE_FILES = (
+    "old_di_raw.json",
+    "old_extraction_validation.json",
+    "exact_element_matches.json",
+)
+_MISSING_SAMPLES = [name for name in _SAMPLE_FILES if not (ROOT / "output_sample" / name).is_file()]
 
 
+@unittest.skipUnless(
+    not _MISSING_SAMPLES,
+    "private output_sample fixtures are unavailable in this checkout: "
+    + ", ".join(_MISSING_SAMPLES),
+)
 class OptimizedStageValidationTest(unittest.TestCase):
-    def _run(self, stage: str, mutation: str, optimized: bool, seed_root: Path) -> subprocess.CompletedProcess[str]:
+    def _run(self, stage: str, mutation: str, optimized: bool) -> subprocess.CompletedProcess[str]:
         script = f"""
 import copy, os, runpy
 from pathlib import Path
 root = Path({str(ROOT)!r})
-seed = Path({str(seed_root)!r})
 os.chdir(root)
 namespace = runpy.run_path(str(root / 'crr_compare' / 'stages' / {('s03_internal_schema.py' if stage == 's03' else 's07_modified_matching.py')!r}))
 {mutation}
@@ -39,8 +50,8 @@ namespace = runpy.run_path(str(root / 'crr_compare' / 'stages' / {('s03_internal
         # plus its Step-2 validation report, then proves the validator still
         # rejects a duplicated element_id under both normal and -O modes.
         mutation = """
-raw = namespace['load_json'](seed / 'output' / 'old_di_raw.json')
-report = namespace['load_json'](seed / 'output' / 'old_extraction_validation.json')
+raw = namespace['load_json'](root / 'output_sample' / 'old_di_raw.json')
+report = namespace['load_json'](root / 'output_sample' / 'old_extraction_validation.json')
 model = namespace['build_internal_document'](raw, report, document_id='DOC-OLD', prefix='OLD')
 bad = copy.deepcopy(model)
 bad['document']['elements'][1]['element_id'] = bad['document']['elements'][0]['element_id']
@@ -50,11 +61,8 @@ except (AssertionError, ValueError):
     raise SystemExit(0)
 raise SystemExit('s03 accepted duplicate element_id')
 """
-        with tempfile.TemporaryDirectory(prefix="crr-s03-validation-") as directory:
-            seed = Path(directory)
-            seed_internal_policy_stages(seed, 2)
-            normal = self._run("s03", mutation, False, seed)
-            optimized = self._run("s03", mutation, True, seed)
+        normal = self._run("s03", mutation, False)
+        optimized = self._run("s03", mutation, True)
         self.assertEqual(normal.returncode, 0, normal.stderr)
         self.assertEqual(optimized.returncode, 0, optimized.stderr)
 
@@ -63,7 +71,7 @@ raise SystemExit('s03 accepted duplicate element_id')
         # without running the stage. Rebuild a valid result from the seeded
         # Step-6 input, duplicate one match, and prove validation still rejects it.
         mutation = """
-exact = namespace['load_json'](seed / 'output' / 'exact_element_matches.json')
+exact = namespace['load_json'](root / 'output_sample' / 'exact_element_matches.json')
 result = namespace['build_result'](exact)
 bad = copy.deepcopy(result)
 bad['modified_matches'].append(copy.deepcopy(bad['modified_matches'][0]))
@@ -73,11 +81,8 @@ except (AssertionError, ValueError):
     raise SystemExit(0)
 raise SystemExit('s07 accepted duplicate match')
 """
-        with tempfile.TemporaryDirectory(prefix="crr-s07-validation-") as directory:
-            seed = Path(directory)
-            seed_internal_policy_stages(seed, 7)
-            normal = self._run("s07", mutation, False, seed)
-            optimized = self._run("s07", mutation, True, seed)
+        normal = self._run("s07", mutation, False)
+        optimized = self._run("s07", mutation, True)
         self.assertEqual(normal.returncode, 0, normal.stderr)
         self.assertEqual(optimized.returncode, 0, optimized.stderr)
 

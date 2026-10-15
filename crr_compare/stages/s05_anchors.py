@@ -24,6 +24,12 @@ environment. File orchestration lives in :func:`main`, which the
 ``__name__ == "__main__"`` guard runs for the CLI stage runner.
 """
 from crr_compare.common import find_project_root, get_page_number, set_page_number
+from crr_compare.derived_structure import classify_derived_furniture
+from crr_compare.structure import (
+    STRUCTURE_EVIDENCE_VERSION,
+    build_structure_evidence,
+    validate_structure_evidence,
+)
 from crr_compare.validation import require
 
 # ---- imports and configuration constants ----
@@ -315,6 +321,7 @@ def has_valid_geometry(element: dict[str, Any]) -> bool:
 def anchor_evidence(
     element: dict[str, Any],
     marker_ids: set[str],
+    furniture_ids: set[str] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     if not element.get("comparison_eligible"):
         return None, "comparison_ineligible_or_layout_element"
@@ -327,6 +334,12 @@ def anchor_evidence(
 
     if str(element.get("element_id")) in marker_ids:
         return None, "marker_like_heading_needs_review"
+
+    if furniture_ids and str(element.get("element_id")) in furniture_ids:
+        # Recurring page furniture derived from combined evidence is not a
+        # provisional anchor even when a single DI role labels it a heading.
+        # Raw roles, text and eligibility are untouched.
+        return None, "derived_recurring_furniture_needs_review"
 
     text = str(
         element.get("normalized_text")
@@ -434,6 +447,12 @@ def reconstruct_provisional_context(
         detect_repeated_margin_marker_cohort(document)
     )
 
+    # Classify recurring page furniture exactly once from combined evidence
+    # (recurrence + supporting layout-role cohort + page-edge geometry) and
+    # reuse it for both anchor rejection and the additive structure evidence.
+    derived_furniture = classify_derived_furniture(document)
+    furniture_ids = set(derived_furniture["by_element"])
+
     anchors = []
     rejected = Counter()
 
@@ -442,6 +461,7 @@ def reconstruct_provisional_context(
         evidence, rejected_reason = anchor_evidence(
             element,
             marker_ids,
+            furniture_ids,
         )
 
         if evidence is None:
@@ -562,6 +582,24 @@ def reconstruct_provisional_context(
         "margin_marker_profile": marker_profile,
     }
 
+    # Additive, versioned TOC evidence layer. It never mutates raw evidence,
+    # eligibility, order or table accounting, and it does not create an
+    # authoritative hierarchy; the strategy above is preserved unchanged.
+    structure_evidence = build_structure_evidence(
+        document,
+        derived_furniture=derived_furniture,
+    )
+    document["structure_evidence"] = structure_evidence
+    statistics["structure_evidence_version"] = STRUCTURE_EVIDENCE_VERSION
+    statistics["structure_evidence_toc_entries"] = structure_evidence["toc"]["entry_count"]
+    statistics["structure_evidence_linked_entries"] = structure_evidence["toc"]["linked_count"]
+    statistics["structure_evidence_sections"] = len(structure_evidence["sections"])
+    processing["section_reconstruction"]["structure_evidence_version"] = (
+        STRUCTURE_EVIDENCE_VERSION
+    )
+    processing["section_reconstruction"]["structure_evidence_additive"] = True
+    processing["section_reconstruction"]["structure_evidence_authoritative"] = False
+
     return result
 
 
@@ -674,6 +712,13 @@ def validate_structured_model(
                     f"s05: element {element.get('element_id')} references unknown "
                     f"anchor_id {anchor_id!r}"
                 )
+
+    structure_evidence = result_document.get("structure_evidence")
+    if not isinstance(structure_evidence, dict):
+        raise ValueError("s05: structure_evidence layer is missing")
+    if structure_evidence.get("version") != STRUCTURE_EVIDENCE_VERSION:
+        raise ValueError("s05: unexpected structure evidence version")
+    validate_structure_evidence(result_document, structure_evidence)
 
     print(
         f"Passed: {len(after):,} elements, "

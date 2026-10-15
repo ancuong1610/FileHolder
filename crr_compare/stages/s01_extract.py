@@ -371,6 +371,200 @@ def iter_span_ranges(value: Any, path: str = "$"):
             yield from iter_span_ranges(item, f"{path}[{index}]")
 
 
+# Bumped whenever the element-reference rebasing semantics in
+# merge_document_intelligence_chunks change. A cached merged artifact carrying a
+# different (or absent) version is treated as legacy and remerged locally from
+# the saved chunks rather than reused with stale chunk-local references.
+REFERENCE_REBASING_VERSION = 1
+
+_REFERENCE_POINTER_RE = re.compile(
+    r"^/(?P<collection>[A-Za-z_][A-Za-z0-9_]*)/(?P<index>0|[1-9][0-9]*)(?P<suffix>(?:/.*)?)$"
+)
+
+_JSON_POINTER_INDEX_RE = re.compile(r"^(?:0|[1-9][0-9]*)$")
+
+
+def iter_reference_lists(value: Any, path: str = "$"):
+    """Yield ``(json_path, elements_list)`` for every structured reference list.
+
+    Document Intelligence stores element references as JSON pointers inside an
+    ``elements`` list (table cells, figures, sections, key-value pairs and
+    documents). Only those documented lists are visited; raw ``content``/text
+    strings are never inspected, even when they look like pointers. A present
+    ``elements`` key whose value is not a list is diagnosed rather than skipped.
+    """
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child = f"{path}.{key}"
+            if key == "elements":
+                if not isinstance(item, list):
+                    raise RuntimeError(
+                        f"Unsupported 'elements' value at {child}: expected a "
+                        f"list of JSON-pointer strings, got "
+                        f"{type(item).__name__} ({item!r})."
+                    )
+                yield child, item
+            else:
+                yield from iter_reference_lists(item, child)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from iter_reference_lists(item, f"{path}[{index}]")
+
+
+def decode_pointer_token(token: str, *, path: str, reference: Any) -> str:
+    """Decode one RFC 6901 reference token (``~1`` -> ``/``, ``~0`` -> ``~``).
+
+    An invalid escape (``~`` not followed by ``0`` or ``1``) is a diagnostic,
+    never silently passed through.
+    """
+    if "~" not in token:
+        return token
+    decoded: list[str] = []
+    position = 0
+    while position < len(token):
+        char = token[position]
+        if char != "~":
+            decoded.append(char)
+            position += 1
+            continue
+        if position + 1 >= len(token) or token[position + 1] not in ("0", "1"):
+            raise RuntimeError(
+                f"Invalid JSON-pointer escape in reference {reference!r} at "
+                f"{path}: token {token!r}; '~' must be followed by '0' or '1'."
+            )
+        decoded.append("~" if token[position + 1] == "0" else "/")
+        position += 2
+    return "".join(decoded)
+
+
+def validate_reference_suffix(
+    target: Any,
+    suffix: str,
+    *,
+    reference: Any,
+    path: str,
+    scope: str,
+) -> None:
+    """Resolve a reference's JSON-pointer suffix against its target element.
+
+    ``target`` is the item addressed by ``/collection/index``. An empty suffix
+    addresses the item itself. Each remaining token is resolved as an object
+    property (with ``~0``/``~1`` unescaping) or a valid non-negative array index;
+    a missing property, an out-of-range or malformed index, an invalid escape, or
+    descending into a scalar is a diagnostic naming ``scope``, the reference and
+    the offending token. The suffix is never rewritten.
+    """
+    if suffix == "":
+        return
+    node = target
+    travelled = ""
+    for token in suffix.split("/")[1:]:
+        decoded = decode_pointer_token(token, path=path, reference=reference)
+        travelled = f"{travelled}/{token}"
+        if isinstance(node, dict):
+            if decoded not in node:
+                raise RuntimeError(
+                    f"{scope}: reference {reference!r} at {path} does not "
+                    f"resolve: object has no property {decoded!r} (token "
+                    f"{travelled!r})."
+                )
+            node = node[decoded]
+        elif isinstance(node, list):
+            if not _JSON_POINTER_INDEX_RE.match(decoded):
+                raise RuntimeError(
+                    f"{scope}: reference {reference!r} at {path} does not "
+                    f"resolve: {decoded!r} in token {travelled!r} is not a valid "
+                    f"array index."
+                )
+            index = int(decoded)
+            if index >= len(node):
+                raise RuntimeError(
+                    f"{scope}: reference {reference!r} at {path} does not "
+                    f"resolve: array index {index} is out of range for "
+                    f"{len(node)} item(s) (token {travelled!r})."
+                )
+            node = node[index]
+        else:
+            raise RuntimeError(
+                f"{scope}: reference {reference!r} at {path} does not resolve: "
+                f"cannot descend into {type(node).__name__} at token "
+                f"{travelled!r}."
+            )
+
+
+
+def parse_element_reference(reference: Any, *, path: str) -> tuple[str, int, str]:
+    """Split ``/collection/index[/suffix...]`` into collection, index and suffix.
+
+    Raises ``RuntimeError`` naming the JSON path and offending value for a
+    non-string entry, a malformed pointer, or an unsupported target collection.
+    It never guesses a target.
+    """
+    if not isinstance(reference, str):
+        raise RuntimeError(
+            f"Unsupported element reference at {path}: expected a JSON-pointer "
+            f"string, got {type(reference).__name__} ({reference!r})."
+        )
+    match = _REFERENCE_POINTER_RE.match(reference)
+    if not match:
+        raise RuntimeError(
+            f"Malformed element reference at {path}: {reference!r} is not a "
+            f"'/<collection>/<index>' JSON pointer."
+        )
+    collection = match.group("collection")
+    if collection not in MERGE_LIST_FIELDS:
+        case_hint = ""
+        if collection.lower() in {field.lower() for field in MERGE_LIST_FIELDS}:
+            case_hint = " (check the collection name's letter case)"
+        raise RuntimeError(
+            f"Unsupported element reference target at {path}: {reference!r} "
+            f"references {collection!r}, which is not one of the supported "
+            f"collections {sorted(MERGE_LIST_FIELDS)}{case_hint}."
+        )
+    return collection, int(match.group("index")), match.group("suffix")
+
+
+def rebase_chunk_element_references(
+    chunk: dict[str, Any],
+    *,
+    before_lengths: dict[str, int],
+    chunk_label: str,
+) -> None:
+    """Rebase one chunk's element references into the merged collections.
+
+    Every pointer is validated against the chunk's own collections before any
+    index is shifted, so a chunk-local reference that does not resolve is
+    rejected instead of silently re-pointed. ``before_lengths`` holds the number
+    of items already merged for each target collection; the first chunk has all
+    zero offsets and therefore keeps its references byte-identical.
+    """
+    for path, references in iter_reference_lists(chunk):
+        for position, reference in enumerate(references):
+            reference_path = f"{path}[{position}]"
+            collection, index, suffix = parse_element_reference(
+                reference, path=reference_path
+            )
+            local_items = chunk.get(collection)
+            local_length = len(local_items) if isinstance(local_items, list) else 0
+            if index >= local_length:
+                raise RuntimeError(
+                    f"{chunk_label}: element reference {reference!r} at "
+                    f"{reference_path} does not resolve in this chunk "
+                    f"({collection} has {local_length} item(s))."
+                )
+            validate_reference_suffix(
+                local_items[index],
+                suffix,
+                reference=reference,
+                path=reference_path,
+                scope=f"{chunk_label} (local target)",
+            )
+            offset = before_lengths[collection]
+            if offset == 0:
+                continue
+            references[position] = f"/{collection}/{index + offset}{suffix}"
+
+
 def merge_document_intelligence_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
     if not chunks:
         raise ValueError("No chunk results supplied.")
@@ -427,6 +621,17 @@ def merge_document_intelligence_chunks(chunks: list[dict[str, Any]]) -> dict[str
 
         chunk = shift_span_offsets(chunk, current_content_offset)
 
+        # Element references are chunk-local, so rebase them against the
+        # collections already merged before this chunk is appended. Each target
+        # collection uses its own cumulative length.
+        rebase_chunk_element_references(
+            chunk,
+            before_lengths={
+                field: len(merged.get(field) or []) for field in MERGE_LIST_FIELDS
+            },
+            chunk_label=f"chunk {chunk_info['page_range']}",
+        )
+
         for field in MERGE_LIST_FIELDS:
             merged.setdefault(field, [])
             merged[field].extend(chunk.get(field) or [])
@@ -440,6 +645,9 @@ def merge_document_intelligence_chunks(chunks: list[dict[str, Any]]) -> dict[str
         "page_ranges": [c["page_range"] for c in chunks],
         "string_index_type": string_index_type,
         "span_offsets_rebased": True,
+        "element_references_rebased": True,
+        "reference_rebasing": True,
+        "reference_rebasing_version": REFERENCE_REBASING_VERSION,
         "content_separator": separator,
     }
     return merged
@@ -466,6 +674,8 @@ def validate_merged_extraction(
             f"First issues: {invalid_spans[:10]}"
         )
 
+    reference_count = validate_element_references(raw, document_name=document_name)
+
     page_numbers = [get_page_number(page) for page in pages]
     if len(pages) != expected_pages:
         raise AssertionError(
@@ -482,9 +692,86 @@ def validate_merged_extraction(
             f"1-{expected_pages}. First values: {page_numbers[:10]}"
         )
     print(
-        f"{document_name}: validated {expected_pages} unique ordered pages and "
-        f"{len(list(iter_span_ranges(raw)))} in-bounds spans using {string_index_type} indexing."
+        f"{document_name}: validated {expected_pages} unique ordered pages, "
+        f"{len(list(iter_span_ranges(raw)))} in-bounds spans and "
+        f"{reference_count} element references using {string_index_type} indexing."
     )
+
+
+def validate_element_references(raw: dict[str, Any], *, document_name: str) -> int:
+    """Verify every structured element reference resolves in the merged document.
+
+    Returns the number of references checked. Malformed/unsupported pointers and
+    out-of-range indices are collected as an ``AssertionError`` diagnostic rather
+    than rewritten.
+    """
+    problems: list[str] = []
+    checked = 0
+    for path, references in iter_reference_lists(raw):
+        for position, reference in enumerate(references):
+            reference_path = f"{path}[{position}]"
+            try:
+                collection, index, suffix = parse_element_reference(
+                    reference, path=reference_path
+                )
+            except RuntimeError as exc:
+                problems.append(str(exc))
+                continue
+            items = raw.get(collection)
+            length = len(items) if isinstance(items, list) else 0
+            if index >= length:
+                problems.append(
+                    f"element reference {reference!r} at {reference_path} does "
+                    f"not resolve in the merged document "
+                    f"({collection} has {length} item(s))."
+                )
+                continue
+            try:
+                validate_reference_suffix(
+                    items[index],
+                    suffix,
+                    reference=reference,
+                    path=reference_path,
+                    scope="merged document",
+                )
+            except RuntimeError as exc:
+                problems.append(str(exc))
+            checked += 1
+    if problems:
+        raise AssertionError(
+            f"{document_name}: {len(problems)} invalid element reference(s). "
+            f"First issues: {problems[:10]}"
+        )
+    return checked
+
+
+def merged_has_element_references(raw: dict[str, Any]) -> bool:
+    """True when the artifact contains at least one structured element reference."""
+    return any(references for _path, references in iter_reference_lists(raw))
+
+
+def cached_merge_reuse_blocker(merged: dict[str, Any]) -> str | None:
+    """Return ``None`` when a cached merged artifact may be reused as-is.
+
+    A cache is reusable when it holds no structured references (nothing could be
+    stale) or when it carries this merger's reference-rebasing metadata. A cache
+    with references but missing/legacy metadata may still hold chunk-local
+    pointers and must be remerged from the saved chunks instead of reused.
+    """
+    if not merged_has_element_references(merged):
+        return None
+    metadata = merged.get("chunked_extraction")
+    if not isinstance(metadata, dict):
+        return "missing chunked_extraction reference-rebasing metadata"
+    if metadata.get("reference_rebasing") is not True:
+        return "legacy chunked_extraction metadata without reference rebasing"
+    version = metadata.get("reference_rebasing_version")
+    if version != REFERENCE_REBASING_VERSION:
+        return (
+            f"reference rebasing version {version!r} is not "
+            f"{REFERENCE_REBASING_VERSION}"
+        )
+    return None
 
 
 def extract_merge_or_load_document(doc: dict[str, Any]) -> dict[str, Any]:
@@ -531,8 +818,19 @@ def extract_merge_or_load_document(doc: dict[str, Any]) -> dict[str, Any]:
 
     if final_output_path.exists() and not FORCE_MERGE:
         merged = load_json(final_output_path)
-        validate_merged_extraction(merged, expected_pages=total_pages, document_name=document_name)
-        return merged
+        blocker = cached_merge_reuse_blocker(merged)
+        if blocker is None:
+            validate_merged_extraction(
+                merged, expected_pages=total_pages, document_name=document_name
+            )
+            print(f"{document_name}: reused compatible cached merge {final_output_path}")
+            return merged
+        # A legacy/stale final may hold chunk-local references. Rebuild it from
+        # the already-saved chunks; this is local and issues no provider request.
+        print(
+            f"{document_name}: cached merge is not reusable ({blocker}); "
+            "remerging from saved chunks (no provider request)."
+        )
 
     merged = merge_document_intelligence_chunks(chunks)
     validate_merged_extraction(merged, expected_pages=total_pages, document_name=document_name)
