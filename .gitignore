@@ -13,6 +13,9 @@ temp/
 cache/
 output_sample/
 __pycache__/
+*.egg-info/
+build/
+dist/
 *.pyc
 .pytest_cache/
 

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "document-compare"
+version = "0.1.0"
+description = "Evidence-backed document comparison and MCP result reader"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["document_compare*"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
