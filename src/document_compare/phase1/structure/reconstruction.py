@@ -329,9 +329,11 @@ def _is_toc_table(
     return True
 
 
-def _next_content_element(elements: list[dict[str, Any]], start: int) -> tuple[int, dict[str, Any]] | None:
+def _next_content_element(
+    elements: list[dict[str, Any]], start: int, furniture_ids: set[str] | None = None,
+) -> tuple[int, dict[str, Any]] | None:
     for index in range(start + 1, len(elements)):
-        if not is_layout(elements[index]):
+        if not is_layout(elements[index]) and element_id_of(elements[index]) not in (furniture_ids or set()):
             return index, elements[index]
     return None
 
@@ -381,7 +383,11 @@ def build_structure_evidence(
                     body_heading_first_order.get(key, order), order
                 )
 
-    contents_positions = [index for index, element in enumerate(ordered) if is_contents_heading(element)]
+    contents_positions = [
+        index for index, element in enumerate(ordered)
+        if element_id_of(element) not in furniture_ids
+        and not is_layout(element) and is_contents_heading(element)
+    ]
     contents_heading_ids = {element_id_of(ordered[position]) for position in contents_positions}
     toc_table_ids: set[str] = set()
     toc_source_ids: set[str] = set(contents_heading_ids)
@@ -393,12 +399,11 @@ def build_structure_evidence(
 
     # ---- table TOCs (explicit heading adjacency or corroborated repetition) ----
     for position, element in enumerate(ordered):
-        if element.get("element_type") != "table":
+        if element.get("element_type") != "table" or element_id_of(element) in furniture_ids:
             continue
+        next_content = _next_content_element(ordered, contents_positions[0], furniture_ids) if contents_positions else None
         explicit_adjacent = bool(
-            contents_positions
-            and _next_content_element(ordered, contents_positions[0]) is not None
-            and _next_content_element(ordered, contents_positions[0])[1] is element
+            next_content is not None and next_content[1] is element
         )
         if not _is_toc_table(
             element,
@@ -442,12 +447,14 @@ def build_structure_evidence(
         stopped_reason = None
         for index in range(start + 1, len(ordered)):
             element = ordered[index]
+            # A mislabelled running heading must neither become a TOC entry
+            # nor terminate continuation across a page boundary.
+            if element_id_of(element) in furniture_ids or is_layout(element):
+                continue
             if element_id_of(element) in toc_table_ids:
                 stopped_reason = "toc_table_reached"
                 break
-            if is_layout(element):
-                continue
-            if is_body_heading(element):
+            if is_body_heading(element, furniture_ids):
                 stopped_reason = "body_heading_reached"
                 break
             if element.get("element_type") == "table":
@@ -519,7 +526,7 @@ def build_structure_evidence(
 
     # TOC tables must not be duplicated by overlapping paragraphs.
     for element in ordered:
-        if element.get("element_type") == "table":
+        if element.get("element_type") == "table" or element_id_of(element) in furniture_ids or is_layout(element):
             continue
         for table_id in toc_table_ids:
             table = element_by_id[table_id]
@@ -748,14 +755,14 @@ def build_structure_evidence(
     current_section_id: str | None = None
     for element in ordered:
         element_id = element_id_of(element)
-        if element_id in toc_source_ids or element_id in toc_table_ids:
-            category = "toc"
-        elif is_layout(element):
+        if is_layout(element):
             category = "layout"
         elif element_id in furniture_ids:
             # Derived recurring page furniture (even when a single DI role
             # called it a heading/title) is accounted for as layout.
             category = "layout"
+        elif element_id in toc_source_ids or element_id in toc_table_ids:
+            category = "toc"
         elif element_id in section_by_heading_id:
             current_section_id = section_by_heading_id[element_id]
             category = "section"

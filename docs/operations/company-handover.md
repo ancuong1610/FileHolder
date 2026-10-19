@@ -36,6 +36,11 @@ The demo destination must be fresh. It is synthetic, mock-only and does not call
 
 ## Real comparison and agent
 
+For **Phase 1 only**, **Phase 2 on a chosen saved workspace**, or **both**, see
+[phase testing](phase-testing.md). Start with the credential-free `--check-only`
+on a completed workspace before real saved-result chat. The no-flag flow below
+remains the API/MCP end-to-end path, not the local saved-reader path.
+
 1. Put the old and new PDFs in `input/`. Retain the correct old/new orientation when prompted. Limits: distinct selected files, PDF signature, at most 50 MiB per file.
 2. Run `.\.venv\Scripts\python.exe -m document_compare.phase2.workflow.local_reviewer`. This is the real extraction/provider workflow, not mock mode; normal company provider permissions/costs apply.
 3. Open the printed redline link. The same job also provides `/jobs/<job_id>/artifacts/comparison_inline.pdf` and `/jobs/<job_id>/artifacts/inline_pdf_audit.json` on the configured loopback API (default `http://127.0.0.1:8321`). Outputs remain under `workspace/jobs/<job_id>/output/`.

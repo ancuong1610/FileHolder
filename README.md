@@ -8,6 +8,9 @@ New here? Read [docs/architecture.md](docs/architecture.md) for the layout and
 15-stage map, and [docs/review-guide.md](docs/review-guide.md) to route a task to
 its owning file and check. For a real environment, see
 [docs/operations/company-handover.md](docs/operations/company-handover.md).
+For separate Phase 1 / saved-workspace Phase 2 / combined runs, see
+[phase testing](docs/operations/phase-testing.md). Coding agents should start
+with [AGENTS.md](AGENTS.md), including explanation, investigation and safe testing.
 
 ## Install (editable)
 
@@ -38,6 +41,10 @@ supports paths with spaces. Inspect `output/comparison_redline.pdf` and
 python -m pip install -e .
 python -m document_compare demo --fixture internal_policy_report --root "workspace/demo run"
 python -m document_compare run --root JOB_ROOT --from-stage 02 --to-stage 15
+python -m document_compare.phase2.workflow.local_reviewer --phase phase1 --workspace JOB_ROOT
+python -m document_compare.phase2.workflow.local_reviewer --phase phase2 --workspace JOB_ROOT --check-only
+python -m document_compare.phase2.workflow.local_reviewer --phase phase2 --workspace JOB_ROOT
+python -m document_compare.phase2.workflow.local_reviewer --phase both --workspace FRESH_JOB_ROOT
 python -m document_compare.phase2.workflow.local_reviewer
 python -m document_compare.phase2.agent.mock_reader --out workspace/reader-mock
 python -m document_compare.phase2.mcp.workflow_server
@@ -48,6 +55,12 @@ python -m unittest discover -s tests
 
 Tests may also run by area, e.g. `python -m unittest tests.phase1.test_reconcile`
 or `python -m unittest tests.phase2.test_reader`.
+
+Explicit phase modes load the repository `.env`; `--workspace` overrides
+`CRR_PROJECT_ROOT`. Phase 2 reads the selected completed workspace in place,
+without rerunning Phase 1. `--check-only` is offline; saved-result chat is real
+and uses the local reader, not HTTP/MCP. No flags keeps the original combined
+upload/API/MCP/chat flow. See the testing guide for credentials and acceptance.
 
 ## Old → new commands (no compatibility shim)
 

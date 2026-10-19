@@ -28,6 +28,7 @@ this order before touching code: `docs/architecture.md` → the owning folder
 | Job API / status / summary wrong | `phase2/api/service.py`, `phase2/api/summary.py` | `python -m unittest tests.phase2.test_service` |
 | Agent search/details incomplete or wrong | `phase2/reader/result_reader.py`, `phase2/mcp/reader_server.py`, `phase2/agent/tools.py` | `python -m unittest tests.phase2.test_reader tests.phase2.test_agent_reader` |
 | Workflow MCP / subprocess launch broken | `phase2/mcp/workflow_server.py`, `phase2/workflow/local_reviewer.py` | `python -m unittest tests.phase2.test_mcp tests.phase2.test_local_flow` |
+| Phase selection / saved workspace reuse wrong | `phase2/workflow/local_reviewer.py`, `phase2/workflow/saved_workspace.py` | `python -m unittest tests.phase2.test_local_flow tests.phase2.test_saved_workspace` |
 | Import boundary or stage count broken | `phase1/stages/`, dependency edges | `python -m unittest tests.integration.test_architecture tests.integration.test_stage_import_safety` |
 | README / docs links broken | folder `README.md`s, `docs/` | `python -m unittest tests.integration.test_architecture.ReadmeCoverageTest` |
 
@@ -38,5 +39,7 @@ this order before touching code: `docs/architecture.md` → the owning folder
 - Do not re-add `run_local.py`, a `compat/` package, or the old `crr_compare` /
   `agent_poc` namespaces.
 
-There is no known missing-TOC or graph-accuracy SEM scope change in this
-refactor; it is a structural move, not an algorithm or accuracy change.
+The original phase-layout refactor did not claim an accuracy improvement.
+Subsequent TOC/furniture corrections and saved-workspace modes are documented in
+[architecture](architecture.md) and [phase testing](operations/phase-testing.md).
+Synthetic regressions do not certify private-document or universal accuracy.

@@ -221,5 +221,69 @@ async def main(root: Path | None = None) -> None:
         _stop_process(api)
 
 
+def resolve_workspace(workspace: Path | None) -> Path:
+    """Explicit selection wins over the existing CRR_PROJECT_ROOT setting."""
+    selected = workspace if workspace is not None else Path(os.environ.get("CRR_PROJECT_ROOT") or REPO_ROOT / "workspace")
+    return selected.expanduser().resolve()
+
+
+async def chat_saved_workspace(workspace: Path, check_only: bool = False) -> None:
+    from document_compare.phase2.workflow.saved_workspace import SavedWorkspaceGateway
+
+    gateway = SavedWorkspaceGateway(workspace)
+    if check_only:
+        print(json.dumps(gateway.check(), ensure_ascii=False, indent=2))
+        return
+    missing = [name for name in ("TIA_API_KEY", "LLM_MODEL") if not os.environ.get(name, "").strip()]
+    if missing:
+        raise ValueError(f"Missing chat configuration: {', '.join(missing)} (values not printed)")
+    print(json.dumps(gateway.summarize(gateway.job_id), ensure_ascii=False, indent=2))
+    print("Saved-workspace reader: read-only local mode (no API/MCP transport).")
+    agent = TiaComparisonAgent(TiaTextClient(os.environ["TIA_API_KEY"]), gateway, max_steps=5, result_limit=8)
+    while True:
+        try:
+            question = await asyncio.to_thread(input, "you> ")
+        except EOFError:
+            break
+        if question.strip().lower() in {"quit", "exit"}:
+            break
+        print("agent:", await asyncio.to_thread(agent.ask, question, gateway.job_id))
+
+
+async def run_selected_phase(phase: str, workspace: Path, *, check_only: bool = False) -> None:
+    if phase not in {"phase1", "phase2", "both"}:
+        raise ValueError("phase must be phase1, phase2 or both")
+    if check_only and phase != "phase2":
+        raise ValueError("--check-only is available only with --phase phase2")
+    workspace = workspace.expanduser().resolve()
+    if phase in {"phase1", "both"}:
+        from document_compare.phase1.pipeline.cli import STAGES, run_stages
+        if (workspace / "output" / "comparison_result.json").exists():
+            raise ValueError("Selected workspace already has a result; choose a fresh workspace or use --phase phase2. "
+                             "For an intentional stage replay use document_compare run --from-stage.")
+        run_stages([number for number, _ in STAGES], workspace)
+        print(f"Phase 1 artifacts: {workspace / 'output'}")
+    if phase in {"phase2", "both"}:
+        await chat_saved_workspace(workspace, check_only)
+
+
+def cli(argv: list[str] | None = None) -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="Run Phase 1, read a saved Phase-1 workspace, or run both.")
+    parser.add_argument("--phase", choices=("phase1", "phase2", "both"), default=None,
+                        help="Explicit phase selection; no flags retains the legacy upload/API/MCP/chat flow")
+    parser.add_argument("--workspace", type=Path, help="Workspace containing output/, not output/ itself; defaults to CRR_PROJECT_ROOT or workspace/")
+    parser.add_argument("--check-only", action="store_true", help="Offline saved-reader check; requires --phase phase2, no model calls")
+    args = parser.parse_args(argv)
+    load_dotenv(REPO_ROOT / ".env")
+    if args.phase is None and args.workspace is None and not args.check_only:
+        asyncio.run(main())
+        return
+    try:
+        asyncio.run(run_selected_phase(args.phase or "both", resolve_workspace(args.workspace), check_only=args.check_only))
+    except ValueError as exc:
+        parser.exit(2, f"error: {exc}\n")
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    cli()

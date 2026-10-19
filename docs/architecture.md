@@ -55,29 +55,53 @@ tooling; the production `build_outcome_migration` helper lives in
 
 ## Stage map (s01–s15, all Phase 1)
 
-Each stage reads a named artifact from the job root and writes the next one.
+Artifacts live under `<workspace>/output/`. The stages are deliberately separate:
+extraction quality, structural hypotheses, matching, review and presentation must
+not silently overwrite one another's evidence. Later stages often consume more
+than the immediately previous artifact.
 
-| Stage | File | Input | Output |
-| --- | --- | --- | --- |
-| s01 | `s01_extract.py` | two PDFs / DI API | raw DI JSON + extraction warnings |
-| s02 | `s02_validate_extraction.py` | raw DI JSON | validation JSON |
-| s03 | `s03_internal_schema.py` | validated DI | neutral internal document JSON |
-| s04 | `s04_normalize.py` | document JSON | normalized JSON |
-| s05 | `s05_anchors.py` | normalized JSON | structured JSON + `structure_evidence` |
-| s06 | `s06_exact_matching.py` | structured pair | exact matches |
-| s07 | `s07_modified_matching.py` | residual text | bounded modified matches |
-| s08 | `s08_candidates.py` | matches | candidate/change list |
-| s09 | `s09_movement.py` | candidates | movement-resegmented candidates |
-| s10 | `s10_tables.py` | structured tables | table comparison records |
-| s11 | `s11_routing.py` | candidates + tables | review routing |
-| s12 | `s12_packets.py` | eligible routes | bounded review packets |
-| s13 | `s13_llm_evaluator.py` | packets | mock/real decisions + trace |
-| s14 | `s14_canonical_result.py` | all decisions | canonical result, review queue, CSV |
-| s15 | `s15_serve.py` | canonical artifacts | HTML/PDF/manifest/index bundle |
+| Stage | File | Purpose / why it exists | Input | Output |
+| --- | --- | --- | --- | --- |
+| s01 | `s01_extract.py` | Turn PDFs into machine-readable text, tables and locations; cache chunks so extraction can resume without repeating successful provider work. | two PDFs / DI cache or API | raw DI JSON + extraction warnings |
+| s02 | `s02_validate_extraction.py` | Detect broken page/span/table/geometry/confidence evidence before treating extraction noise as document changes; optionally cross-check native PDF text. | raw DI JSON | validation JSON |
+| s03 | `s03_internal_schema.py` | Isolate downstream comparison from the DI response shape using stable element IDs while preserving source text, locations and validation evidence. | DI + validation | neutral internal document JSON |
+| s04 | `s04_normalize.py` | Reduce conservative Unicode/whitespace/wrap noise without rewriting raw text or meaningful quantitative differences. | document JSON | normalized JSON |
+| s05 | `s05_anchors.py` | Supply provisional heading context and additive TOC/section evidence, distinguishing recurring page furniture from body content. These are hypotheses, not authoritative hierarchy. | normalized JSON | structured JSON + `structure_evidence` |
+| s06 | `s06_exact_matching.py` | Remove confidently unchanged pairs first; use provisional context to disambiguate repeated identical text where supported. | structured pair | exact matches |
+| s07 | `s07_modified_matching.py` | Find supported modified pairs among residuals rather than reporting every edit as unrelated deletion/addition. | structured pair + exact-match residuals | bounded modified matches |
+| s08 | `s08_candidates.py` | Assemble paired/unpaired candidates and token diffs while conserving all old/new elements and keeping uncertain duplicate matches visible. | exact + modified matches | candidate/change list |
+| s09 | `s09_movement.py` | Distinguish relocation and split/merge/resegmentation evidence from ordinary edits, without hiding genuine content changes. | candidates | movement-resegmented candidates |
+| s10 | `s10_tables.py` | Compare logical tables across physical page continuations and align rows/cells, preserving unresolved table evidence. | structured pair + movement candidates | table comparison records |
+| s11 | `s11_routing.py` | Decide deterministically which cases can be resolved and which need review or optional advisory evaluation; no domain-specific verifier. | candidates + tables | review routing |
+| s12 | `s12_packets.py` | Package only eligible cases into bounded old/new evidence for optional evaluation, not an unbounded document upload. | eligible routes + evidence | bounded review packets |
+| s13 | `s13_llm_evaluator.py` | Obtain optional advisory `REAL_CHANGE` / `ARTIFACT` / `UNCERTAIN` recommendations with traceability; mock mode exercises the contract without model calls. | packets | disabled/mock/real decisions + trace |
+| s14 | `s14_canonical_result.py` | Produce the single canonical result using deterministic resolution rules; preserve LLM advice without letting it approve or suppress changes. | routing + candidate/table/evaluation evidence | canonical result + review queue |
+| s15 | `s15_serve.py` | Present/export the canonical result for human inspection and downstream reading without recomputing matching. | canonical + structured artifacts | HTML/PDF/CSV/manifest/index bundle |
 
 Stage 15 is Phase 1 reporting, not Phase 2 logic. Its generated
 `phase2_change_index.json` keeps that historical filename as an artifact
 contract; the name does not mean Phase 2 imports it.
+
+### Stage 5: anchors, TOC and page furniture
+
+An **anchor** is a provisional heading landmark used as comparison context.
+`structure_evidence` separately records TOC entries, candidate body-heading
+links, sections, uncertainty, and one membership category per element (`toc`,
+`layout`, `section`, `preamble`, `uncertain`). Neither layer grants authoritative
+semantic hierarchy or changes raw extraction roles, text or IDs.
+
+**Derived furniture** means recurring headers/footers supported jointly by
+repeated text, layout-role occurrences on multiple pages, and page-edge geometry.
+A single DI role or repetition alone is insufficient. The same classification
+is shared by anchor and structure reconstruction. Furniture is excluded from
+TOC heading/entry/table-source detection and skipped while scanning between TOC
+pages; it must not terminate continuation or create a fake heading. Its membership
+is always `layout`. The validator still rejects contradictory evidence.
+
+This matters for the reported EBA STEP2 failure: the old TOC-first membership
+could classify a recurring `Contents` header as `toc`, contradicting the furniture
+invariant. Synthetic regressions reproduce that exact error plus interrupted
+text/table TOCs; verification on the private EBA artifacts is a separate step.
 
 ## Runtime flow
 
@@ -94,6 +118,31 @@ contract; the name does not mean Phase 2 imports it.
    `phase2/reader/result_reader.py` over saved canonical artifacts.
 5. The agent (`phase2/agent/`) plans only over those three reader tools; it does
    not download the full report and re-implement search.
+
+### Selecting phases and saved workspaces
+
+Phase 1 is all 15 comparison/reporting stages; Phase 2 is reader/API/MCP/agent
+interaction, not stages 8–15. Stage 13's optional evaluator is not the Phase 2
+chat model. `CRR_RUN_LLM=mock` does not make interactive chat offline.
+
+The local reviewer accepts `--phase phase1|phase2|both --workspace PATH`:
+
+- `phase1`: run the engine only, writing into the selected workspace.
+- `phase2`: read one completed workspace in place, with a local gateway over
+  the same bounded `result_reader` used by HTTP. No extraction, API registration,
+  source mutation or copying. `--check-only` needs no credentials/model calls.
+- `both`: run Phase 1, then local saved-workspace chat on that exact result.
+- No flags: retain the existing PDF-selection → API/workflow MCP → reader MCP
+  → chat flow above. Explicit saved mode does **not** test HTTP/MCP transport.
+
+Explicit `--workspace` overrides `CRR_PROJECT_ROOT`; explicit phase modes otherwise
+use that environment setting, then `<repo>/workspace`. Select the directory
+containing `output/`, not `output/` itself. A completed canonical result is
+required; an explicit unfinished/failed job status is rejected. Optional missing
+structured context/extraction validation is reported as a limitation, never
+invented. Malformed present artifacts are rejected. The gateway pins an in-memory
+snapshot to one job identity for the chat session; rerun to load updated artifacts.
+See [phase testing](operations/phase-testing.md) for commands and acceptance checks.
 
 Runtime config keys intentionally keep the legacy `CRR_` prefix even though the
 old Python CLI is gone; the prefix is a preserved external contract, not a

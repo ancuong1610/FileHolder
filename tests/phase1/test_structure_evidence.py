@@ -34,6 +34,58 @@ def _section_by_heading_title(evidence: dict, title: str) -> dict:
     raise AssertionError(f"no section titled {title!r}: {[s['title'] for s in evidence['sections']]}")
 
 
+class FurnitureTocRegressionTest(unittest.TestCase):
+    def _header(self, eid, page, text="Contents", *, heading=False):
+        return fixtures.paragraph(eid, text, order=0, page=page, top=0.05,
+                                  role="sectionHeading" if heading else "pageHeader",
+                                  element_type="heading" if heading else "header")
+
+    def test_recurring_contents_header_is_not_a_toc_heading(self):
+        document = fixtures.document("HEADER-ONLY", [
+            self._header("H1", 1),
+            fixtures.paragraph("B1", "Ordinary body text.", order=1),
+            self._header("H2", 2, heading=True),
+            self._header("H3", 3),
+        ], 3)
+        before = copy.deepcopy(document)
+        evidence = structure.build_structure_evidence(document)
+        self.assertFalse(evidence["toc"]["detected"])
+        self.assertEqual(set(evidence["furniture"]["element_ids"]), {"H1", "H2", "H3"})
+        for eid in ("H1", "H2", "H3"):
+            self.assertEqual(evidence["membership"]["by_element"][eid]["category"], "layout")
+        self.assertEqual(document, before)
+
+    def test_mislabelled_header_does_not_stop_multipage_text_toc(self):
+        document = fixtures.document("INTERLEAVED", [
+            self._header("H1", 1, "Running document title"),
+            fixtures.paragraph("C", "Contents", order=1, role="sectionHeading"),
+            fixtures.paragraph("E1", "Introduction .... 4", order=2),
+            self._header("H2", 2, "Running document title", heading=True),
+            fixtures.paragraph("E2", "Methods .... 5", order=4, page=2),
+            self._header("H3", 3, "Running document title"),
+            fixtures.paragraph("B1", "Introduction", order=6, page=4, role="sectionHeading"),
+            fixtures.paragraph("B2", "Methods", order=7, page=5, role="sectionHeading"),
+        ], 5)
+        evidence = structure.build_structure_evidence(document)
+        self.assertEqual(evidence["toc"]["entry_count"], 2)
+        self.assertEqual(evidence["toc"]["linked_count"], 2)
+        self.assertEqual(evidence["membership"]["by_element"]["H2"]["category"], "layout")
+        self.assertNotIn("H2", {s["heading_element_id"] for s in evidence["sections"]})
+
+    def test_table_adjacency_skips_derived_furniture(self):
+        document = fixtures.document("TABLE-INTERLEAVED", [
+            self._header("H1", 1, "Running document title"),
+            fixtures.paragraph("C", "Contents", order=1, role="sectionHeading"),
+            self._header("H2", 2, "Running document title", heading=True),
+            fixtures.table_element("T1", [["Introduction", "4"]], order=3, page=2),
+            self._header("H3", 3, "Running document title"),
+            fixtures.paragraph("B1", "Introduction", order=5, page=4, role="sectionHeading"),
+        ], 4)
+        evidence = structure.build_structure_evidence(document)
+        self.assertEqual(evidence["toc"]["entry_count"], 1)
+        self.assertEqual(evidence["toc"]["entries"][0]["source_table_id"], "T1")
+
+
 class TocTextTest(unittest.TestCase):
     def setUp(self):
         self.document = fixtures.load("toc_text")
