@@ -535,9 +535,13 @@ class InlinePdfRenderTest(unittest.TestCase):
         redline_source = Path(redline_pdf_module.__file__)
         self.assertEqual(
             hashlib.sha256(redline_source.read_bytes()).hexdigest(),
-            # Only the two imports changed during the phase-layout refactor;
-            # the renderer implementation was diff-verified unchanged.
-            "e7add2edbde9051a6ee83d1b819e70876bec5aa56286a86d8ebdd9914317217b",
+            # This pin was updated intentionally by the approved report redesign
+            # (complete supported/uncertain report). It still guards against
+            # accidental later drift; it is not evidence that the renderer is
+            # byte-identical to the earlier additive-only version. The
+            # substantive invariants below (inline does not mutate the canonical
+            # input and does not perturb redline output) are unchanged.
+            "2831996c5ac11c8e27f89bdb41a1c819a0b07f0d8fc6870ba9e5f02a7de0081e",
         )
         self.assertEqual(render_redline_pdf.__module__, "document_compare.phase1.reporting.redline_pdf")
         self.assertIsNot(render_redline_pdf, render_pdf)

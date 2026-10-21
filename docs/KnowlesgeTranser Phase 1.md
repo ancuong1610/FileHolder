@@ -4,9 +4,11 @@ This guide explains the Phase 1 runtime and how data changes at each step. It is
 for developers, reviewers and coding agents who need to understand or operate
 the project, not just edit its code.
 
-**Code reference:** `fde80a5` (`refactor-phase-layout`). Thresholds and contracts
-below describe that implementation, not universal document-comparison rules.
-Examples are illustrative, not observations about the private EBA PDFs.
+**Code reference:** current working tree on `feat/outline-automatic-results`
+(uncommitted outline-first/automatic-results slice), on top of `fde80a5`
+(`refactor-phase-layout`). Thresholds and contracts below describe that
+implementation, not universal document-comparison rules. Examples are
+illustrative, not observations about the private EBA PDFs.
 
 For the compact ownership map, read [architecture](architecture.md). For runnable
 commands, configuration and acceptance checks, read
@@ -235,18 +237,47 @@ locations. This stage does not compare OLD against NEW.
 1. Resolve the configured OLD and NEW PDF paths. If a source PDF exists, take the
    PDF-based extraction/cache path. Otherwise the runtime can try the legacy
    document-name chunk-cache path; it does not invent empty extraction.
-2. Read the PDF page count, unless an explicit debug first-page range is used.
-3. Split requested page ranges into chunks of at most **100 pages**.
-4. Calculate the PDF's full-file SHA-256 and use it as the PDF-based cache key:
+2. Read the full PDF page count. An explicit debug first-page range limits the
+   extracted page ranges but not the source identity or outline sidecar.
+3. Collect optional native PDF outline evidence locally **before any DI request**
+   (see below). The sidecar always describes the full source PDF, so a legacy
+   debug page subset does not rebind it to a truncated file.
+4. Split requested page ranges into chunks of at most **100 pages**.
+5. Calculate the PDF's full-file SHA-256 and use it as the PDF-based cache key:
    `cache/di_chunks/<pdf-sha256>/`.
-5. For each chunk, reuse the matching saved result unless force-reextraction is
+6. For each chunk, reuse the matching saved result unless force-reextraction is
    requested. If absent, call DI's `prebuilt-layout` model and save the result
    immediately. A later failed chunk does not delete earlier successes.
-6. Merge chunks into one raw document and validate the merged result.
+7. Merge chunks into one raw document, attach the source binding and validate the
+   merged result.
 
 The implementation sends the PDF bytes with a `pages` range; it does **not**
 physically create smaller PDF files for each chunk. Missing-cache extraction is
 a real provider operation, even when Stage 13 is configured as mock.
+
+#### Native outline prepass
+
+`phase1/extraction/pdf_outline.py` reads embedded bookmarks with the existing
+PyMuPDF dependency and writes versioned `old_pdf_outline.json` /
+`new_pdf_outline.json` sidecars under `output/`. Each records the source PDF
+SHA-256, physical page count, acquisition status, validated entries and
+diagnostics. Entries retain source order, level, title, physical page, a separate
+page label and destination evidence; they do not invent source element IDs.
+
+- An embedded outline is not a printed contents page and not a viewer-generated
+  TOC. This prepass does not add a second OCR/TOC detector.
+- Invalid, external or out-of-bounds destinations become diagnostics; only
+  supported entries are headings. A partial outline contributes only its
+  supported entries.
+- An outline read failure is recorded as `read_failure` and does not abort
+  otherwise valid DI extraction. A real PDF/extraction failure still fails.
+- Stage 1 also attaches `source_binding` (SHA-256, full physical page count,
+  basename) to the merged raw model. Stage 3 carries it as
+  `document.source.extraction_source`; Stage 5 will not consume a sidecar
+  without a matching identity. Legacy inputs without this binding use the
+  existing reconstruction path.
+- If the source bytes change during the prepass, Stage 1 refuses to bind stale
+  outline evidence and fails loudly rather than consuming a mismatched sidecar.
 
 The extraction helper retries only transient errors. Its current default is at
 most three total calls, with exponential waits of 2 and 4 seconds. Auth/config
@@ -269,14 +300,17 @@ support/version. An older cached merged artifact with structured references but
 without suitable rebasing metadata is not trusted for direct reuse; saved
 chunks can be remerged locally instead.
 
-**Output:** `old_di_raw.json`, `new_di_raw.json` in `output/`, plus chunk caches.
-Raw results can contain `content`, pages/words/lines, paragraphs, tables/cells,
+**Output:** `old_di_raw.json`, `new_di_raw.json` in `output/`, plus chunk caches
+and the optional `old_pdf_outline.json` / `new_pdf_outline.json` sidecars. Raw
+results can contain `content`, pages/words/lines, paragraphs, tables/cells,
 roles, spans, geometry, confidence and other provider collections.
 
 **Not established:** extraction correctness for every character, semantic
 equivalence, or any addition/deletion. A merged raw JSON file alone is not the
 same as a complete Stage 1 chunk cache. To consume already-extracted raw files,
-starting from Stage 2 may be appropriate.
+starting from Stage 2 may be appropriate. A usable outline is structural evidence,
+not authoritative hierarchy, and adding a TOC to metadata does not make DI
+consume it.
 
 ### Stage 02 — Validate extraction quality
 
@@ -332,6 +366,11 @@ classifier's final decisions.
 default `REQUIRE_VALIDATION_REPORTS`).
 
 **Output:** `old_document.json`, `new_document.json`, schema `0.2.0`.
+
+When Stage 1 supplied a PDF source binding, `document.source.extraction_source`
+carries its format, SHA-256 and physical page count. Legacy DI-only inputs have
+no such identity; Stage 3 does not invent one. Stage 5 uses this identity to
+reject a stale outline sidecar without requiring the original PDF.
 
 An abbreviated wrapper is:
 
@@ -485,7 +524,9 @@ conditions on punctuation, uppercase title text and valid geometry. Its bounds
 include at most **6 words** and **100 characters** for the numbered fallback.
 
 Tables, ineligible/layout elements, margin markers and derived furniture do not
-become provisional anchors.
+become provisional anchors. A body element linked to verified native outline
+evidence additionally gets `pdf_outline_heading` anchor support; that is additive
+context, not authoritative hierarchy.
 
 #### E. Attach recent-anchor context
 
@@ -515,6 +556,33 @@ An unheaded table candidate needs corroboration from body headings; not every
 table with numeric cells is a TOC. Table-overlapping paragraphs are accounted
 for without duplicating the table's TOC representation.
 
+#### F2. Reconcile verified native outline evidence
+
+Stage 5 resolves each `old_pdf_outline.json` / `new_pdf_outline.json` sidecar
+against the document's `document.source.extraction_source`. A sidecar is usable
+only when its SHA-256 and physical page count match. Missing identity, missing or
+malformed file, unsupported version, stale identity or status
+`absent`/`invalid`/`read_failure` yields no outline block; the existing TOC/body
+reconstruction is unchanged.
+
+For `available`/`partial` evidence, `reconcile_outline_entries` links an entry to
+a body element only when both the canonical title and the physical page match.
+Candidates exclude layout elements, tables, ineligible elements, elements inside
+or represented by a table, derived furniture and contents headings. Outcomes:
+
+- `linked`: exactly one same-page title match; `link_basis` is
+  `exact_title_page`.
+- `ambiguous`: duplicate title on the page, or a duplicate outline link.
+- `unmatched`: no same-page match, including `page_conflict` and
+  `title_only_ambiguous` diagnostics.
+
+Nothing is matched by filename, printed page label or title alone. The additive
+`structure_evidence.outline` block records status, source identity, counts,
+entries, links, diagnostics and limitations. Supported links become preferred
+`pdf_outline_link` section hypotheses; printed TOC/body inference fills headings
+the outline did not cover. An outline level is source metadata, not proof of
+semantic hierarchy.
+
 #### G. Link entries to body headings conservatively
 
 Canonical exact titles support linking. Repeated titles can be disambiguated by
@@ -531,8 +599,10 @@ Dotted numeric labels can support levels such as `2` -> level 1 and `2.1` ->
 level 2. Parent evidence must match the proper numeric prefix and namespace.
 Duplicate or missing parent labels stay uncertain.
 
-Without a usable TOC, body-heading fallback remains flat rather than inventing
-a certain tree. Unlisted body headings remain visible as section hypotheses.
+Without a usable TOC or native outline, body-heading fallback remains flat rather
+than inventing a certain tree. Unlisted body headings remain visible as section
+hypotheses. A conflicting outline entry stays unmatched/ambiguous; it is never
+forced onto a heading with a contradictory label.
 
 #### I. Assign membership and validate
 
@@ -561,10 +631,13 @@ they do not substitute for verification on the private EBA pair.
 #### Important boundary
 
 `structure_evidence` is additive. Matching primarily uses comparison text and
-provisional anchor context; it does not treat the TOC/section graph as certain.
-Derived furniture classification does **not** itself change raw types or
-`comparison_eligible`. Therefore anchor/TOC exclusion is not a claim that every
-mislabelled running header disappears from every subsequent matching path.
+provisional anchor context; it does not treat the TOC/outline/section graph as
+certain. Derived furniture classification does **not** itself change raw types or
+`comparison_eligible`, and outline links never promote furniture or invent source
+element IDs. Therefore anchor/TOC exclusion is not a claim that every mislabelled
+running header disappears from every subsequent matching path. The prepass does
+not add hard section partitions to Stage 10; bounded table retrieval by structure
+is a separate performance change with its own recall tests.
 
 ### Stage 06 — Exact non-table matching
 
@@ -854,14 +927,17 @@ and report rendering.
 | `NON_SEMANTIC` | Not a substantive content-change case. |
 | `SPECIAL_CASE_RULE` | A special pattern/rule applies; not automatically suppression. |
 | `SPECIAL_CASE_LLM_OPTIONAL` | Optional bounded evaluator advice can be requested. |
-| `HUMAN_REVIEW` | Retain as unresolved human work. |
+| `UNCERTAIN_RESULT` | Retained as an uncertain difference; no human action is required to finish. |
 
-Order matters: the first applicable rule controls the route.
+Order matters: the first applicable rule controls the route. New producers no
+longer emit `HUMAN_REVIEW`; old routing artifacts with that route remain readable
+as uncertainty. `human_review_cases` remains a compatibility statistic (normally
+zero for new runs), and `uncertain_result_cases` counts the new route.
 
 #### Main decision branches
 
 - Relocated unchanged records are non-semantic; duplicate exact assignment is
-  human review.
+  uncertain.
 - Missing/malformed/review-required extraction evidence must not be treated as
   permission for artifact suppression.
 - Hyphen/whitespace-only appearances are nominations, not proof. `re-sign` versus
@@ -882,9 +958,9 @@ Order matters: the first applicable rule controls the route.
   accepted deterministically.
 - Tables and movement/split/merge/boundary/resegmentation evidence get explicit
   routes and their own traceable identities. One-sided tables go to optional
-  evaluation; unresolved table groups remain human review.
+  evaluation; unresolved table groups remain uncertain.
 
-`generic_review_list` selects unresolved human/optional routes. A
+`generic_review_list` selects unresolved uncertain/optional routes. A
 `SPECIAL_CASE_RULE` route can still end as review under Stage 14; do not use
 this intermediate list as the sole final review inventory.
 
@@ -902,8 +978,8 @@ document/report to the evaluator.
 **Input:** routing and the referenced evidence. **Output:**
 `llm_review_packets.json`.
 
-Only `SPECIAL_CASE_LLM_OPTIONAL` routes get packets. Human-review cases are not
-automatically all sent to the model.
+Only `SPECIAL_CASE_LLM_OPTIONAL` routes get packets. Uncertain-result cases are
+not automatically all sent to the model.
 
 Depending on source kind, a packet contains compact old/new elements, similarity,
 diffs, changed cells, structural evidence, references, case/review reasons and
@@ -978,7 +1054,7 @@ consumed candidates/evidence are validated before producing a result.
 | `NON_SEMANTIC` | `non_semantic` |
 | Proven suppressible special-rule case | `suppressed_artifact` |
 | The defined deterministic marker/structural case | `structural_only` |
-| Optional-LLM, human, unknown or non-finalized special case | `review` |
+| Optional-LLM, uncertain (including legacy `HUMAN_REVIEW`), unknown or non-finalized special case | `review` |
 
 Suppression is a specific whitelist with safeguards, not the meaning of every
 `SPECIAL_CASE_RULE`. Stale/unsafe hyphen-wrap routes without required proof, or
@@ -995,12 +1071,32 @@ packet_decision.outcome = REAL_CHANGE
 resolution.status      = review
 ```
 
+#### Normalized result state
+
+Each new change/table resolution also carries `result_state`:
+`accepted` + `needs_review=false` -> `supported`; `non_semantic`,
+`suppressed_artifact` or `structural_only` -> `non_semantic`; every other status
+-> `uncertain`. The rule lives in `phase1/contracts/result_state.py` and is shared
+by Stage 14, the reader, API summary and report model. An explicit
+`result_state` is accepted only when it agrees with the state derived from the
+deterministic `status`/`needs_review`; a stale or contradictory value cannot
+promote a review/unknown record to `supported`.
+
+Legacy fields are not rewritten: `resolution.status` keeps `accepted`/`review`,
+and `needs_review`, `review_queue` and typed `kind=review` references remain
+readable as uncertainty. Readers derive `result_state` from legacy fields when it
+is absent, so an old workspace stays readable without migration. The canonical
+`statistics.result_state_counts` counts distinct records; a review linked to a
+change/table does not double-count it. This is presentation/consumer
+normalization, not a new acceptance authority.
+
 #### Canonical collections
 
-- **`changes`:** non-table `MODIFIED`, `ADDED`, `DELETED`, including both accepted
-  and review records. The count is not the count of confirmed changes.
+- **`changes`:** non-table `MODIFIED`, `ADDED`, `DELETED`, including both
+  supported and uncertain records. The count is not the count of confirmed
+  changes; use `resolution.result_state` for the normalized state.
 - **`table_changes`:** `TABLE_MODIFIED`, `TABLE_ADDED`, `TABLE_DELETED`, with
-  resolution and cell details.
+  resolution, normalized state and cell details.
 - **`review_queue`:** unresolved changes, duplicate assignments, movement,
   split/merge/boundary, resegmentation and table reviews. Entries are deduplicated
   by source evidence/candidate identity and case type, not by text alone.
@@ -1037,21 +1133,27 @@ contains **accepted** changes as compact units, grouped by provisional-anchor
 buckets. Units carry old/new text/page references, compact token operations and
 bounded changed-cell information.
 
-It is not the complete canonical result: review stays separate, suppressed
-events are not semantic units, and details can be capped. The Phase 2 bounded
-reader reads the canonical result; it is not restricted to this accepted-only
-index.
+It is not the complete canonical result: uncertain records stay separate,
+suppressed events are not semantic units, and details can be capped. The primary
+HTML/PDF report and the Phase 2 bounded reader use canonical records, not this
+accepted-only index, so completeness does not depend on it.
 
 #### `comparison_redline.pdf`
 
 A newly rendered ReportLab report, not annotation injected into the original
-source PDF. It shows old/new source strings, changed spans and review status:
-removed/replaced text is struck red, inserted/replaced text is underlined red,
-and possible wraps carry an explicitly unverified label.
+source PDF. Stage 15 passes the saved old/new structured documents so the report
+can show document identities, section/page groups and limitations; `render_pdf`
+still accepts the two-argument form. The human report orders: summary and counts,
+**Supported changes**, **Uncertain differences**, then a separated **Technical
+appendix** with IDs, routes, scores and provenance. Uncertain items keep their
+plain-language reasons and evidence references; an evidence-only case never gets
+a fabricated old/new pair.
 
-If stored offsets cannot be verified against source text, rendering realigns
-conservatively, shows differences and emits a warning rather than trusting bad
-offsets. Review records remain visible, with a review-queue section.
+The established flow markup still shows old/new source strings with changed spans
+and wrap warnings. If stored offsets cannot be verified against source text,
+rendering realigns conservatively, shows differences and emits a warning rather
+than trusting bad offsets. The report's strike/underline marks are generated by
+the comparison; they are not source-PDF formatting evidence.
 
 #### `comparison_inline.pdf`
 
@@ -1075,19 +1177,38 @@ auditable instead of hidden.
 
 #### `bu_comparison_redline.html`
 
-Walks OLD reading order with modifications/deletions at OLD positions and
-additions anchored near preceding matched OLD positions. It includes accepted
-table changes. This view renders **accepted changes only**; open review work is
-not presented as confirmed inline content.
+The primary human report, built from the same `reporting/report_model.py`
+projection as the PDF. It starts with old/new document identities, supported and
+uncertain counts, a plain-language message and extraction limitations, then shows
+**Supported changes** and **Uncertain differences** grouped by supported
+section/outline title, otherwise physical page or an unassigned group. Old-side
+element ids resolve only against the old structured document and new-side ids
+only against the new one, so equal id strings cannot leak a section across
+sides; a paired record prefers its old orientation. Table records keep separate
+old/new source pages. Table changes render row/column/cell rows with exact
+old/new values. Each text difference has a readable Before/After with page references and inline
+context; table changes render row/column/cell rows with exact old/new values. An
+evidence-only uncertainty shows reasons and references without a fake pair.
+Technical IDs, legacy status, route, similarity and provenance sit in a folded
+`<details>` section. The legend says report-generated strike-through/underline
+marks are not source-PDF formatting.
 
-Some previews/details are bounded. The HTML is not a replacement for complete
-canonical evidence; its item count can differ from PDF/canonical collections.
+The report also walks OLD reading order as a full document view; only supported
+changes are marked inline, while uncertain items remain listed above. Grouping
+titles are hints, not verified hierarchy. Previews/details stay bounded, and the
+HTML is not a replacement for complete canonical evidence.
+
+A no-change message is not emitted while uncertain items or extraction
+limitations remain: the report says that no supported differences were found and
+names what remains unresolved.
 
 #### `review_queue_export.csv`
 
-Exports the final review queue for triage, with review/source IDs, case type,
+Exports the final uncertainty queue for triage, with review/source IDs, case type,
 route, status, reasons and available references. It uses UTF-8 BOM and a `;`
-delimiter for Excel-friendly handling.
+delimiter for Excel-friendly handling. It is an optional legacy export, not
+required user work and not the only place uncertain cases appear; the primary
+report and reader include them too.
 
 #### `bu_comparison_review_manifest.json`
 
@@ -1120,7 +1241,7 @@ This is an illustrative path, not a guarantee of an unmeasured matching score:
 | 08 | Retain `100 -> 150` as token replacement with representation-specific evidence. |
 | 09 | Quantitative safeguards must not swallow it as cosmetic resegmentation. |
 | 10 | Tables follow their separate structured branch; this paragraph is not a table. |
-| 11 | Accept only under the applicable rules; weak quality/alignment evidence keeps review. |
+| 11 | Accept only under the applicable rules; weak quality/alignment evidence stays uncertain. |
 | 12 | Create a packet only if the route is optional evaluation. |
 | 13 | Disabled/mock/real evaluator can provide a recommendation. |
 | 14 | Resolve under deterministic route rules and preserve advice/uncertainty. |
@@ -1137,6 +1258,8 @@ Artifacts below are relative to `<workspace>/output/`:
 ```text
 01  old_di_raw.json
     new_di_raw.json
+    old_pdf_outline.json             # optional native-outline sidecar
+    new_pdf_outline.json             # optional native-outline sidecar
 02  old_extraction_validation.json
     new_extraction_validation.json
 03  old_document.json
@@ -1202,14 +1325,26 @@ every field is copied forever. Return to the artifact that owns the evidence.
 - Every extracted character is correct.
 - Every true counterpart was found by bounded retrieval.
 - High string similarity means equivalent meaning.
-- The TOC graph is correct for every PDF.
+- The TOC/outline graph is correct for every PDF.
+- An embedded outline is the same thing as a printed contents page.
 - Derived furniture was removed from every comparison path.
 - A missing match is necessarily a real addition or deletion.
-- Accepted means human-approved or legally/semantically verified.
+- Accepted/supported means human-approved or legally/semantically verified.
 - A compact report/index contains all canonical evidence.
 - All artifacts in an arbitrarily reused workspace are mutually fresh merely
   because they exist.
 - Completing 15 stages proves universal comparison accuracy.
+
+Specific limits in this slice:
+
+- Source-PDF strikethrough detection is explicitly deferred. The internal
+  paragraph model does not retain source-format evidence, and report
+  strike-through marks are comparison deletions, not source formatting.
+- Private table-extraction quality remains unverified without a representative
+  failing page/artifacts. No speculative extraction or matching change is
+  claimed, and the Stage 10 all-pairs performance finding is not repaired here.
+- Synthetic outline/report/routing tests do not prove real-provider, company-PDF
+  or Windows acceptance.
 
 **`accepted` means accepted by the current engine rules, not verified ground
 truth.** `CRR_RUN_LLM=mock` does not disable real Stage 1 extraction, and it does
@@ -1255,7 +1390,7 @@ outside the approved environment. Use synthetic fixtures for shareable examples.
 01–02: What did extraction read, and what evidence suggests a reading problem?
 03–05: Represent it as traceable, comparable data with provisional context.
 06–10: Find counterparts, differences, movement/segmentation and table evidence.
-11–13: Route clear cases and preserve those needing rules, advice or people.
+11–13: Route clear cases and preserve uncertainty, rules or advisory evidence.
 14:    Build the canonical result without erasing uncertainty.
 15:    Present/export it without deciding the truth again.
 ```

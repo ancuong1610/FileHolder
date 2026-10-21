@@ -479,6 +479,38 @@ def compact_validation_summary(report: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def extraction_source_identity(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a validated source-PDF identity carried by Stage 1, if any.
+
+    Legacy DI-only raw inputs have no ``source_binding``; no identity is
+    invented. Only a byte hash plus physical page count can authorize Stage 5
+    outline consumption later, so a malformed block is dropped.
+    """
+    binding = raw.get("source_binding")
+    if not isinstance(binding, dict):
+        return None
+    sha = binding.get("sha256")
+    page_count = binding.get("page_count")
+    if (
+        not isinstance(sha, str)
+        or len(sha) != 64
+        or any(character not in "0123456789abcdef" for character in sha.lower())
+        or not isinstance(page_count, int)
+        or isinstance(page_count, bool)
+        or page_count < 1
+    ):
+        return None
+    identity = {
+        "format": binding.get("format") or "pdf",
+        "sha256": sha.lower(),
+        "page_count": page_count,
+    }
+    basename = binding.get("basename")
+    if isinstance(basename, str) and basename:
+        identity["basename"] = basename
+    return identity
+
+
 def build_internal_document(raw: dict[str, Any], report: dict[str, Any] | None, *, document_id: str, prefix: str) -> dict[str, Any]:
     page_validation = build_page_validation_map(report)
     word_offsets, words = build_word_index(raw)
@@ -513,6 +545,18 @@ def build_internal_document(raw: dict[str, Any], report: dict[str, Any] | None, 
         "elements_with_provisional_section_path": 0,
     }
 
+    source = {
+        "provider": "azure_document_intelligence",
+        "api_version": value_of(raw, "apiVersion", "api_version"),
+        "model_id": value_of(raw, "modelId", "model_id"),
+        "string_index_type": value_of(raw, "stringIndexType", "string_index_type"),
+    }
+    identity = extraction_source_identity(raw)
+    if identity is not None:
+        # Byte hash + page count binding travels with the extraction so Stage 5
+        # can reject a stale outline sidecar without the source PDF.
+        source["extraction_source"] = identity
+
     return {
         "schema_version": SCHEMA_VERSION,
         "processing": {
@@ -529,12 +573,7 @@ def build_internal_document(raw: dict[str, Any], report: dict[str, Any] | None, 
         },
         "document": {
             "document_id": document_id,
-            "source": {
-                "provider": "azure_document_intelligence",
-                "api_version": value_of(raw, "apiVersion", "api_version"),
-                "model_id": value_of(raw, "modelId", "model_id"),
-                "string_index_type": value_of(raw, "stringIndexType", "string_index_type"),
-            },
+            "source": source,
             "validation_summary": compact_validation_summary(report),
             "page_count": len(pages),
             "pages": pages,
@@ -553,6 +592,18 @@ def validate_internal_document(model: dict[str, Any], raw: dict[str, Any], repor
         model["schema_version"] == SCHEMA_VERSION,
         "s03: internal schema_version mismatch",
     )
+    expected_identity = extraction_source_identity(raw)
+    stored_identity = document["source"].get("extraction_source")
+    if expected_identity is None:
+        require(
+            "extraction_source" not in document["source"],
+            "s03: extraction source identity was invented for legacy raw input",
+        )
+    else:
+        require(
+            stored_identity == expected_identity,
+            "s03: extraction source identity drifted from the raw source binding",
+        )
     require(
         document["page_count"] == len(raw.get("pages") or []) == len(pages),
         "s03: page_count does not match the raw and materialized pages",

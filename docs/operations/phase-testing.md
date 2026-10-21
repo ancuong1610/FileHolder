@@ -45,6 +45,8 @@ python -m unittest discover -s tests
 # Focus on this defect / saved-workspace feature
 python -m unittest tests.phase1.test_structure_evidence
 python -m unittest tests.phase2.test_local_flow tests.phase2.test_saved_workspace
+# Outline prepass, automatic uncertainty results, complete reports, reader state
+python -m unittest tests.phase1.test_pdf_outline tests.phase1.test_automatic_reports
 ```
 
 Private-fixture tests may skip when their inputs are absent. Report skips and
@@ -58,11 +60,16 @@ python -m document_compare.phase2.workflow.local_reviewer --phase phase2 --works
 ```
 
 The demo root must be fresh. Inspect `output/comparison_redline.pdf`,
-`output/comparison_inline.pdf`, `output/comparison_result.json` and the review
-queue. The check prints a bounded summary and `reader_check: passed`; it exercises
-real summarize/search and a sample details call when records exist. An empty
-valid result reports `details_check: skipped_no_records`, not fabricated coverage.
-It does not start API/MCP or make a DI/model call.
+`output/comparison_inline.pdf`, `output/bu_comparison_redline.html`,
+`output/comparison_result.json` and the review queue. The primary HTML/PDF report
+shows supported changes and uncertain differences separately, with counts,
+before/after values, section/page groups and a technical details/appendix area;
+it must not claim “no differences” while uncertainty or extraction limitations
+remain. The check prints a bounded summary and `reader_check: passed`; it exercises
+real summarize/search and a sample details call when records exist. Reader output
+exposes normalized `result_state` while legacy `accepted`/`review` filters keep
+working. An empty valid result reports `details_check: skipped_no_records`, not
+fabricated coverage. It does not start API/MCP or make a DI/model call.
 
 Test real API/MCP transports separately with the existing mock harness:
 
@@ -143,7 +150,7 @@ requires none of these chat credentials. Type `quit` / `exit` to stop.
 
 Suggested acceptance questions (also useful prompts for your coding agent):
 
-- “Summarize changes in this workspace, distinguishing confirmed from review.”
+- “Summarize changes in this workspace, distinguishing supported changes from uncertain differences.”
 - “Find changes to payment limits; give old/new values, typed IDs and pages.”
 - “Explain the evidence for CHANGE-… and what remains uncertain.”
 - Ask about a nonexistent ID: the answer must not invent a record.
@@ -196,6 +203,15 @@ Inspect Stage 5 `structure_evidence`: furniture IDs must have `layout`
 membership, not be TOC sources or section headings; genuine TOC entries and
 links must survive. The fix excludes derived furniture throughout TOC processing,
 not just changes membership order, and keeps validation enabled.
+
+If the workspace contains `output/old_pdf_outline.json` /
+`output/new_pdf_outline.json`, check the recorded source SHA-256, physical page
+count, status and diagnostics. An absent, invalid, stale or partial sidecar is a
+normal fallback to reconstruction, not a reason to trust it; only entries whose
+title and physical page both match a body element may appear as outline links.
+Native bookmarks are not a printed contents page and do not prove hierarchy.
+Outline acquisition failure must not by itself invalidate otherwise valid DI
+extraction.
 
 The private EBA PDFs/artifacts are not bundled here. Synthetic regressions prove
 the failure mechanism, **not** acceptance on that pair. Record the actual command,

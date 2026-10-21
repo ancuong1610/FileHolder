@@ -1,8 +1,10 @@
 # Document Comparison Service
 
-Local tool that compares two versions of the same PDF and reports the changes,
-with an optional read-only agent that answers questions over the saved result.
-Scope: two-version document comparison only.
+Local tool that compares two versions of the same PDF and reports one complete
+result: supported changes, uncertain differences with reasons, and extraction
+limitations. There is no approval task or queue to finish a comparison; the
+optional read-only agent answers questions over the saved result. Scope:
+two-version document comparison only.
 
 New here? Read [docs/architecture.md](docs/architecture.md) for the layout and
 15-stage map, and [docs/review-guide.md](docs/review-guide.md) to route a task to
@@ -34,8 +36,11 @@ python -m document_compare demo --fixture internal_policy_report --root "workspa
 ```
 
 The root must be fresh; the demo refuses to overwrite existing `output/` and
-supports paths with spaces. Inspect `output/comparison_redline.pdf` and
-`output/comparison_inline.pdf` afterwards.
+supports paths with spaces. Inspect `output/comparison_redline.pdf`,
+`output/comparison_inline.pdf` and `output/bu_comparison_redline.html` afterwards.
+The primary HTML/PDF report includes supported changes, uncertain differences
+with plain-language reasons, section/page grouping and a separate technical
+details area or appendix. It is not an accepted-only summary.
 
 ## Commands
 
@@ -102,6 +107,15 @@ contracts are unchanged.
 - Local pilot only — not a production architecture or deployment decision.
   Database, authentication and shared deployment remain open.
 - Contract/integration evidence only; no real-LLM reasoning or real-company
-  semantic accuracy is claimed.
+  semantic accuracy is claimed. Synthetic tests do not prove company-PDF or
+  Windows acceptance.
+- Native PDF bookmarks are optional structural evidence, not a printed table of
+  contents or authoritative hierarchy. Missing, partial, invalid or stale
+  outline evidence falls back to the existing reconstruction path.
+- Source-PDF strikethrough detection is explicitly deferred. Report
+  strike-through marks compare old/new text; they are not source formatting.
+  Private table-extraction quality remains unverified without a representative
+  failing sample, and the Stage 10 all-pairs performance issue is not repaired
+  in this slice.
 - `workspace/` and `input/*` (except `input/.gitkeep`) are gitignored; keep
   credentials in `.env` only and never commit or paste them.

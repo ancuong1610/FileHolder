@@ -204,7 +204,7 @@ class AmbiguousHyphenStaysReviewTest(unittest.TestCase):
         self.assertFalse(s11_routing.source_proven_line_wrap(candidate))
 
         route, case_type, reasons = s11_routing.route_non_table("modified", candidate)
-        self.assertEqual(route, "HUMAN_REVIEW", (route, case_type, reasons))
+        self.assertEqual(route, "UNCERTAIN_RESULT", (route, case_type, reasons))
         self.assertEqual(case_type, "hyphenation_wrap_artifact", reasons)
         self.assertIn("hyphenation_wrap_unproven_source", reasons)
 
@@ -224,7 +224,7 @@ class AmbiguousHyphenStaysReviewTest(unittest.TestCase):
         )
         self.assertTrue(s11_routing.wrap_artifact_like(candidate))
         route, case_type, reasons = s11_routing.route_non_table("modified", candidate)
-        self.assertEqual(route, "HUMAN_REVIEW", (route, case_type, reasons))
+        self.assertEqual(route, "UNCERTAIN_RESULT", (route, case_type, reasons))
         self.assertEqual(case_type, "hyphenation_wrap_artifact", reasons)
         self.assertIn("hyphenation_wrap_unproven_source", reasons)
 
@@ -243,7 +243,7 @@ class AmbiguousHyphenStaysReviewTest(unittest.TestCase):
         )
         self.assertTrue(s11_routing.wrap_artifact_like(candidate))
         route, case_type, reasons = s11_routing.route_non_table("modified", candidate)
-        self.assertEqual(route, "HUMAN_REVIEW", (route, case_type, reasons))
+        self.assertEqual(route, "UNCERTAIN_RESULT", (route, case_type, reasons))
         self.assertIn("hyphenation_wrap_unproven_source", reasons)
 
         canonical = _canonical(candidate)
@@ -254,7 +254,7 @@ class AmbiguousHyphenStaysReviewTest(unittest.TestCase):
         candidate = _candidate("now here", "nowhere", ["now", "here"], ["nowhere"])
         self.assertTrue(s11_routing.wrap_artifact_like(candidate))
         route, case_type, reasons = s11_routing.route_non_table("modified", candidate)
-        self.assertEqual(route, "HUMAN_REVIEW", (route, case_type, reasons))
+        self.assertEqual(route, "UNCERTAIN_RESULT", (route, case_type, reasons))
         self.assertIn("hyphenation_wrap_unproven_source", reasons)
 
         canonical = _canonical(candidate)
@@ -309,7 +309,7 @@ class MixedBoundaryProvenanceTest(unittest.TestCase):
         self.assertFalse(s11_routing.source_proven_line_wrap(candidate))
 
         route, case_type, reasons = s11_routing.route_non_table("modified", candidate)
-        self.assertEqual(route, "HUMAN_REVIEW", (route, case_type, reasons))
+        self.assertEqual(route, "UNCERTAIN_RESULT", (route, case_type, reasons))
         self.assertIn("hyphenation_wrap_unproven_source", reasons)
 
         canonical = _canonical(candidate)
@@ -334,7 +334,7 @@ class MixedBoundaryProvenanceTest(unittest.TestCase):
         self.assertFalse(s11_routing.source_proven_line_wrap(candidate))
 
         route, case_type, reasons = s11_routing.route_non_table("modified", candidate)
-        self.assertEqual(route, "HUMAN_REVIEW", (route, case_type, reasons))
+        self.assertEqual(route, "UNCERTAIN_RESULT", (route, case_type, reasons))
         self.assertIn("hyphenation_wrap_unproven_source", reasons)
 
     def test_uppercase_continuation_line_break_is_not_proven(self):
@@ -351,7 +351,7 @@ class MixedBoundaryProvenanceTest(unittest.TestCase):
         self.assertTrue(s11_routing.wrap_artifact_like(candidate))
         self.assertFalse(s11_routing.source_proven_line_wrap(candidate))
         route, case_type, reasons = s11_routing.route_non_table("modified", candidate)
-        self.assertEqual(route, "HUMAN_REVIEW", (route, case_type, reasons))
+        self.assertEqual(route, "UNCERTAIN_RESULT", (route, case_type, reasons))
 
     def test_digit_continuation_line_break_is_not_proven(self):
         candidate = _candidate(
@@ -365,7 +365,7 @@ class MixedBoundaryProvenanceTest(unittest.TestCase):
         self.assertTrue(s11_routing.wrap_artifact_like(candidate))
         self.assertFalse(s11_routing.source_proven_line_wrap(candidate))
         route, case_type, reasons = s11_routing.route_non_table("modified", candidate)
-        self.assertEqual(route, "HUMAN_REVIEW", (route, case_type, reasons))
+        self.assertEqual(route, "UNCERTAIN_RESULT", (route, case_type, reasons))
 
 
 class GenuineHyphenChangeTest(unittest.TestCase):
@@ -423,7 +423,7 @@ class GenuineHyphenChangeTest(unittest.TestCase):
         self.assertTrue(s11_routing.wrap_artifact_like(candidate))
 
         route, case_type, reasons = s11_routing.route_non_table("modified", candidate)
-        self.assertEqual(route, "HUMAN_REVIEW", (route, case_type, reasons))
+        self.assertEqual(route, "UNCERTAIN_RESULT", (route, case_type, reasons))
         self.assertIn("hyphenation_wrap_with_semantic_signal", reasons)
 
         canonical = _canonical(candidate)

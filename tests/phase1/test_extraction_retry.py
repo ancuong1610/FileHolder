@@ -187,6 +187,12 @@ class ChunkCachePartialFailureTest(unittest.TestCase):
             ), mock.patch.object(
                 s01_extract, "pdf_sha256", return_value="sha-test"
             ), mock.patch.object(
+                s01_extract, "collect_outline", return_value={
+                    "status": "read_failure",
+                    "entries": [],
+                    "diagnostics": [{"reason": "outline_read_failure"}],
+                },
+            ), mock.patch.object(
                 s01_extract, "chunk_dir", return_value=cache
             ), mock.patch.object(
                 s01_extract, "CHUNK_SIZE", 1

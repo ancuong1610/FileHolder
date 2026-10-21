@@ -35,6 +35,7 @@ from typing import Any
 from document_compare.shared.paths import find_project_root, output_dir, chunk_dir
 from document_compare.shared.json_io import save_json as common_save_json
 from document_compare.phase1.extraction.di_fields import get_page_number, set_page_number
+from document_compare.phase1.extraction.pdf_outline import collect_outline
 from document_compare.phase1.contracts.validation import require
 
 FORCE_CHUNK_EXTRACTION = False
@@ -852,11 +853,28 @@ def extract_merge_or_load_document_from_pdf(doc: dict[str, Any]) -> dict[str, An
             "Set CRR_OLD_PDF / CRR_NEW_PDF or place the PDF at the default path."
         )
 
-    total_pages = debug_page_range()
-    if total_pages is None:
-        total_pages = pdf_page_count(pdf_path)
+    debug_limit = debug_page_range()
+    full_page_count = pdf_page_count(pdf_path)
+    total_pages = debug_limit if debug_limit is not None else full_page_count
 
     sha = pdf_sha256(pdf_path)
+    # Native outline evidence is optional and is collected before any DI
+    # request, including when every chunk is already cached. A read failure is
+    # recorded in the versioned sidecar and never aborts valid extraction.
+    # Outline identity always describes the full source PDF, so a legacy debug
+    # page subset keeps working without rebinding the sidecar to a truncated file.
+    outline = collect_outline(
+        pdf_path,
+        side=label,
+        output_dir=final_output_path.parent,
+        expected_sha256=sha,
+        expected_page_count=full_page_count,
+    )
+    if outline.get("identity_mismatch"):
+        raise RuntimeError(
+            f"{document_name}: source PDF bytes changed while collecting the "
+            "outline prepass; refusing to bind stale outline evidence."
+        )
     directory = chunk_dir(PROJECT_ROOT, sha)
     force = env_flag("CRR_FORCE_REEXTRACT")
     ranges = chunk_ranges(total_pages)
@@ -897,6 +915,15 @@ def extract_merge_or_load_document_from_pdf(doc: dict[str, Any]) -> dict[str, An
         )
 
     merged = merge_document_intelligence_chunks(chunks)
+    # Extraction identity is source-bound and travels with the merged model so
+    # Stage 3 can carry it to Stage 5 without requiring the source PDF to remain
+    # present. It is not a filename-based binding.
+    merged["source_binding"] = {
+        "format": "pdf",
+        "sha256": sha,
+        "page_count": full_page_count,
+        "basename": pdf_path.name,
+    }
     validate_merged_extraction(merged, expected_pages=total_pages, document_name=document_name)
     save_json(merged, final_output_path)
     print(f"Saved merged extraction: {final_output_path}")

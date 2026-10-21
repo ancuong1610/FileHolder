@@ -6,8 +6,10 @@ Read first: `result_reader.py` — builds summaries, bounded search and details;
 contract in [docs/contracts/three-tool-reader.md](../../../../docs/contracts/three-tool-reader.md).
 
 Input/output: reads an existing job's saved artifacts; returns bounded typed
-envelopes; never mutates artifacts or accepts arbitrary paths.
+envelopes with normalized `result_state` while legacy `accepted`/`review` filters
+stay compatible. Never mutates artifacts or accepts arbitrary paths.
 
-Dependencies: `shared` JSON/path helpers; no Phase 2 agent or writer imports.
+Dependencies: `shared` JSON/path helpers and `phase1.contracts.result_state`; no
+Phase 2 agent or writer imports.
 
-Check: `python -m unittest tests.phase2.test_reader`.
+Check: `python -m unittest tests.phase2.test_reader tests.phase1.test_automatic_reports`.

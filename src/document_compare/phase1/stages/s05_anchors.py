@@ -25,10 +25,16 @@ environment. File orchestration lives in :func:`main`, which the
 """
 from document_compare.shared.paths import find_project_root
 from document_compare.phase1.extraction.di_fields import get_page_number, set_page_number
+from document_compare.phase1.extraction.pdf_outline import (
+    resolve_outline_evidence,
+    sidecar_name as outline_sidecar_name,
+)
 from document_compare.phase1.structure.furniture import classify_derived_furniture
 from document_compare.phase1.structure.reconstruction import (
     STRUCTURE_EVIDENCE_VERSION,
+    SUPPORTED_STRUCTURE_EVIDENCE_VERSIONS,
     build_structure_evidence,
+    outline_supported_heading_ids,
     validate_structure_evidence,
 )
 from document_compare.phase1.contracts.validation import require
@@ -44,7 +50,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-STEP5_VERSION = "4.1.0-generic-structural-anchors"
+STEP5_VERSION = "4.2.0-outline-supported-structure"
 INPUT_SCHEMA_VERSION = "0.2.0"
 OUTPUT_SCHEMA_VERSION = "0.3.0"
 
@@ -323,6 +329,7 @@ def anchor_evidence(
     element: dict[str, Any],
     marker_ids: set[str],
     furniture_ids: set[str] | None = None,
+    outline_entry_ids: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     if not element.get("comparison_eligible"):
         return None, "comparison_ineligible_or_layout_element"
@@ -341,6 +348,23 @@ def anchor_evidence(
         # provisional anchor even when a single DI role labels it a heading.
         # Raw roles, text and eligibility are untouched.
         return None, "derived_recurring_furniture_needs_review"
+
+    outline_entry_id = (outline_entry_ids or {}).get(str(element.get("element_id")))
+    if outline_entry_id is not None:
+        # A verified outline link (exact title + physical page, never furniture)
+        # is preferred additive context support. It is not authoritative
+        # hierarchy and does not rewrite the raw DI role.
+        text = str(
+            element.get("normalized_text")
+            or element.get("text")
+            or ""
+        ).strip()
+        return {
+            "anchor_type": "pdf_outline_heading",
+            "confidence": "high",
+            "anchor_key": f"heading:{canonical_key_text(text)}",
+            "outline_entry_id": outline_entry_id,
+        }, None
 
     text = str(
         element.get("normalized_text")
@@ -437,6 +461,8 @@ def strip_detected_marker_prefix(
 # ---- provisional context reconstruction ----
 def reconstruct_provisional_context(
     source_model: dict[str, Any],
+    *,
+    pdf_outline: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     result = copy.deepcopy(source_model)
     result["schema_version"] = OUTPUT_SCHEMA_VERSION
@@ -454,6 +480,16 @@ def reconstruct_provisional_context(
     derived_furniture = classify_derived_furniture(document)
     furniture_ids = set(derived_furniture["by_element"])
 
+    # Build structure evidence before anchors so supported native-outline links
+    # can also support provisional context. With no usable outline this is the
+    # same pure evidence layer as before.
+    structure_evidence = build_structure_evidence(
+        document,
+        derived_furniture=derived_furniture,
+        pdf_outline=pdf_outline,
+    )
+    outline_entry_ids = outline_supported_heading_ids(structure_evidence)
+
     anchors = []
     rejected = Counter()
 
@@ -463,6 +499,7 @@ def reconstruct_provisional_context(
             element,
             marker_ids,
             furniture_ids,
+            outline_entry_ids,
         )
 
         if evidence is None:
@@ -487,6 +524,8 @@ def reconstruct_provisional_context(
             "normalized_text": element.get("normalized_text"),
             "context_is_authoritative_hierarchy": False,
         }
+        if evidence.get("outline_entry_id") is not None:
+            anchor["outline_entry_id"] = evidence["outline_entry_id"]
         anchors.append(anchor)
 
     anchor_by_order = {
@@ -583,13 +622,9 @@ def reconstruct_provisional_context(
         "margin_marker_profile": marker_profile,
     }
 
-    # Additive, versioned TOC evidence layer. It never mutates raw evidence,
-    # eligibility, order or table accounting, and it does not create an
-    # authoritative hierarchy; the strategy above is preserved unchanged.
-    structure_evidence = build_structure_evidence(
-        document,
-        derived_furniture=derived_furniture,
-    )
+    # Additive, versioned TOC/outline evidence layer. It never mutates raw
+    # evidence, eligibility, order or table accounting, and it does not create
+    # an authoritative hierarchy; the strategy above is preserved unchanged.
     document["structure_evidence"] = structure_evidence
     statistics["structure_evidence_version"] = STRUCTURE_EVIDENCE_VERSION
     statistics["structure_evidence_toc_entries"] = structure_evidence["toc"]["entry_count"]
@@ -600,6 +635,13 @@ def reconstruct_provisional_context(
     )
     processing["section_reconstruction"]["structure_evidence_additive"] = True
     processing["section_reconstruction"]["structure_evidence_authoritative"] = False
+    outline = structure_evidence.get("outline")
+    if isinstance(outline, dict):
+        statistics["structure_evidence_outline_status"] = outline.get("status")
+        statistics["structure_evidence_outline_entries"] = outline.get("entry_count")
+        statistics["structure_evidence_outline_linked"] = outline.get("matched_count")
+        processing["section_reconstruction"]["outline_evidence_additive"] = True
+        processing["section_reconstruction"]["outline_evidence_authoritative"] = False
 
     return result
 
@@ -717,7 +759,7 @@ def validate_structured_model(
     structure_evidence = result_document.get("structure_evidence")
     if not isinstance(structure_evidence, dict):
         raise ValueError("s05: structure_evidence layer is missing")
-    if structure_evidence.get("version") != STRUCTURE_EVIDENCE_VERSION:
+    if structure_evidence.get("version") not in SUPPORTED_STRUCTURE_EVIDENCE_VERSIONS:
         raise ValueError("s05: unexpected structure evidence version")
     validate_structure_evidence(result_document, structure_evidence)
 
@@ -742,6 +784,17 @@ def main() -> None:
         for label, paths in documents.items()
     }
 
+    outline_evidence = {}
+    for label, model in source_models.items():
+        document = document_from(model)
+        sidecar = project_root / "output" / outline_sidecar_name(label)
+        evidence = resolve_outline_evidence(document, sidecar)
+        outline_evidence[label] = evidence
+        print(
+            f"{label.upper()}: outline evidence {evidence.get('status')}"
+            + (f" ({evidence.get('reason')})" if evidence.get("reason") else "")
+        )
+
     for label, model in source_models.items():
         validate_step4_model(model, documents[label]["input"])
         print(
@@ -750,7 +803,9 @@ def main() -> None:
         )
 
     structured_models = {
-        label: reconstruct_provisional_context(model)
+        label: reconstruct_provisional_context(
+            model, pdf_outline=outline_evidence[label]
+        )
         for label, model in source_models.items()
     }
 

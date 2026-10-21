@@ -203,7 +203,12 @@ def main() -> None:
     print(f"Saved: {index_path}")
     print(json.dumps(phase2["statistics"], ensure_ascii=False, indent=2))
 
-    pdf_path = render_pdf(comparison, out / "comparison_redline.pdf")
+    pdf_path = render_pdf(
+        comparison,
+        out / "comparison_redline.pdf",
+        old_document=old_doc,
+        new_document=new_doc,
+    )
     print(f"Saved: {pdf_path}")
 
     # Additive inline one-flow PDF (report-only) plus its omission/join audit.

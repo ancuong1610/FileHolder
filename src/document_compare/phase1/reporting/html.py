@@ -15,6 +15,11 @@ from pathlib import Path
 
 from document_compare.shared.paths import find_project_root
 from document_compare.phase1.reporting.annotations import annotate_change
+from document_compare.phase1.reporting.report_model import (
+    build_report_model,
+    plain_reasons,
+)
+from document_compare.phase1.contracts.result_state import record_result_state
 
 MAX_INLINE_CHARS = 220
 
@@ -41,6 +46,28 @@ details.comment summary{cursor:pointer;color:#1a4d8f;font-weight:bold;font-size:
 .tableblock{border:1px solid #ccc;border-radius:4px;margin:12px 0;padding:10px 14px;background:#fbfbf8;font-size:13px}
 .tableblock h4{margin:0 0 8px;font-size:12.5px;color:#333}
 .cellrow{margin:3px 0;line-height:1.45}
+.summary{border:1px solid #d5d0c7;border-radius:6px;padding:14px 18px;background:#faf8f3;margin:8px 0 18px}
+.summary h2{margin:0 0 8px;font-size:16px;color:#1f2d3d}
+.summary .documents{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:0 0 10px}
+.summary .doc{border-left:3px solid #1a4d8f;padding-left:10px}
+.summary .doc b{display:block;font-size:14px}
+.summary .counts{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0}
+.summary .count{background:#fff;border:1px solid #ccc;border-radius:12px;padding:2px 10px;font-size:12px}
+.summary .limitations{margin:8px 0 0;padding-left:18px;font-size:12px;color:#6a4c00}
+.diffcard{border:1px solid #d8d3ca;border-radius:5px;margin:12px 0;padding:12px 16px;background:#fffdf9}
+.diffcard h3{margin:0 0 8px;font-size:14px;color:#1f2d3d}
+.diffcard.uncertain{border-left:4px solid #8a6d00}
+.diffcard.supported{border-left:4px solid #1a4d8f}
+.beforeafter{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.beforeafter .side{border-top:2px solid #ccc;padding-top:6px}
+.beforeafter .side b{font-size:11.5px;color:#555;text-transform:uppercase;letter-spacing:.03em}
+.beforeafter p{margin:5px 0 0;font-size:14px;line-height:1.55;white-space:pre-wrap}
+.uncertain-reason{margin:4px 0;font-size:13px}
+.evidence-refs{margin:6px 0;padding-left:18px;font-size:12px;color:#444}
+table.report-table{border-collapse:collapse;width:100%;margin:8px 0;font-size:12.5px}
+table.report-table th,table.report-table td{border:1px solid #ccc;padding:5px 8px;vertical-align:top;text-align:left}
+table.report-table th{background:#f0ede6;color:#333}
+.nochange{font-size:14px;background:#f7f4ed;border-left:4px solid #666;padding:10px 14px;margin:10px 0}
 footer.note{max-width:1240px;margin:10px auto 40px;font-size:11px;color:#666;text-align:center}
 @media (max-width:900px){.row{grid-template-columns:1fr}}
 @media print{body{background:#fff}main{box-shadow:none;margin:0;max-width:none;padding:10mm 12mm}}
@@ -248,6 +275,253 @@ def change_row(flow_html: str, note_html: str | None) -> str:
     return f"<div class='row'><div class='flow'>{flow_html}</div><span></span></div>"
 
 
+def _text_html(text) -> str:
+    return _esc(text).replace("\n", "<br/>")
+
+
+def _technical_details(entry: dict) -> str:
+    resolution = entry.get("resolution") or {}
+    rows = [
+        ("Record", entry.get("record_id") or entry.get("review_id") or "-"),
+        ("Kind", entry.get("kind") or "-"),
+        ("Change type", entry.get("change_type") or "-"),
+        ("Result state", entry.get("result_state") or "-"),
+        ("Legacy status", resolution.get("status") or "-"),
+        ("Route", resolution.get("route") or "-"),
+        ("Case type", entry.get("case_type") or "-"),
+    ]
+    if entry.get("source_candidate_id"):
+        rows.append(("Source candidate", entry.get("source_candidate_id")))
+    if entry.get("old_element_id"):
+        rows.append(("Old element", f"{entry.get('old_element_id')} (p.{entry.get('old_page')})"))
+    if entry.get("new_element_id"):
+        rows.append(("New element", f"{entry.get('new_element_id')} (p.{entry.get('new_page')})"))
+    if entry.get("similarity") is not None:
+        rows.append(("Similarity", f"{entry['similarity']:.3f}"))
+    if entry.get("linked_record_id"):
+        rows.append(("Linked record", f"{entry.get('linked_kind')}:{entry.get('linked_record_id')}"))
+    body = "".join(
+        f"<tr><td class='k'>{_esc(key)}:</td><td>{_esc(value)}</td></tr>"
+        for key, value in rows
+    )
+    reasons = entry.get("reasons") or []
+    reason_html = (
+        "<p><b>Reasons:</b> " + _esc(", ".join(str(reason) for reason in reasons)) + "</p>"
+        if reasons else ""
+    )
+    return (
+        "<details class='technical'><summary>Technical details</summary>"
+        f"<table>{body}</table>{reason_html}</details>"
+    )
+
+
+def _evidence_refs(entry: dict) -> str:
+    evidence = entry.get("evidence") or {}
+    bits: list[str] = []
+    for key in ("old_element_ids", "new_element_ids"):
+        for item in evidence.get(key) or []:
+            bits.append(f"{key}: {item}")
+    for key in ("old_element_id", "new_element_id"):
+        if evidence.get(key):
+            bits.append(f"{key}: {evidence.get(key)}")
+    for key in ("candidate_ids", "review_reasons"):
+        for item in evidence.get(key) or []:
+            bits.append(f"{key}: {item}")
+    if not bits:
+        return ""
+    return "<ul class='evidence-refs'>" + "".join(
+        f"<li>{_esc(item)}</li>" for item in bits
+    ) + "</ul>"
+
+
+def _before_after_html(entry: dict) -> str:
+    before = entry.get("before") or ""
+    after = entry.get("after") or ""
+    old_page = entry.get("old_page")
+    new_page = entry.get("new_page")
+    # Each primary column shows its own exact source side. The combined inline
+    # diff remains available in the full-document view below; using it here
+    # would place new-only text inside the Before column.
+    old_label = "Before / old" + (f" (page {old_page})" if old_page is not None else "")
+    new_label = "After / new" + (f" (page {new_page})" if new_page is not None else "")
+    return (
+        "<div class='beforeafter'>"
+        f"<div class='side'><b>{_esc(old_label)}</b><p>{_text_html(before)}</p></div>"
+        f"<div class='side'><b>{_esc(new_label)}</b><p>{_text_html(after)}</p></div>"
+        "</div>"
+    )
+
+
+def _is_table_entry(entry: dict) -> bool:
+    """Uncertain tables are projected as reviews but keep table shape."""
+    return "old_table" in entry or "new_table" in entry
+
+
+def _table_card(
+    entry: dict,
+    *,
+    reason_html: str = "",
+    data_record_id: str | None = None,
+    review_id: str = "",
+) -> str:
+    rows = []
+    for cell in entry.get("cell_changes") or []:
+        if not isinstance(cell, dict):
+            continue
+        classification = str(cell.get("classification") or "changed")
+        old_cell = cell.get("old") if isinstance(cell.get("old"), dict) else {}
+        new_cell = cell.get("new") if isinstance(cell.get("new"), dict) else {}
+        old_text = old_cell.get("text")
+        new_text = new_cell.get("text")
+        if classification.upper() == "UNCHANGED" and old_text == new_text:
+            continue
+        row_index = cell.get("old_row_index")
+        if row_index is None:
+            row_index = cell.get("new_row_index")
+        column_index = cell.get("column_index")
+        location = f"row {row_index if row_index is not None else '?'} / column {column_index if column_index is not None else '?'}"
+        rows.append(
+            "<tr>"
+            f"<td>{_esc(location)}</td>"
+            f"<td>{_text_html(old_text if old_text is not None else '—')}</td>"
+            f"<td>{_text_html(new_text if new_text is not None else '—')}</td>"
+            f"<td>{_esc(classification)}</td>"
+            "</tr>"
+        )
+    old_t = entry.get("old_table") or {}
+    new_t = entry.get("new_table") or {}
+    shape = (
+        f"old {old_t.get('row_count', '?')}x{old_t.get('column_count', '?')} / "
+        f"new {new_t.get('row_count', '?')}x{new_t.get('column_count', '?')}"
+    )
+    pages = (
+        f"old pages {old_t.get('source_pages') or old_t.get('pages') or []} / "
+        f"new pages {new_t.get('source_pages') or new_t.get('pages') or []}"
+    )
+    if not rows:
+        rows.append(
+            "<tr><td colspan='4'>No cell-level text changes are available; "
+            "the table record itself remains listed.</td></tr>"
+        )
+    title = entry.get("record_id") or "Table change"
+    data_id = data_record_id or title
+    return (
+        f"<article class='diffcard {_esc(entry.get('result_state') or '')}' "
+        f"data-record-id='{_esc(data_id)}' "
+        f"data-review-id='{_esc(review_id)}'>"
+        f"<h3>{_esc(title)} &middot; {_esc(entry.get('change_type') or 'TABLE_CHANGE')} "
+        f"&middot; {_esc(entry.get('group_title') or 'Unassigned')}</h3>"
+        f"<p class='uncertain-reason'>{_esc(shape)} &middot; {_esc(pages)}</p>"
+        f"{reason_html}"
+        "<table class='report-table'><thead><tr><th>Row / column</th>"
+        "<th>Old value</th><th>New value</th><th>Change</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+        f"{_technical_details(entry)}</article>"
+    )
+
+
+def _entry_card(entry: dict) -> str:
+    state = entry.get("result_state") or "uncertain"
+    reasons = plain_reasons(entry.get("reasons") or []) if state == "uncertain" else []
+    reason_html = (
+        "<p class='uncertain-reason'>Why this remains uncertain: "
+        f"{_esc(' '.join(reasons))}</p>"
+        if reasons else ""
+    )
+    review_id = entry.get("review_id") or ""
+    if _is_table_entry(entry):
+        # An uncertain table is projected as kind=review with old_table/new_table.
+        # Keep the table cells and its plain reason; preserve the review typed id
+        # when a review record is the source of this uncertainty.
+        data_id = review_id or entry.get("record_id")
+        return _table_card(
+            entry,
+            reason_html=reason_html,
+            data_record_id=data_id,
+            review_id=review_id,
+        )
+    record_id = review_id or entry.get("record_id") or "record"
+    if entry.get("kind") == "review" and not entry.get("linked_kind"):
+        heading = f"Uncertain \u00b7 {entry.get('case_type') or 'unresolved case'}"
+        body = (
+            reason_html
+            or "<p class='uncertain-reason'>This case remains uncertain; "
+            "no further reason was recorded.</p>"
+        ) + _evidence_refs(entry)
+    else:
+        heading = (
+            f"{entry.get('change_type') or 'Change'} \u00b7 "
+            f"{entry.get('group_title') or 'Unassigned'}"
+        )
+        body = reason_html + _before_after_html(entry)
+    return (
+        f"<article class='diffcard {_esc(state)}' data-record-id='{_esc(record_id)}' "
+        f"data-review-id='{_esc(entry.get('review_id') or '')}'>"
+        f"<h3>{_esc(heading)}</h3>{body}{_technical_details(entry)}</article>"
+    )
+
+
+def _summary_html(report: dict) -> str:
+    documents = report.get("documents") or {}
+    old = documents.get("old") or {}
+    new = documents.get("new") or {}
+    summary = report.get("summary") or {}
+
+    def doc_block(label: str, doc: dict) -> str:
+        pages = doc.get("page_count")
+        elements = doc.get("source_element_count")
+        bits = []
+        if pages is not None:
+            bits.append(f"{pages} page(s)")
+        if elements is not None:
+            bits.append(f"{elements} source element(s)")
+        return (
+            f"<div class='doc'><b>{_esc(label)}: {_esc(doc.get('label') or 'Document')}</b>"
+            f"<span>{_esc(' · '.join(bits))}</span></div>"
+        )
+
+    counts = (
+        f"<span class='count'>{summary.get('supported_changes', 0)} supported element change(s)</span>"
+        f"<span class='count'>{summary.get('supported_table_changes', 0)} supported table change(s)</span>"
+        f"<span class='count'>{summary.get('uncertain_items', 0)} uncertain item(s)</span>"
+        f"<span class='count'>{summary.get('non_semantic_events', 0)} non-semantic event(s)</span>"
+    )
+    limitations = summary.get("limitations") or []
+    limitation_html = ""
+    if limitations:
+        limitation_html = "<ul class='limitations'>" + "".join(
+            f"<li>{_esc(item)}</li>" for item in limitations
+        ) + "</ul>"
+    message = report.get("message")
+    message_html = f"<p class='nochange'>{_esc(message)}</p>" if message else ""
+    return (
+        "<section class='summary'><h2>Comparison summary</h2>"
+        f"<div class='documents'>{doc_block('Old', old)}{doc_block('New', new)}</div>"
+        f"<div class='counts'>{counts}</div>{message_html}{limitation_html}</section>"
+    )
+
+
+def _cards_for(report: dict, state: str) -> str:
+    groups = report.get("groups") or []
+    if state == "supported":
+        blocks = []
+        for group in groups:
+            entries = group.get("supported") or []
+            if not entries:
+                continue
+            blocks.append(f"<div class='bucket'>{_esc(group.get('title'))}</div>")
+            blocks.extend(_entry_card(entry) for entry in entries)
+        return "".join(blocks)
+    blocks = []
+    for group in groups:
+        entries = group.get("uncertain") or []
+        if not entries:
+            continue
+        blocks.append(f"<div class='bucket'>{_esc(group.get('title'))}</div>")
+        blocks.extend(_entry_card(entry) for entry in entries)
+    return "".join(blocks)
+
+
 def render_change_block(change: dict, cls: str) -> str:
     old_text = ((change.get("old") or {}).get("text")) or ""
     new_text = ((change.get("new") or {}).get("text")) or ""
@@ -351,6 +625,9 @@ def render_table_change(record: dict) -> str:
 def render(root: Path) -> Path:
     comparison, old_doc, new_doc = load_outputs(root)
     out_dir = root / "output"
+    report = build_report_model(
+        comparison, old_document=old_doc, new_document=new_doc
+    )
 
     elements = sorted(
         (old_doc.get("document") or {}).get("elements") or [],
@@ -367,11 +644,12 @@ def render(root: Path) -> Path:
 
     del_mod_by_old: dict[str, dict] = {}
     added_by_new: dict[str, dict] = {}
-    # Only deterministically ACCEPTED changes belong in the BU redline.
-    # Review/uncertain items stay in the review queue CSV; proven artifacts
-    # (hyphenation, markers, structural) never reach canonical `changes`.
+    # Only deterministically ACCEPTED changes belong in the BU inline redline.
+    # Uncertain items are shown in the primary report above; only supported
+    # changes are marked inline. Proven artifacts (hyphenation, markers,
+    # structural) never reach canonical `changes`.
     for change in comparison.get("changes") or []:
-        if ((change.get("resolution") or {}).get("status") != "accepted"):
+        if record_result_state(change, kind="change") != "supported":
             continue
         if change.get("change_type") == "ADDED":
             added_by_new[(change.get("new") or {}).get("element_id")] = change
@@ -396,14 +674,28 @@ def render(root: Path) -> Path:
         pending_adds.setdefault(anchor_idx, []).append(change)
     emitted_added: set[str] = set()
 
-    story = ["<main>",
-             "<h2 style='font-size:16px;color:#555'>Inline redline &ndash; old version with change markers</h2>",
+    supported_cards = _cards_for(report, "supported")
+    uncertain_cards = _cards_for(report, "uncertain")
+    table_cards = "".join(
+        _entry_card(entry) for entry in report.get("supported_tables") or []
+    )
+    story = ["<main>", _summary_html(report)]
+    if supported_cards:
+        story.append("<h2 style='font-size:17px;color:#1f2d3d'>Supported changes</h2>")
+        story.append(supported_cards)
+    if uncertain_cards:
+        story.append("<h2 style='font-size:17px;color:#1f2d3d'>Uncertain differences</h2>")
+        story.append(uncertain_cards)
+    if table_cards:
+        story.append("<h2 style='font-size:17px;color:#1f2d3d'>Table changes</h2>")
+        story.append(table_cards)
+    story.extend([
+             "<h2 style='font-size:16px;color:#555'>Full document view &ndash; old version with change markers</h2>",
              "<p style='font-size:12px;color:#777'>"
-             "<span style='color:#c00000;text-decoration:line-through'>struck through</span> = removed &middot; "
-             "<span style='color:#c00000;text-decoration:underline'>underlined</span> = new text &middot; "
-             "Right column: comment/proof per change (ID, status, similarity, reasons). "
-             "Only confirmed substantive changes; formatting/segmentation artifacts "
-             "and open review cases: see review_queue_export.csv.</p>"]
+             "<span style='color:#c00000;text-decoration:line-through'>Report-generated strike-through</span> = old text removed by this comparison &middot; "
+             "<span style='color:#c00000;text-decoration:underline'>Underlined</span> = new text &middot; "
+             "These marks are generated by the report; they are not a claim about formatting marks in the source PDF. "
+             "Only supported changes are marked inline; uncertain items are listed above and remain unresolved.</p>"])
     anchor_labels = anchor_label_map(old_doc)
     current_bucket = None
     for order, element in enumerate(elements):
@@ -450,36 +742,19 @@ def render(root: Path) -> Path:
             continue
         story.append(render_change_block(change, ""))
 
-    table_changes = [
-        record
-        for record in comparison.get("table_changes") or []
-        if (record.get("resolution") or {}).get("status") == "accepted"
-    ]
-    if table_changes:
-        story.append("<div class='bucket'>Table changes</div>")
-        for record in table_changes:
-            story.append(render_table_change(record))
-
     story.append("</main>")
-    stats = comparison.get("statistics") or {}
-    rendered_types: dict[str, int] = {}
-    for change in del_mod_by_old.values():
-        rendered_types[change.get("change_type", "?")] = rendered_types.get(change.get("change_type", "?"), 0) + 1
-    for change in added_by_new.values():
-        rendered_types[change.get("change_type", "?")] = rendered_types.get(change.get("change_type", "?"), 0) + 1
-    if table_changes:
-        rendered_types["TABLE_CHANGE"] = len(table_changes)
-    header_counts = ", ".join(f"{k}: {v}" for k, v in rendered_types.items())
+    summary = report.get("summary") or {}
     html_doc = (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'/>"
-        "<title>Document Comparison Redline</title><style>" + _CSS + "</style></head><body>"
-        "<header class='bar'><h1>Document Comparison - Phase 1 Redline Review</h1>"
-        f"<p>Confirmed changes &mdash; {_esc(header_counts)} &middot; "
-        f"open review cases: {_esc(stats.get('review_queue', '?'))} "
-        "(review_queue_export.csv)</p></header>"
+        "<title>Document Comparison</title><style>" + _CSS + "</style></head><body>"
+        "<header class='bar'><h1>Document comparison</h1>"
+        f"<p>{_esc(summary.get('supported_changes', 0))} supported element change(s) &middot; "
+        f"{_esc(summary.get('supported_table_changes', 0))} supported table change(s) &middot; "
+        f"{_esc(summary.get('uncertain_items', 0))} uncertain item(s) &middot; "
+        f"{_esc(summary.get('non_semantic_events', 0))} non-semantic event(s)</p></header>"
         + "".join(story)
         + "<footer class='note'>Generated by document_compare - deterministic Phase-1 pipeline "
-        "(LLM evaluation optional/disabled)</footer></body></html>"
+        "(LLM evaluation optional/disabled). Engine support is not legal/semantic verification.</footer></body></html>"
     )
 
     target = out_dir / "bu_comparison_redline.html"

@@ -29,6 +29,11 @@ import json
 import re
 from typing import Any, Iterable
 
+from document_compare.phase1.contracts.result_state import (
+    record_result_state,
+    result_state_counts,
+)
+
 JOB_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
 MAX_LIMIT = 50
@@ -67,8 +72,8 @@ DETAIL_KINDS = ("change", "table", "review")
 STATUSES = ("all", "accepted", "review")
 
 GROUND_TRUTH_NOTICE = (
-    "Engine acceptance is not legal or semantic ground truth; review items are "
-    "unresolved and are not confirmed changes."
+    "Engine acceptance is not legal or semantic ground truth; uncertain items "
+    "(legacy review records) are unresolved and are not confirmed changes."
 )
 
 # Safe, relative artifact links (no host, no filesystem path).
@@ -376,6 +381,9 @@ def summarize(
                 "review_open": len(reviews),
                 "change_type_counts": change_type_counts,
                 "resolution_status_counts": resolution_status_counts,
+                "result_state_counts": result_state_counts(
+                    changes, tables, reviews, _as_list(canonical.get("non_semantic_events"))
+                ),
             },
             "documents": {
                 "old": _identity(_as_dict(canonical.get("old_document"))),
@@ -412,6 +420,10 @@ def _resolution(item: dict[str, Any]) -> dict[str, Any]:
 
 def _status(item: dict[str, Any]) -> str:
     return str(_resolution(item).get("status") or "")
+
+
+def _result_state(item: dict[str, Any], kind: str) -> str:
+    return record_result_state(item, kind=kind)
 
 
 def _needs_review(item: dict[str, Any], kind: str) -> bool:
@@ -587,6 +599,7 @@ def _build_search_records(canonical: dict[str, Any]) -> list[dict[str, Any]]:
                 "record_id": record_id,
                 "change_type": item.get("change_type"),
                 "status": _status(item) or ("review" if needs_review else "unresolved"),
+                "result_state": _result_state(item, kind),
                 "needs_review": needs_review,
                 "confirmed": _confirmed(item, kind),
                 "pages": pages,
@@ -719,6 +732,7 @@ def search(
                 "record_id": record["record_id"],
                 "change_type": record["change_type"],
                 "status": record["status"],
+                "result_state": record["result_state"],
                 "needs_review": record["needs_review"],
                 "confirmed": record["confirmed"],
                 "pages": record["pages"],
@@ -941,6 +955,8 @@ def _change_projection(record: dict[str, Any], text_offset: int, text_limit: int
     token_diff, token_clipped = _bounded_json(record.get("token_diff"))
     provenance, provenance_clipped = _bounded_json(record.get("provenance"))
     resolution, resolution_clipped = _bounded_json(_resolution(record))
+    if isinstance(resolution, dict):
+        resolution["result_state"] = _result_state(record, "change")
     clipped = [
         name
         for name, flag in (
@@ -953,6 +969,7 @@ def _change_projection(record: dict[str, Any], text_offset: int, text_limit: int
     return {
         "change_id": record.get("change_id"),
         "change_type": record.get("change_type"),
+        "result_state": _result_state(record, "change"),
         "old": {
             **_bounded_text(old.get("text"), text_offset, text_limit),
             "element_id": old.get("element_id"),
@@ -1209,10 +1226,13 @@ def details(
             _as_list(record.get("cell_changes")), cell_offset, cell_limit, text_offset, text_limit
         )
         resolution, resolution_clipped = _bounded_json(_resolution(record))
+        if isinstance(resolution, dict):
+            resolution["result_state"] = _result_state(record, "table")
         out["table"] = {
             "table_change_id": record.get("table_change_id"),
             "change_type": record.get("change_type"),
             "classification": record.get("classification"),
+            "result_state": _result_state(record, "table"),
             "old": _bounded_table_side(record.get("old")),
             "new": _bounded_table_side(record.get("new")),
             "resolution": resolution,
@@ -1241,6 +1261,8 @@ def details(
     else:
         evidence, evidence_clipped = _bounded_json(record.get("evidence"))
         resolution, resolution_clipped = _bounded_json(_resolution(record))
+        if isinstance(resolution, dict):
+            resolution["result_state"] = "uncertain"
         old_anchors, new_anchors, linked_refs = _review_anchor_sources(record, index)
         out["review"] = {
             "review_id": record.get("review_id"),
@@ -1248,6 +1270,7 @@ def details(
             "change_id": record.get("change_id"),
             "table_change_id": record.get("table_change_id"),
             "case_type": record.get("case_type"),
+            "result_state": "uncertain",
             "needs_review": True,
             "confirmed": False,
             "resolution": resolution,

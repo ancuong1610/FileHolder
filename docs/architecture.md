@@ -15,11 +15,11 @@ src/document_compare/
   phase1/                 # comparison engine, all 15 stages
     stages/               # s01_extract … s15_serve
     pipeline/             # CLI, stage runner, generic-only mode
-    extraction/           # DI field/page helpers
-    structure/            # TOC, hierarchy, recurring furniture
+    extraction/           # DI field/page helpers + native PDF-outline prepass
+    structure/            # TOC, hierarchy, recurring furniture, outline links
     matching/             # reconciliation, language profile
-    contracts/            # validation, review identity, outcome migration
-    reporting/            # original/inline PDF, HTML, diff spans/annotations
+    contracts/            # validation, review identity, result-state, outcomes
+    reporting/            # report model + original/inline PDF, HTML, diff spans
     evaluation/           # optional benchmarks/diagnostics (off the runtime path)
   phase2/                 # API, workflow, MCP, reader, agent
     api/                  # HTTP service + operational summary
@@ -62,21 +62,21 @@ than the immediately previous artifact.
 
 | Stage | File | Purpose / why it exists | Input | Output |
 | --- | --- | --- | --- | --- |
-| s01 | `s01_extract.py` | Turn PDFs into machine-readable text, tables and locations; cache chunks so extraction can resume without repeating successful provider work. | two PDFs / DI cache or API | raw DI JSON + extraction warnings |
+| s01 | `s01_extract.py` | Turn PDFs into machine-readable text, tables and locations; cache chunks so extraction can resume without repeating successful provider work. Collects optional, source-bound native outline sidecars before DI. | two PDFs / DI cache or API | raw DI JSON + outline sidecars + extraction warnings |
 | s02 | `s02_validate_extraction.py` | Detect broken page/span/table/geometry/confidence evidence before treating extraction noise as document changes; optionally cross-check native PDF text. | raw DI JSON | validation JSON |
-| s03 | `s03_internal_schema.py` | Isolate downstream comparison from the DI response shape using stable element IDs while preserving source text, locations and validation evidence. | DI + validation | neutral internal document JSON |
+| s03 | `s03_internal_schema.py` | Isolate downstream comparison from the DI response shape using stable element IDs while preserving source text, locations and validation evidence. Carries the Stage-1 extraction source identity. | DI + validation | neutral internal document JSON |
 | s04 | `s04_normalize.py` | Reduce conservative Unicode/whitespace/wrap noise without rewriting raw text or meaningful quantitative differences. | document JSON | normalized JSON |
-| s05 | `s05_anchors.py` | Supply provisional heading context and additive TOC/section evidence, distinguishing recurring page furniture from body content. These are hypotheses, not authoritative hierarchy. | normalized JSON | structured JSON + `structure_evidence` |
+| s05 | `s05_anchors.py` | Supply provisional heading context and additive TOC/outline/section evidence, distinguishing recurring page furniture from body content. Verified native outline links are preferred evidence; absence or staleness falls back to reconstruction. These are hypotheses, not authoritative hierarchy. | normalized JSON + outline sidecars | structured JSON + `structure_evidence` |
 | s06 | `s06_exact_matching.py` | Remove confidently unchanged pairs first; use provisional context to disambiguate repeated identical text where supported. | structured pair | exact matches |
 | s07 | `s07_modified_matching.py` | Find supported modified pairs among residuals rather than reporting every edit as unrelated deletion/addition. | structured pair + exact-match residuals | bounded modified matches |
 | s08 | `s08_candidates.py` | Assemble paired/unpaired candidates and token diffs while conserving all old/new elements and keeping uncertain duplicate matches visible. | exact + modified matches | candidate/change list |
 | s09 | `s09_movement.py` | Distinguish relocation and split/merge/resegmentation evidence from ordinary edits, without hiding genuine content changes. | candidates | movement-resegmented candidates |
 | s10 | `s10_tables.py` | Compare logical tables across physical page continuations and align rows/cells, preserving unresolved table evidence. | structured pair + movement candidates | table comparison records |
-| s11 | `s11_routing.py` | Decide deterministically which cases can be resolved and which need review or optional advisory evaluation; no domain-specific verifier. | candidates + tables | review routing |
+| s11 | `s11_routing.py` | Decide deterministically which cases are supported and which remain uncertain or eligible for optional advisory evaluation; no domain-specific verifier. | candidates + tables | routing with `UNCERTAIN_RESULT` |
 | s12 | `s12_packets.py` | Package only eligible cases into bounded old/new evidence for optional evaluation, not an unbounded document upload. | eligible routes + evidence | bounded review packets |
 | s13 | `s13_llm_evaluator.py` | Obtain optional advisory `REAL_CHANGE` / `ARTIFACT` / `UNCERTAIN` recommendations with traceability; mock mode exercises the contract without model calls. | packets | disabled/mock/real decisions + trace |
-| s14 | `s14_canonical_result.py` | Produce the single canonical result using deterministic resolution rules; preserve LLM advice without letting it approve or suppress changes. | routing + candidate/table/evaluation evidence | canonical result + review queue |
-| s15 | `s15_serve.py` | Present/export the canonical result for human inspection and downstream reading without recomputing matching. | canonical + structured artifacts | HTML/PDF/CSV/manifest/index bundle |
+| s14 | `s14_canonical_result.py` | Produce the single canonical result using deterministic resolution rules; preserve LLM advice without letting it approve or suppress changes. Adds normalized `result_state` while retaining legacy status fields. | routing + candidate/table/evaluation evidence | canonical result + review queue |
+| s15 | `s15_serve.py` | Present/export the canonical result for human inspection and downstream reading without recomputing matching; primary HTML/PDF use canonical records, not an accepted-only projection. | canonical + structured artifacts | complete HTML/PDF/CSV/manifest/index bundle |
 
 Stage 15 is Phase 1 reporting, not Phase 2 logic. Its generated
 `phase2_change_index.json` keeps that historical filename as an artifact
@@ -103,6 +103,38 @@ could classify a recurring `Contents` header as `toc`, contradicting the furnitu
 invariant. Synthetic regressions reproduce that exact error plus interrupted
 text/table TOCs; verification on the private EBA artifacts is a separate step.
 
+### Stage 5: native outline evidence and fallback
+
+Stage 1 reads embedded PDF bookmarks locally with PyMuPDF before any DI request
+and writes versioned `output/old_pdf_outline.json` / `new_pdf_outline.json`
+sidecars. Each records the source PDF SHA-256, physical page count, acquisition
+status (`available`, `partial`, `absent`, `invalid`, `read_failure`), validated
+entries and diagnostics. Entries keep source order, level, title, physical page,
+separate page label and destination evidence; they never invent DI element IDs.
+A printed contents page is not an embedded outline, and the prepass does not add
+a second OCR/TOC detector.
+
+Binding is to PDF bytes, not a filename. Stage 1 carries a `source_binding` into
+the merged raw model; Stage 3 stores it as
+`document.source.extraction_source`; Stage 5 consumes a sidecar only when its
+SHA-256 and physical page count still match. A missing identity, stale sidecar,
+malformed file or unsupported version yields no outline evidence and the existing
+reconstruction path. Invalid, external or out-of-bounds destinations remain
+diagnostics rather than headings. An outline-read failure does not abort valid
+DI extraction; a genuine PDF/extraction failure still follows existing failure
+behavior. Source PDFs remain at their external `CRR_OLD_PDF` / `CRR_NEW_PDF`
+paths.
+
+Stage 5 links an entry to a body element only on exact canonical title **and**
+physical page, excluding layout, table, ineligible, furniture and contents-heading
+elements. Conflicting pages, duplicate titles and duplicate links stay
+`unmatched`/`ambiguous` with a reason. Supported links add a
+`structure_evidence.outline` block and `pdf_outline_heading` anchor support;
+outline-backed sections are preferred and printed-TOC/body inference fills
+uncovered regions. Derived furniture is never promoted, uncovered body content is
+not suppressed, and a usable outline is still not authoritative hierarchy.
+Legacy `structure_evidence` versions `1.1.x` remain readable.
+
 ## Runtime flow
 
 1. The Phase 2 API service (`phase2/api/service.py`) creates an isolated
@@ -115,7 +147,9 @@ text/table TOCs; verification on the private EBA artifacts is a separate step.
    (`phase2/workflow/local_reviewer.py`).
 4. The reader MCP server (`phase2/mcp/reader_server.py`) exposes exactly
    `summarize`, `search`, `details`, backed by the read-only projection in
-   `phase2/reader/result_reader.py` over saved canonical artifacts.
+   `phase2/reader/result_reader.py` over saved canonical artifacts. It reports
+   normalized `supported`/`uncertain`/`non_semantic` state while keeping legacy
+   review fields readable.
 5. The agent (`phase2/agent/`) plans only over those three reader tools; it does
    not download the full report and re-implement search.
 

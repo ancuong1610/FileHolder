@@ -357,7 +357,7 @@ class SemanticSignalRoutingTest(unittest.TestCase):
                     (name, route, case_type, reasons),
                 )
                 self.assertEqual(
-                    route, "HUMAN_REVIEW", (name, route, case_type, reasons)
+                    route, "UNCERTAIN_RESULT", (name, route, case_type, reasons)
                 )
                 resolution = s14_canonical_result._resolve(
                     "MODIFIED-CANDIDATE-TOKEN-EQUIV",

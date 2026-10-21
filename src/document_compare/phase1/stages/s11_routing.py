@@ -399,7 +399,7 @@ def route_non_table(
     if group == "duplicate_exact_review":
         reasons.append("duplicate_exact_assignment_ambiguous")
         return (
-            "HUMAN_REVIEW",
+            "UNCERTAIN_RESULT",
             "duplicate_exact_assignment",
             sorted(set(reasons)),
         )
@@ -434,7 +434,7 @@ def route_non_table(
             if representation_semantic_signal_tokens(candidate):
                 reasons.append(WRAP_SEMANTIC_SIGNAL_REASON)
                 return (
-                    "HUMAN_REVIEW",
+                    "UNCERTAIN_RESULT",
                     "hyphenation_wrap_artifact",
                     sorted(set(reasons)),
                 )
@@ -447,7 +447,7 @@ def route_non_table(
                 )
             reasons.append(WRAP_UNPROVEN_REASON)
             return (
-                "HUMAN_REVIEW",
+                "UNCERTAIN_RESULT",
                 "hyphenation_wrap_artifact",
                 sorted(set(reasons)),
             )
@@ -478,7 +478,7 @@ def route_non_table(
             # structural-only changes: without source-backed proof they must
             # not be deterministically classified. Route to human review.
             return (
-                "HUMAN_REVIEW",
+                "UNCERTAIN_RESULT",
                 "structural_heading_boundary",
                 sorted(set(reasons)),
             )
@@ -495,7 +495,7 @@ def route_non_table(
                     "comparison_token_equivalent_with_semantic_signal"
                 )
                 return (
-                    "HUMAN_REVIEW",
+                    "UNCERTAIN_RESULT",
                     "tokenization_neutral_with_semantic_signal",
                     sorted(set(reasons)),
                 )
@@ -562,7 +562,7 @@ def route_non_table(
         if norm and norm in opposite_norm_texts:
             reasons.append("identical_text_exists_on_opposite_residual_side")
             return (
-                "HUMAN_REVIEW",
+                "UNCERTAIN_RESULT",
                 "duplicate_exact_residual",
                 sorted(set(reasons)),
             )
@@ -573,7 +573,7 @@ def route_non_table(
             if reading_order > aligned_frontier + FRONTIER_MARGIN:
                 reasons.append("beyond_aligned_coverage_frontier")
                 return (
-                    "HUMAN_REVIEW",
+                    "UNCERTAIN_RESULT",
                     "beyond_aligned_coverage",
                     sorted(set(reasons)),
                 )
@@ -614,7 +614,7 @@ def route_non_table(
         )
 
     return (
-        "HUMAN_REVIEW",
+        "UNCERTAIN_RESULT",
         "unclassified_non_table_case",
         sorted(set(reasons)),
     )
@@ -642,12 +642,12 @@ def route_table_match(match: dict[str, Any]) -> tuple[str,str,list[str]]:
     if cls == "EXTRACTION_ARTIFACT_REVIEW":
         return "SPECIAL_CASE_RULE", "table_extraction_artifact", reasons
     if cls == "STRUCTURE_CHANGED_REVIEW":
-        return "HUMAN_REVIEW", "table_structure_change", reasons
+        return "UNCERTAIN_RESULT", "table_structure_change", reasons
     if cls == "MODIFIED":
         if match.get("needs_review"):
             return "SPECIAL_CASE_LLM_OPTIONAL", "table_modified_with_review_evidence", reasons
         return "ACCEPT_DETERMINISTIC", "table_modified", reasons
-    return "HUMAN_REVIEW", "unclassified_table_match", reasons
+    return "UNCERTAIN_RESULT", "unclassified_table_match", reasons
 
 
 def build_generic_routing(
@@ -706,7 +706,7 @@ def build_generic_routing(
     # evidence never collides with the candidate route it refers to.
     for group, case_type, route, include_similarity in (
         ("resegmentation_review", "resegmentation_suspect", "SPECIAL_CASE_RULE", True),
-        ("movement_review", "movement_block_review", "HUMAN_REVIEW", False),
+        ("movement_review", "movement_block_review", "UNCERTAIN_RESULT", False),
         ("structural_split_merge_review", "structural_split_merge", "SPECIAL_CASE_RULE", False),
         ("structural_boundary_review", "structural_boundary", "SPECIAL_CASE_RULE", False),
     ):
@@ -762,7 +762,7 @@ def build_generic_routing(
             "source_kind": "table_review_group",
             "source_group": "unresolved_table_groups",
             "candidate_id": item.get("review_group_id"),
-            "route": "HUMAN_REVIEW",
+            "route": "UNCERTAIN_RESULT",
             "case_type": "unresolved_table_group",
             "review_reasons": [item.get("reason") or "unresolved_table_group"],
         })
@@ -773,7 +773,7 @@ def build_generic_routing(
     # not consume review bandwidth.
     generic_review_list = [
         route for route in routes
-        if route["route"] in {"HUMAN_REVIEW", "SPECIAL_CASE_LLM_OPTIONAL"}
+        if route["route"] in {"UNCERTAIN_RESULT", "HUMAN_REVIEW", "SPECIAL_CASE_LLM_OPTIONAL"}
     ]
     return {
         "routes": routes,
@@ -874,6 +874,7 @@ def main() -> None:
             "total_routes": len(routes),
             "llm_optional_cases": route_counts["SPECIAL_CASE_LLM_OPTIONAL"],
             "human_review_cases": route_counts["HUMAN_REVIEW"],
+            "uncertain_result_cases": route_counts["UNCERTAIN_RESULT"],
             "llm_optional_fraction": round(
                 route_counts["SPECIAL_CASE_LLM_OPTIONAL"] / max(1, len(routes)), 4
             ),

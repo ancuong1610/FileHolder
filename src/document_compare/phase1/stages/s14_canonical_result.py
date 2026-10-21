@@ -24,6 +24,10 @@ from typing import Any
 from document_compare.shared.paths import REPO_ROOT, find_project_root, output_dir
 from document_compare.phase1.pipeline.mode import resolve_domain_profile
 from document_compare.phase1.contracts.outcomes import build_outcome_migration
+from document_compare.phase1.contracts.result_state import (
+    derive_result_state,
+    result_state_counts,
+)
 from document_compare.phase1.contracts.review_identity import structural_route_identity
 from document_compare.phase1.contracts.validation import require
 
@@ -143,6 +147,7 @@ def _resolve(
             "method": "deterministic",
             "status": "review",
             "needs_review": True,
+            "result_state": "uncertain",
         }
 
     route_name = route["route"]
@@ -186,6 +191,7 @@ def _resolve(
         "method": "deterministic",
         "status": status,
         "needs_review": needs_review,
+        "result_state": derive_result_state(status, needs_review),
         "review_reasons": route.get("review_reasons") or [],
     }
     decision = decisions_by_route.get(route["route_id"])
@@ -655,6 +661,9 @@ def build_comparison_result(
     resolution_status_counts = dict(
         Counter(item["resolution"]["status"] for item in canonical_items)
     )
+    result_states = result_state_counts(
+        changes, table_changes, review_queue, non_semantic_events
+    )
     # Verification is retired; every canonical item is implicitly
     # ``not_applicable`` and no verification records are joined or attached.
     domain_status_counts = {"not_applicable": len(canonical_items)} if canonical_items else {}
@@ -692,6 +701,7 @@ def build_comparison_result(
             "non_semantic_events": len(non_semantic_events),
             "change_type_counts": dict(Counter(x["change_type"] for x in changes)),
             "resolution_status_counts": resolution_status_counts,
+            "result_state_counts": result_states,
             "domain_status_counts": domain_status_counts,
         },
         "changes": changes,
@@ -720,6 +730,17 @@ def build_comparison_result(
             for x in changes + table_changes
         ),
         "s14 produced an accepted resolution that still needs review.",
+    )
+    require(
+        all(
+            x["resolution"].get("result_state")
+            == derive_result_state(
+                x["resolution"].get("status"),
+                x["resolution"].get("needs_review"),
+            )
+            for x in changes + table_changes
+        ),
+        "s14 produced an inconsistent normalized result_state.",
     )
     return final
 

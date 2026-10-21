@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from document_compare.phase1.contracts.result_state import result_state_counts
+
 def _load(job_root: Path, name: str) -> dict[str, Any]:
     path = Path(job_root) / "output" / name
     if not path.is_file():
@@ -157,6 +159,9 @@ def build_summary(job_root: Path, status: dict[str, Any]) -> dict[str, Any]:
         "extraction": _extraction(old_val, new_val, old_doc, new_doc),
         "changes": _changes_counts(changes, tables),
         "disposition": _disposition(changes, stats, review_queue, non_semantic),
+        "result_states": result_state_counts(
+            changes, tables, review_queue, non_semantic
+        ),
         "matching": _matching((candidates.get("statistics") or {})),
         "tables": _table_summary(tables, result.get("unresolved_table_reviews", [])),
         "evaluator": {

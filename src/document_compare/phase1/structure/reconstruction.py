@@ -40,7 +40,15 @@ from document_compare.phase1.contracts.validation import require
 # 1.1.2: refuses to force a single title match whose parsed numeric label
 # contradicts the entry's (different namespace or number); the entry stays
 # unmatched with an explicit label_conflict reason.
-STRUCTURE_EVIDENCE_VERSION = "1.1.2"
+# 1.2.0: additive source-bound native PDF-outline evidence, links and preferred
+# section hypotheses. Legacy 1.1.x evidence remains readable.
+STRUCTURE_EVIDENCE_VERSION = "1.2.0"
+LEGACY_STRUCTURE_EVIDENCE_VERSIONS = ("1.1.0", "1.1.1", "1.1.2")
+SUPPORTED_STRUCTURE_EVIDENCE_VERSIONS = (
+    *LEGACY_STRUCTURE_EVIDENCE_VERSIONS,
+    STRUCTURE_EVIDENCE_VERSION,
+)
+OUTLINE_EVIDENCE_VERSION = "1.0.0"
 
 LAYOUT_ELEMENT_TYPES = {"header", "footer", "page_number"}
 BODY_HEADING_ELEMENT_TYPES = {"heading", "title"}
@@ -338,16 +346,125 @@ def _next_content_element(
     return None
 
 
+def reconcile_outline_entries(
+    document: dict[str, Any],
+    outline: dict[str, Any] | None,
+    *,
+    furniture_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Link native outline entries to body elements by exact title + page.
+
+    The page destination and the element's physical page must agree. A title
+    that only matches on another page stays unmatched (``page_conflict``), and
+    duplicate title matches stay ambiguous. Nothing is matched by filename,
+    printed page label or a lone title; furniture, layout and table elements
+    are never candidates.
+    """
+    if not isinstance(outline, dict):
+        return []
+    furniture_ids = furniture_ids or set()
+    ordered = sorted(
+        (element for element in document.get("elements") or [] if isinstance(element, dict)),
+        key=lambda element: element.get("reading_order")
+        if isinstance(element.get("reading_order"), int) else 10**12,
+    )
+    candidates = [
+        element for element in ordered
+        if element.get("element_type") not in LAYOUT_ELEMENT_TYPES
+        and element.get("element_type") != "table"
+        and element.get("comparison_eligible", True)
+        and not element.get("inside_table")
+        and element.get("represented_by_table_id") is None
+        and element_id_of(element) not in furniture_ids
+        and not is_contents_heading(element)
+    ]
+    keys_by_element = {
+        element_id_of(element): heading_key_variants(element) for element in candidates
+    }
+    page_by_element = {
+        element_id_of(element): element.get("primary_page") for element in candidates
+    }
+    linked: list[dict[str, Any]] = []
+    used_body_ids: set[str] = set()
+
+    for entry in outline.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        title_key = canonical_key_text(entry.get("title") or "")
+        physical_page = entry.get("physical_page")
+        title_matches = [
+            element_id for element_id, keys in keys_by_element.items()
+            if title_key and title_key in keys
+        ]
+        same_page = [
+            element_id for element_id in title_matches
+            if page_by_element.get(element_id) == physical_page
+        ]
+        record = {
+            "entry_id": entry.get("entry_id"),
+            "source_order": entry.get("source_order"),
+            "level": entry.get("level"),
+            "title": entry.get("title"),
+            "physical_page": physical_page,
+            "page_label": entry.get("page_label"),
+            "destination_type": entry.get("destination_type"),
+            "body_element_id": None,
+            "status": "unmatched",
+            "candidate_body_element_ids": same_page,
+            "link_basis": None,
+            "ambiguity_reason": None,
+        }
+        if not title_key or not isinstance(physical_page, int) or isinstance(physical_page, bool):
+            record["ambiguity_reason"] = "outline_identity_incomplete"
+        elif len(same_page) == 1:
+            body_id = same_page[0]
+            if body_id in used_body_ids:
+                record["status"] = "ambiguous"
+                record["ambiguity_reason"] = "duplicate_outline_link"
+            else:
+                record["body_element_id"] = body_id
+                record["status"] = "linked"
+                record["link_basis"] = "exact_title_page"
+                used_body_ids.add(body_id)
+        elif len(same_page) > 1:
+            record["status"] = "ambiguous"
+            record["ambiguity_reason"] = "duplicate_title_same_page"
+        elif len(title_matches) == 1:
+            record["ambiguity_reason"] = "page_conflict"
+        elif len(title_matches) > 1:
+            record["ambiguity_reason"] = "title_only_ambiguous"
+        linked.append(record)
+    return linked
+
+
+def outline_supported_heading_ids(evidence: dict[str, Any]) -> dict[str, str]:
+    """body element id -> outline entry id for supported outline links."""
+    outline = evidence.get("outline") if isinstance(evidence, dict) else None
+    if not isinstance(outline, dict):
+        return {}
+    return {
+        entry["body_element_id"]: entry["entry_id"]
+        for entry in outline.get("entries") or []
+        if isinstance(entry, dict)
+        and isinstance(entry.get("body_element_id"), str)
+        and isinstance(entry.get("entry_id"), str)
+    }
+
+
 def build_structure_evidence(
     document: dict[str, Any],
     derived_furniture: dict[str, Any] | None = None,
+    *,
+    pdf_outline: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the additive structure-evidence layer for ``document``.
 
     Pure: the input mapping is only read. All identities are derived from the
     document; no file, network or provider access happens here. ``derived_furniture``
     may be supplied by a caller (e.g. ``s05_anchors``) to reuse one identical
-    classification instead of recomputing it.
+    classification instead of recomputing it. ``pdf_outline`` is already
+    source-verified evidence; without usable entries the legacy layer is
+    byte-compatible.
     """
     require(isinstance(document, dict), "structure: document must be a mapping")
     elements = document.get("elements")
@@ -643,12 +760,99 @@ def build_structure_evidence(
     entry_by_linked_heading = {entry["body_element_id"]: entry for entry in linked_entries}
     toc_usable = bool(entries)
 
+    # ---- source-bound native outline evidence (additive) ----
+    outline_links: list[dict[str, Any]] = []
+    outline_block: dict[str, Any] | None = None
+    if (
+        isinstance(pdf_outline, dict)
+        and pdf_outline.get("status") in {"available", "partial"}
+        and pdf_outline.get("entries")
+    ):
+        outline_links = reconcile_outline_entries(
+            document, pdf_outline, furniture_ids=furniture_ids
+        )
+        matched = [entry for entry in outline_links if entry["status"] == "linked"]
+        outline_block = {
+            "version": OUTLINE_EVIDENCE_VERSION,
+            "status": pdf_outline.get("status"),
+            "source": pdf_outline.get("source"),
+            "entry_count": len(outline_links),
+            "matched_count": len(matched),
+            "ambiguous_count": sum(
+                1 for entry in outline_links if entry["status"] == "ambiguous"
+            ),
+            "unmatched_count": sum(
+                1 for entry in outline_links if entry["status"] == "unmatched"
+            ),
+            "entries": outline_links,
+            "links": [
+                {
+                    "entry_id": entry["entry_id"],
+                    "body_element_id": entry["body_element_id"],
+                    "status": entry["status"],
+                    "candidate_body_element_ids": entry["candidate_body_element_ids"],
+                    "link_basis": entry["link_basis"],
+                    "ambiguity_reason": entry["ambiguity_reason"],
+                    "physical_page": entry["physical_page"],
+                    "page_label": entry["page_label"],
+                }
+                for entry in outline_links
+            ],
+            "diagnostics": list(pdf_outline.get("diagnostics") or []),
+            "limitations": [
+                "outline_links_are_not_authoritative_hierarchy",
+                "outline_title_and_physical_page_must_both_match",
+                "outline_page_labels_are_not_physical_pages",
+                "outline_entries_never_promote_furniture_or_invent_element_ids",
+                *list(pdf_outline.get("limitations") or []),
+            ],
+        }
+
     # ---- section hypotheses ----
+    # Supported native outline links are preferred structural evidence; printed
+    # TOC/body inference only fills headings the outline did not cover.
     sections: list[dict[str, Any]] = []
     section_by_heading_id: dict[str, str] = {}
     section_by_id: dict[str, dict[str, Any]] = {}
+    for entry in outline_links:
+        if entry["status"] != "linked":
+            continue
+        heading_id = entry["body_element_id"]
+        if heading_id in section_by_heading_id:
+            continue
+        element = element_by_id[heading_id]
+        label_info = split_leading_label(entry.get("title") or element_text(element))
+        level = entry.get("level")
+        level_known = (
+            isinstance(level, int) and not isinstance(level, bool) and level >= 1
+        )
+        uncertainty = ["outline_level_is_source_metadata_not_semantic_proof"]
+        if not level_known:
+            uncertainty.append("level_and_parent_unknown")
+        section = {
+            "section_id": f"{document.get('document_id')}-S{len(sections) + 1:04d}",
+            "heading_element_id": heading_id,
+            "title": element_text(element),
+            "level": level if level_known else None,
+            "level_known": level_known,
+            "parent_section_id": None,
+            "parent_known": False,
+            "basis": "pdf_outline_link",
+            "toc_entry_id": None,
+            "outline_entry_id": entry["entry_id"],
+            "label_numeric": label_info["label_numeric"],
+            "label_namespace": label_info["label_namespace"],
+            "label_kind": label_info["label_kind"],
+            "uncertainty": uncertainty,
+        }
+        sections.append(section)
+        section_by_heading_id[heading_id] = section["section_id"]
+        section_by_id[section["section_id"]] = section
+
     for element in link_candidates:
         heading_id = element_id_of(element)
+        if heading_id in section_by_heading_id:
+            continue
         label_numeric: str | None = None
         label_namespace: str | None = None
         label_kind: str | None = None
@@ -677,6 +881,7 @@ def build_structure_evidence(
                 "parent_known": False,
                 "basis": basis,
                 "toc_entry_id": entry["entry_id"],
+                "outline_entry_id": None,
                 "label_numeric": label_numeric,
                 "label_namespace": label_namespace,
                 "label_kind": label_kind,
@@ -714,6 +919,7 @@ def build_structure_evidence(
                 "parent_known": False,
                 "basis": basis,
                 "toc_entry_id": None,
+                "outline_entry_id": None,
                 "label_numeric": label_numeric,
                 "label_namespace": label_namespace,
                 "label_kind": label_kind,
@@ -853,6 +1059,8 @@ def build_structure_evidence(
             "unheaded_toc_table_detection_requires_two_distinct_body_headings_and_a_local_preceding_position_no_universal_guarantee",
         ],
     }
+    if outline_block is not None:
+        evidence["outline"] = outline_block
 
     validate_structure_evidence(document, evidence)
     return evidence
@@ -862,7 +1070,7 @@ def validate_structure_evidence(document: dict[str, Any], evidence: dict[str, An
     """Independent integrity checks for a structure-evidence layer."""
     require(isinstance(evidence, dict), "structure: evidence must be a mapping")
     require(
-        evidence.get("version") == STRUCTURE_EVIDENCE_VERSION,
+        evidence.get("version") in SUPPORTED_STRUCTURE_EVIDENCE_VERSIONS,
         "structure: unexpected structure evidence version",
     )
     toc = evidence.get("toc")
@@ -994,4 +1202,53 @@ def validate_structure_evidence(document: dict[str, Any], evidence: dict[str, An
             require(
                 by_element[element_id]["category"] == "layout",
                 "structure: derived furniture membership must be accounted for as layout",
+            )
+
+    outline = evidence.get("outline")
+    if outline is not None:
+        require(isinstance(outline, dict), "structure: outline block must be a mapping")
+        require(
+            outline.get("version") == OUTLINE_EVIDENCE_VERSION,
+            "structure: unexpected outline evidence version",
+        )
+        require(
+            outline.get("status") in {"available", "partial"},
+            "structure: unexpected outline status",
+        )
+        outline_entries = outline.get("entries")
+        require(isinstance(outline_entries, list), "structure: outline.entries must be a list")
+        outline_ids = [entry.get("entry_id") for entry in outline_entries]
+        require(len(outline_ids) == len(set(outline_ids)),
+                "structure: duplicate outline entry_id")
+        require(
+            outline.get("entry_count") == len(outline_entries),
+            "structure: outline entry_count does not match entries",
+        )
+        linked_count = 0
+        for entry in outline_entries:
+            body_id = entry.get("body_element_id")
+            if body_id is not None:
+                linked_count += 1
+                require(body_id in document_element_ids,
+                        f"structure: unknown outline body element {body_id!r}")
+                require(body_id not in furniture_by_element,
+                        "structure: outline must never promote derived furniture")
+            for candidate in entry.get("candidate_body_element_ids") or []:
+                require(candidate in document_element_ids,
+                        f"structure: unknown outline candidate {candidate!r}")
+            require(
+                entry.get("status") in {"linked", "ambiguous", "unmatched"},
+                "structure: unknown outline link status",
+            )
+        require(
+            outline.get("matched_count") == linked_count,
+            "structure: outline matched_count does not match entries",
+        )
+        outline_entry_ids = set(outline_ids)
+        for section in sections:
+            if section.get("basis") != "pdf_outline_link":
+                continue
+            require(
+                section.get("outline_entry_id") in outline_entry_ids,
+                "structure: outline-based section references an unknown outline entry",
             )

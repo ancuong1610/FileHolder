@@ -6,7 +6,8 @@ are not a changelog.
 Read first: [three-tool-reader](three-tool-reader.md) (the `summarize`/`search`/
 `details` read boundary and response limits).
 
-- `three-tool-reader.md` — reader MCP/agent read contract, cursor/limit rules.
+- `three-tool-reader.md` — reader MCP/agent read contract, cursor/limit rules,
+  normalized `result_state`, and compatible legacy filters.
 - `phase1-matching.md` — matching thresholds and benchmark scoring schema.
 
 Dependencies: describes `phase2/mcp`, `phase2/reader` and `phase1/matching`,

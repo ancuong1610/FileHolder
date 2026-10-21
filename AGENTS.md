@@ -50,6 +50,23 @@ Answer in the user's language; repository documentation is maintained in English
   Do not reimplement them in the agent or load full reports into model prompts.
 - Preserve `CRR_` environment keys and existing artifact/HTTP/MCP contracts.
 
+## Documentation impact before commit
+
+Assess documentation impact from the actual diff before every commit, and update
+affected docs in the same change. Not every document needs a ceremonial edit.
+
+| Change | Documentation to assess/update |
+| --- | --- |
+| Commands, config, setup | Root README and operations/testing |
+| Stages, dependencies, data flow | Architecture |
+| Algorithms and representations | Knowledge Transfer Phase 1 |
+| Statuses, schemas, artifacts, API/reader behavior | Contracts and consumer guides |
+| Agent workflow and invariants | AGENTS.md |
+
+Check related links and commands, then report the documentation changes or explain
+why none are needed. Documentation approval does not authorize an automatic
+commit or push.
+
 ## Run and verify
 
 Use a Python >=3.10 virtual environment (3.11 recommended), install
