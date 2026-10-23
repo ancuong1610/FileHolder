@@ -37,6 +37,10 @@ from pathlib import Path
 from typing import Any
 
 from document_compare.phase1.matching.reconciliation import reconcile_residuals
+from document_compare.phase1.matching.residual_proposals import (
+    build_residual_proposals,
+)
+from document_compare.phase1.matching.semantic_evidence import reassess_residual
 
 STEP9_VERSION = "2.1.0-block-movement-conservative"
 INPUT_STAGE = "comparison_candidate_assembly_and_multi_representation_token_diff"
@@ -578,6 +582,73 @@ def main() -> None:
     ]
     print("Residual pairs reconciled as RESEGMENTATION_REVIEW:", len(resegmentation_pairs))
 
+    # ---- bounded residual counterpart proposals (evidence only) ----
+    # Unmatched is not proof of absence.  Retrieve bounded possible
+    # counterparts from existing lexical/context/neighbour evidence and attach
+    # explicit examined/unsearched coverage.  Nothing here consumes a candidate
+    # or becomes a committed match.
+    reliable_pairs = (
+        comparison_candidates["unchanged"]
+        + comparison_candidates["modified"]
+        + comparison_candidates["modified_review"]
+        + relocated
+        + resegmentation_pairs
+    )
+    proposal_result = build_residual_proposals(
+        remaining_deleted,
+        remaining_added,
+        matched_pairs=reliable_pairs,
+    )
+    proposals_by_deleted: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    proposals_by_added: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for proposal in proposal_result["proposals"]:
+        proposals_by_deleted[proposal["deleted_candidate_id"]].append(proposal)
+        proposals_by_added[proposal["added_candidate_id"]].append(proposal)
+
+    for side, candidates, proposal_index in (
+        ("deleted", remaining_deleted, proposals_by_deleted),
+        ("added", remaining_added, proposals_by_added),
+    ):
+        for candidate in candidates:
+            candidate_id = str(candidate.get("candidate_id") or "")
+            coverage = proposal_result["candidate_coverage"].get(
+                candidate_id,
+                {
+                    "status": "no_opposite",
+                    "examined": 0,
+                    "unsearched": 0,
+                    "opposite_residuals": 0,
+                    "budget_exhausted": False,
+                    "limitations": [],
+                },
+            )
+            proposals = sorted(
+                proposal_index.get(candidate_id, []),
+                key=lambda item: item["proposal_id"],
+            )
+            candidate["residual_counterpart_proposals"] = proposals
+            candidate["residual_proposal_coverage"] = coverage
+            group_id = proposal_result["candidate_groups"].get(candidate_id)
+            if group_id:
+                candidate["residual_proposal_group_id"] = group_id
+            if proposals:
+                correspondence = "proposed"
+            elif coverage["status"] == "partial":
+                correspondence = "unresolved"
+            else:
+                correspondence = "not_applicable"
+            element = candidate.get("old") if side == "deleted" else candidate.get("new")
+            candidate["semantic_assessment"] = reassess_residual(
+                element,
+                side="old" if side == "deleted" else "new",
+                correspondence=correspondence,
+                limitations=list(coverage.get("limitations") or []),
+            )
+
+    print("Residual counterpart proposals:", len(proposal_result["proposals"]))
+    print("Residual proposal groups:", len(proposal_result["groups"]))
+    print("Residual proposal pair checks:", proposal_result["coverage"]["pair_checks"])
+
     structural_pairs = paired_structural_candidates(comparison_candidates)
     structural_pairs.sort(key=lambda candidate: reading_order(candidate["old"]))
 
@@ -905,6 +976,10 @@ def main() -> None:
             "fuzzy_split_merge_enabled": False,
             "final_movement_classification_performed": False,
             "final_split_merge_resolution_performed": False,
+            "residual_proposal_search_enabled": True,
+            "residual_proposal_max_per_element": 5,
+            "residual_proposal_max_pair_checks": 1000,
+            "residual_proposal_consumes_candidates": False,
         },
         "statistics": {
             "input_unchanged": len(comparison_candidates["unchanged"]),
@@ -923,6 +998,14 @@ def main() -> None:
                 len(split_merge_review),
             "structural_boundary_review_candidates":
                 len(structural_boundary_review),
+            "residual_counterpart_proposals":
+                len(proposal_result["proposals"]),
+            "residual_proposal_groups":
+                len(proposal_result["groups"]),
+            "residual_proposal_pair_checks":
+                proposal_result["coverage"]["pair_checks"],
+            "residual_proposal_budget_exhausted":
+                proposal_result["coverage"]["budget_exhausted"],
         },
         # Existing paired candidates are carried forward unchanged.
         "unchanged": copy.deepcopy(comparison_candidates["unchanged"]),
@@ -937,6 +1020,10 @@ def main() -> None:
         "resegmentation_review": resegmentation_pairs,
         "deleted": copy.deepcopy(remaining_deleted),
         "added": copy.deepcopy(remaining_added),
+        # Evidence-only residual counterpart proposals and explicit coverage.
+        "residual_proposals": proposal_result["proposals"],
+        "residual_proposal_groups": proposal_result["groups"],
+        "residual_proposal_coverage": proposal_result["coverage"],
         # Evidence-only review queues.
         "movement_review": movement_review,
         "structural_split_merge_review": split_merge_review,

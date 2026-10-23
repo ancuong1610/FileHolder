@@ -13,6 +13,12 @@ from document_compare.phase1.extraction.di_fields import get_page_number, set_pa
 from document_compare.phase1.contracts.validation import require
 from document_compare.phase1.pipeline.mode import parse_domain_mode, resolve_domain_profile
 from document_compare.phase1.matching.language import SUSPENDED_HYPHEN_STOPWORDS
+from document_compare.phase1.matching.semantic_evidence import (
+    independent_correspondence_verified,
+)
+from document_compare.phase1.contracts.semantic_assessment import (
+    is_deterministic_material_proof,
+)
 from document_compare.phase1.contracts.review_identity import structural_route_identity
 
 # ---- cell 1 ----
@@ -364,6 +370,50 @@ def single_glyph_like(candidate: dict[str, Any]) -> bool:
     return False
 
 
+SEMANTIC_SHORT_PAIR_REASON = "short_text_similarity_pair"
+
+
+def residual_counterpart_uncertain_reason(candidate: dict[str, Any]) -> str | None:
+    """Return why an unmatched residual cannot be accepted as one-sided.
+
+    A plausible proposal is enough to block independent add/delete acceptance.
+    Incomplete/unsearched coverage (including budget exhaustion) also blocks it,
+    because absent lexical evidence is not proof of absence.
+    """
+    if candidate.get("residual_counterpart_proposals"):
+        return "plausible_unresolved_counterpart"
+    coverage = candidate.get("residual_proposal_coverage")
+    if isinstance(coverage, dict):
+        if coverage.get("unretained_plausible_counterparts"):
+            # A plausible indexed counterpart existed but the symmetric cap
+            # retained none: pruning is not proof of absence.
+            return "residual_counterpart_pruned"
+        if coverage.get("status") in {"partial", "unsearched"}:
+            return "residual_search_incomplete"
+        if coverage.get("budget_exhausted") or coverage.get("unsearched"):
+            return "residual_search_incomplete"
+    return None
+
+
+def semantic_short_pair_proof(candidate: dict[str, Any]) -> bool:
+    """Only the existing short-text-only review reason may be cleared here.
+
+    Stage 14 independently revalidates the same witness against the actual
+    source, so this route is a narrow nomination, not an authority transfer.
+    Every other review reason, extraction problem, duplicate/conflict guard
+    and missing strong reciprocal correspondence keeps the pair in review.
+    """
+    reasons = set(candidate.get("review_reasons") or [])
+    if reasons != {SEMANTIC_SHORT_PAIR_REASON}:
+        return False
+    assessment = candidate.get("semantic_assessment")
+    if not is_deterministic_material_proof(assessment):
+        return False
+    if (assessment or {}).get("correspondence") != "verified":
+        return False
+    return independent_correspondence_verified(candidate)
+
+
 def route_non_table(
     group: str,
     candidate: dict[str, Any],
@@ -534,6 +584,13 @@ def route_non_table(
     # ------------------------------------------------------------
 
     if group == "modified_review":
+        if semantic_short_pair_proof(candidate):
+            reasons.append("deterministic_material_witness_verified")
+            return (
+                "ACCEPT_DETERMINISTIC",
+                "semantic_material_change",
+                sorted(set(reasons)),
+            )
         return (
             "SPECIAL_CASE_LLM_OPTIONAL",
             "ambiguous_modified_pair",
@@ -577,6 +634,15 @@ def route_non_table(
                     "beyond_aligned_coverage",
                     sorted(set(reasons)),
                 )
+        residual_reason = residual_counterpart_uncertain_reason(candidate)
+        if residual_reason:
+            reasons.append(residual_reason)
+            return (
+                "UNCERTAIN_RESULT",
+                "unresolved_residual_counterpart",
+                sorted(set(reasons)),
+            )
+
         if source_extraction_review or reasons:
             reasons.append(
                 "one_sided_candidate_has_positive_review_evidence"

@@ -9,7 +9,12 @@ Input/output: reads an existing job's saved artifacts; returns bounded typed
 envelopes with normalized `result_state` while legacy `accepted`/`review` filters
 stay compatible. Never mutates artifacts or accepts arbitrary paths.
 
-Dependencies: `shared` JSON/path helpers and `phase1.contracts.result_state`; no
+Gate A details add a bounded source-validated `semantic_assessment`; missing
+legacy evidence is `not_assessed`. Summary `counts.semantic_basis_counts` counts
+change/table records by that same normalization. Group review evidence and
+source-context pagination preserve proposed/unresolved, never invented pairing.
+
+Dependencies: `shared` JSON/path helpers and Phase-1 result-state/semantic contracts; no
 Phase 2 agent or writer imports.
 
 Check: `python -m unittest tests.phase2.test_reader tests.phase1.test_automatic_reports`.

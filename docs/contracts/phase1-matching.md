@@ -11,8 +11,8 @@ in context retrieval can change tied candidate ordering across seeds; this is a
 pre-existing limitation, not proof of general cross-seed semantic stability.
 Thresholds and candidate ordering were not retuned here.
 
-This note documents (a) the current matching defaults, unchanged in this
-packet, and (b) the benchmark scoring schema used by
+This note documents (a) the unchanged lexical matching defaults, (b) Gate A's
+additive source-proof/residual safety policy, and (c) the benchmark schema used by
 `phase1/evaluation/evaluate.py`. It exists so a result can be read honestly: an
 uncovered condition is never reported as a perfect score.
 
@@ -27,9 +27,57 @@ From `phase1/stages/s07_modified_matching.py`:
 - Score weights: `0.65 * char_ratio + 0.25 * token_f1 + 0.10 * length_ratio`.
 
 The historical calibration of these values is not recorded in the repository;
-they are the existing defaults and were deliberately not retuned here. No
-threshold, weight, algorithm, provider mode, or public `comparison_result`
-schema was changed.
+they are the existing defaults and were deliberately not retuned. Gate A adds
+evidence and guarded routing; it does not lower these global thresholds or
+change provider authority. Existing result fields stay compatible.
+
+## Gate A: source-bound material evidence and residual safety
+
+Owners: `contracts/semantic_assessment.py`, `matching/semantic_evidence.py`,
+`matching/residual_proposals.py`, and stages 07–09/11/14.
+
+`semantic_assessment` is optional and additive. Schema `1.0.0`, policy `gateA-1`
+separates `correspondence` (`verified|proposed|unresolved|not_applicable`),
+`relation` (`material_change|equivalent|undetermined`) and `basis`
+(`deterministic_witness|model_advisory|not_assessed`). Exact source hashes, side
+element IDs, code-point spans, complete prefix/suffix context, guard outcomes
+and limitations accompany a witness. Missing legacy assessment is `not_assessed`,
+not semantic proof; reading it never migrates or rewrites saved statuses.
+
+The narrow English witness handles an explicit standalone polarity change,
+different modal force, an unambiguous numeric component or a threshold operator
+over otherwise identical source context. `must` and `shall` have the same
+mandatory force; different spelling alone is not materiality. Quotes, fragments,
+multiple clauses, conditions/exceptions, coordination, ambiguous numeric locale,
+signed/grouped/fractional tokens and unsupported unit-only edits abstain. This is
+not general semantic understanding or calibrated/legal certainty.
+
+Only a short-text-only review reason may be reconsidered: unique reciprocal
+correspondence, finite margin >=0.10 and clean extraction must also pass. Stage
+14 validates source binding and independently recomputes the witness. A route,
+caller boolean, stale span/hash or model advice alone cannot approve/suppress.
+Stage 13 remains advisory, including its mock `REAL_CHANGE` response.
+
+Stage 09's residual proposals are evidence, never committed matches or source
+consumption. At most five proposals per residual and 1,000 actual score checks
+per job are allowed, with cached scores, stable ordering and explicit partial,
+unsearched, exhausted or cap-pruned coverage. Compatible residuals excluded by
+indexing/pruning are not falsely reported as searched absence. Plausible or
+unresolved counterparts route to uncertainty rather than independent accepted
+delete/add claims. Complete no-opposite evidence retains the existing one-sided
+source-presence behaviour; it is not relabelled as semantic proof.
+
+One canonical proposal-group explanation deduplicates user-facing uncertainty;
+all original change records, candidate/element IDs and side passages remain.
+Reports list group OLD and NEW sources separately as **unpaired**, without
+inventing correspondence or hiding numeric/negation content. Legacy accepted-only
+index and reader kind/status filters remain unchanged.
+
+Checks: `python -m unittest tests.phase1.test_semantic_assessment tests.phase1.test_semantic_residuals tests.phase1.test_semantic_safety_regressions`.
+The exposed 72-case experiment is development/regression evidence for this change.
+A separately frozen 48-pair set is reserved until candidate source freeze; both
+sets are AI-authored controlled examples, not expert-certified natural revisions.
+No >=80% supported recall / >=95% precision claim follows from these code checks.
 
 ## Opt-in matching diagnostics
 

@@ -83,6 +83,18 @@ def uncertainty_key(record: Any, *, kind: str | None = None) -> tuple[str, str]:
     """
     if not isinstance(record, dict):
         return ("unknown", "")
+    # A residual proposal group is one canonical uncertainty identity.  Both
+    # member changes and their grouped explanation resolve to the same key so
+    # the user sees one explanation, never concatenated queue aliases.
+    proposal_group = record.get("proposal_group_id")
+    if not isinstance(proposal_group, str) or not proposal_group:
+        resolution = record.get("resolution")
+        if isinstance(resolution, dict):
+            value = resolution.get("proposal_group_id")
+            if isinstance(value, str) and value:
+                proposal_group = value
+    if isinstance(proposal_group, str) and proposal_group:
+        return ("proposal_group", proposal_group)
     if kind == "review":
         change_id = record.get("change_id")
         if isinstance(change_id, str) and change_id:
@@ -117,14 +129,20 @@ def result_state_counts(
     seen_uncertain: set[tuple[str, str]] = set()
     for item in changes:
         state = record_result_state(item, kind="change")
+        key = uncertainty_key(item, kind="change")
+        if state == UNCERTAIN and key in seen_uncertain:
+            continue
         counts[state] += 1
         if state == UNCERTAIN:
-            seen_uncertain.add(uncertainty_key(item, kind="change"))
+            seen_uncertain.add(key)
     for item in tables:
         state = record_result_state(item, kind="table")
+        key = uncertainty_key(item, kind="table")
+        if state == UNCERTAIN and key in seen_uncertain:
+            continue
         counts[state] += 1
         if state == UNCERTAIN:
-            seen_uncertain.add(uncertainty_key(item, kind="table"))
+            seen_uncertain.add(key)
     for item in non_semantic_events:
         counts[NON_SEMANTIC] += 1
     for item in reviews:

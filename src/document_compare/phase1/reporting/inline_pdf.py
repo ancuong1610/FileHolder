@@ -38,6 +38,13 @@ Limitations (also written to the artifact cover and the optional
 * Unchanged table cell text is omitted from the table body ONLY when the raw old
   and new cell text are identical; a cell labelled unchanged whose text differs
   stays visible with a warning.
+* Every canonical change keeps its place in the one-flow view, including a
+  change under review. Review-only evidence is shown with its recorded reason
+  and, when the saved result resolves them, separate UNPAIRED old/new source
+  passages. An unavailable passage is named, never treated as no difference.
+* Red strike/blue underline is this report's textual deletion/insertion
+  formatting. It is not evidence that the source PDF used strikethrough styling;
+  source-supplied strike formatting is not extracted.
 """
 from __future__ import annotations
 
@@ -54,6 +61,7 @@ from reportlab.lib.units import inch
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from document_compare.phase1.reporting.annotations import reliable_operation_ranges
+from document_compare.phase1.reporting.report_model import plain_reason
 from document_compare.phase1.reporting.spans import TOKEN_PATTERN
 
 DELETED_COLOR = "#b00020"
@@ -112,6 +120,14 @@ LIMITATIONS = (
     "Unchanged table cell text is omitted only when the raw old and new text are "
     "identical; a cell labelled unchanged whose text differs stays visible with a "
     "warning.",
+    "A canonical change under review is never omitted. Review-only evidence "
+    "shows its reason and, when resolved from the saved result, separate "
+    "unpaired old/new source passages.",
+    "A review item whose source passage cannot be resolved from the saved result "
+    "names the unavailable passage and its evidence IDs; it is not treated as no "
+    "difference.",
+    "Red strike/blue underline means textual deletion/insertion in this report, "
+    "not proof that the source PDF used strikethrough styling.",
 )
 
 _COVER_NOTE = (
@@ -139,6 +155,7 @@ def _escape(text: Any) -> str:
     return (
         str(text if text is not None else "")
         .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        .replace('"', "&quot;")
     )
 
 
@@ -606,13 +623,367 @@ def _render_table(table: dict[str, Any], story: list[Any]) -> None:
         story.append(_para(f"status={_escape(resolution)}", _NOTE))
 
 
-def _render_review(review: list[dict[str, Any]], story: list[Any]) -> None:
-    story.append(_para("Unresolved review items", _HEADING))
+def _string_values(value: Any) -> list[str]:
+    """Non-empty strings from a real evidence field; never stringifies values."""
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        return [
+            item for item in value
+            if isinstance(item, str) and item.strip()
+        ]
+    return []
+
+
+def _id_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        return [
+            item for item in value
+            if isinstance(item, str) and item.strip()
+        ]
+    return []
+
+
+def _source_entry(
+    meta: Any,
+    *,
+    element_id: str | None = None,
+    change_id: str | None = None,
+    preview: bool = False,
+) -> dict[str, Any] | None:
+    if not isinstance(meta, dict):
+        return None
+    text = meta.get("text")
+    if not isinstance(text, str) or not text:
+        return None
+    return {
+        "text": text,
+        "page": meta.get("primary_page"),
+        "element_id": element_id,
+        "change_id": change_id,
+        "preview": preview,
+    }
+
+
+def _dedupe_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[Any, ...]] = set()
+    result: list[dict[str, Any]] = []
+    for source in sources:
+        key = (
+            source.get("text"),
+            source.get("page"),
+            source.get("element_id"),
+            source.get("change_id"),
+            source.get("preview"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(source)
+    return result
+
+
+def _canonical_source_maps(
+    changes: list[dict[str, Any]],
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+]:
+    """Side-specific element-id maps plus a change-id map.
+
+    Old ids are only ever resolved against old sides and new ids against new
+    sides, so an id that happens to be reused across documents cannot leak a
+    passage from the wrong document into a review item.
+    """
+    old_by_element: dict[str, dict[str, Any]] = {}
+    new_by_element: dict[str, dict[str, Any]] = {}
+    by_change_id: dict[str, dict[str, Any]] = {}
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        change_id = change.get("change_id")
+        if change_id:
+            by_change_id[str(change_id)] = change
+        for side, target in (("old", old_by_element), ("new", new_by_element)):
+            meta = change.get(side)
+            if not isinstance(meta, dict):
+                continue
+            element_id = meta.get("element_id")
+            entry = _source_entry(
+                meta,
+                element_id=str(element_id) if element_id else None,
+                change_id=str(change_id) if change_id else None,
+            )
+            if entry is not None and element_id:
+                target.setdefault(str(element_id), entry)
+    return old_by_element, new_by_element, by_change_id
+
+
+def _evidence_maps(
+    changes: list[dict[str, Any]],
+    tables: list[dict[str, Any]],
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+]:
+    """Build the change/side and table maps once for all review items."""
+    old_by_element, new_by_element, by_change_id = _canonical_source_maps(changes)
+    table_by_id = {
+        str(table.get("table_change_id")): table
+        for table in tables
+        if table.get("table_change_id")
+    }
+    return old_by_element, new_by_element, by_change_id, table_by_id
+
+
+def _change_has_source_text(change: dict[str, Any]) -> bool:
+    """True only when this change will actually render source text."""
+    if _change_omittable(change):
+        return False
+    return bool(_side_text(change, "old") or _side_text(change, "new"))
+
+
+def _table_has_source_text(table: dict[str, Any]) -> bool:
+    """True only when the table renderer will actually show source text."""
+    # _render_table renders cell_changes, not table-side metadata text.
+    for cell in table.get("cell_changes") or []:
+        if not isinstance(cell, dict) or _cell_omittable(cell):
+            continue
+        if _side_text(cell, "old") or _side_text(cell, "new"):
+            return True
+    return False
+
+
+def review_evidence_markup(
+    item: dict[str, Any],
+    changes: list[dict[str, Any]] | None = None,
+    tables: list[dict[str, Any]] | None = None,
+    *,
+    _maps: tuple[
+        dict[str, dict[str, Any]],
+        dict[str, dict[str, Any]],
+        dict[str, dict[str, Any]],
+        dict[str, dict[str, Any]],
+    ] | None = None,
+) -> dict[str, Any]:
+    """Pure review-evidence projection (never mutates its inputs).
+
+    The saved Stage 14 schema supplies review reasons on the resolution and,
+    for evidence-only cases, on ``item["evidence"]``. Source passages are only
+    taken from actual saved shapes: explicit ``old_text``/``new_text`` or
+    previews, explicit ``old_element_id(s)``/``new_element_id(s)`` resolved
+    through the canonical change sides, and ``change_ids`` grouped by the
+    existing canonical members. Old and new passages stay separate; no pair is
+    inferred from shared ids or the case type.
+    """
+    item = item if isinstance(item, dict) else {}
+    changes = [change for change in (changes or []) if isinstance(change, dict)]
+    tables = [table for table in (tables or []) if isinstance(table, dict)]
+    evidence = item.get("evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    resolution = item.get("resolution")
+    resolution = resolution if isinstance(resolution, dict) else {}
+
+    reasons: list[str] = []
+    for value in (
+        resolution.get("review_reasons"),
+        evidence.get("review_reasons"),
+        item.get("review_reasons"),
+    ):
+        reasons.extend(_string_values(value))
+    if _maps is None:
+        _maps = _evidence_maps(changes, tables)
+    old_by_element, new_by_element, by_change_id, table_by_id = _maps
+    table_id = item.get("table_change_id")
+    if table_id and str(table_id) in table_by_id:
+        reasons.extend(_string_values(table_by_id[str(table_id)].get("review_reasons")))
+    reasons = list(dict.fromkeys(reasons))
+
+    old_sources: list[dict[str, Any]] = []
+    new_sources: list[dict[str, Any]] = []
+
+    for key, target in (("old_text", old_sources), ("new_text", new_sources)):
+        for text in _string_values(evidence.get(key)):
+            target.append({
+                "text": text, "page": None, "element_id": None,
+                "change_id": None, "preview": False,
+            })
+    for key, target in (
+        ("old_text_preview", old_sources),
+        ("new_text_preview", new_sources),
+    ):
+        for text in _string_values(evidence.get(key)):
+            target.append({
+                "text": text, "page": None, "element_id": None,
+                "change_id": None, "preview": True,
+            })
+
+    change_ids = _id_values(evidence.get("change_ids"))
+    missing_change_ids: list[str] = []
+    for change_id in change_ids:
+        change = by_change_id.get(change_id)
+        if change is None:
+            missing_change_ids.append(change_id)
+            continue
+        for side, target in (("old", old_sources), ("new", new_sources)):
+            meta = change.get(side)
+            if not isinstance(meta, dict):
+                continue
+            element_id = meta.get("element_id")
+            entry = _source_entry(
+                meta,
+                element_id=str(element_id) if element_id else None,
+                change_id=change_id,
+            )
+            if entry is not None:
+                target.append(entry)
+
+    def resolve_ids(raw: Any, element_map: dict[str, dict[str, Any]]) -> tuple[
+        list[dict[str, Any]], list[str]
+    ]:
+        resolved: list[dict[str, Any]] = []
+        missing: list[str] = []
+        for element_id in _id_values(raw):
+            entry = element_map.get(element_id)
+            if entry is None:
+                missing.append(element_id)
+            else:
+                resolved.append(dict(entry))
+        return resolved, missing
+
+    old_resolved, missing_old_ids = resolve_ids(
+        [
+            *(_id_values(evidence.get("old_element_id"))),
+            *(_id_values(evidence.get("old_element_ids"))),
+        ],
+        old_by_element,
+    )
+    new_resolved, missing_new_ids = resolve_ids(
+        [
+            *(_id_values(evidence.get("new_element_id"))),
+            *(_id_values(evidence.get("new_element_ids"))),
+        ],
+        new_by_element,
+    )
+    old_sources.extend(old_resolved)
+    new_sources.extend(new_resolved)
+
+    evidence_ids: dict[str, list[str]] = {}
+    for label, values in (
+        ("old_element_ids", [
+            *(_id_values(evidence.get("old_element_id"))),
+            *(_id_values(evidence.get("old_element_ids"))),
+        ]),
+        ("new_element_ids", [
+            *(_id_values(evidence.get("new_element_id"))),
+            *(_id_values(evidence.get("new_element_ids"))),
+        ]),
+        ("change_ids", change_ids),
+        ("candidate_ids", _id_values(evidence.get("candidate_ids"))),
+        ("proposal_ids", _id_values(evidence.get("proposal_ids"))),
+    ):
+        deduped = list(dict.fromkeys(values))
+        if deduped:
+            evidence_ids[label] = deduped
+
+    has_linked_change = False
+    unresolved_links: list[dict[str, str]] = []
+    linked_change_id = item.get("change_id")
+    if linked_change_id:
+        key = str(linked_change_id)
+        change = by_change_id.get(key)
+        if change is None:
+            unresolved_links.append(
+                {"kind": "change", "id": key, "reason": "not_present"})
+        elif not _change_has_source_text(change):
+            unresolved_links.append(
+                {"kind": "change", "id": key, "reason": "no_source_text"})
+        else:
+            has_linked_change = True
+    linked_table_id = item.get("table_change_id")
+    if linked_table_id:
+        key = str(linked_table_id)
+        table = table_by_id.get(key)
+        if table is None:
+            unresolved_links.append(
+                {"kind": "table", "id": key, "reason": "not_present"})
+        elif not _table_has_source_text(table):
+            unresolved_links.append(
+                {"kind": "table", "id": key, "reason": "no_source_text"})
+        else:
+            has_linked_change = True
+
+    return {
+        "reasons": reasons,
+        "old_sources": _dedupe_sources(old_sources),
+        "new_sources": _dedupe_sources(new_sources),
+        "missing_old_ids": list(dict.fromkeys(missing_old_ids)),
+        "missing_new_ids": list(dict.fromkeys(missing_new_ids)),
+        "missing_change_ids": list(dict.fromkeys(missing_change_ids)),
+        "evidence_ids": evidence_ids,
+        "has_linked_change": has_linked_change,
+        "unresolved_links": unresolved_links,
+    }
+
+
+def _reason_text(reason: str) -> str:
+    """Plain reason label, keeping the exact technical token when unmapped."""
+    code = str(reason)
+    plain = plain_reason(code)
+    generic = code.replace("_", " ").strip().capitalize() + "."
+    if plain == generic:
+        return f"{plain} ({code})"
+    return plain
+
+
+def _source_meta(source: dict[str, Any]) -> str:
+    bits: list[str] = []
+    if source.get("preview"):
+        bits.append("preview")
+    if source.get("page") is not None:
+        bits.append(f"page {source['page']}")
+    if source.get("element_id"):
+        bits.append(_escape(source["element_id"]))
+    if source.get("change_id"):
+        bits.append(_escape(source["change_id"]))
+    return " | ".join(bits)
+
+
+def _render_source_side(label: str, sources: list[dict[str, Any]], story: list[Any]) -> None:
+    story.append(_para(_escape(label), _NOTE))
+    if not sources:
+        story.append(_para("None available on this side.", _BASE))
+        return
+    for source in sources:
+        meta = _source_meta(source)
+        if meta:
+            story.append(_para(meta, _NOTE))
+        # Plain text, never strike/insert markup: these passages are unpaired.
+        story.append(_para(_escape(source.get("text") or ""), _BASE))
+
+
+def _render_review(
+    review: list[dict[str, Any]],
+    story: list[Any],
+    changes: list[dict[str, Any]],
+    tables: list[dict[str, Any]],
+) -> None:
+    story.append(_para("Uncertain differences", _HEADING))
     case_counts = Counter(str(item.get("case_type")) for item in review)
     summary = ", ".join(f"{name}={count}" for name, count in sorted(case_counts.items()))
     story.append(_para(
-        f"{len(review)} open item(s). Full triage export: review_queue_export.csv. "
-        f"By case type: {_escape(summary)}.", _NOTE))
+        f"{len(review)} uncertain item(s). Reasons and any separately resolved "
+        f"source evidence are shown below; the full export is "
+        f"review_queue_export.csv. By case type: {_escape(summary)}.", _NOTE))
+    maps = _evidence_maps(
+        [change for change in changes if isinstance(change, dict)],
+        [table for table in tables if isinstance(table, dict)],
+    )
     for item in review:
         rid = _escape(item.get("review_id", "?"))
         case_type = _escape(item.get("case_type", "unknown"))
@@ -620,10 +991,84 @@ def _render_review(review: list[dict[str, Any]], story: list[Any]) -> None:
         line = f"[{rid}] case_type={case_type} status={status}"
         if item.get("change_id"):
             line += f" change={_escape(item['change_id'])}"
+        if item.get("table_change_id"):
+            line += f" table_change={_escape(item['table_change_id'])}"
         candidate = item.get("source_candidate_id")
         if candidate:
             line += f" candidate={_escape(candidate)}"
+        for key, label in (("proposal_group_id", "proposal_group"),
+                           ("source_evidence_id", "evidence")):
+            if item.get(key):
+                line += f" {label}={_escape(item[key])}"
         story.append(_para(line, _BASE))
+
+        evidence = review_evidence_markup(item, changes, tables, _maps=maps)
+        if evidence["reasons"]:
+            story.append(_para(
+                "Why this remains uncertain: "
+                + _escape(" ".join(
+                    _reason_text(reason) for reason in evidence["reasons"])),
+                _BASE))
+        else:
+            story.append(_para(
+                "No review reason code was recorded; the status keeps this item "
+                "uncertain.", _BASE))
+        if item.get("assessment_notice"):
+            story.append(_para(_escape(item["assessment_notice"]), _NOTE))
+
+        has_sources = bool(evidence["old_sources"] or evidence["new_sources"])
+        if has_sources:
+            story.append(_para(
+                "Source passages are shown separately and are not asserted as a "
+                "verified old/new pair.", _NOTE))
+            _render_source_side(
+                "Old source passages (unpaired)", evidence["old_sources"], story)
+            _render_source_side(
+                "New source passages (unpaired)", evidence["new_sources"], story)
+        elif evidence["has_linked_change"]:
+            story.append(_para(
+                "Source text for this item is shown with its change in the "
+                "Changes or Table changes section; no separate passage is "
+                "repeated here.", _NOTE))
+        else:
+            story.append(_para(
+                "Source passage unavailable for this review item; the saved "
+                "result carries no resolvable source text. The reason and "
+                "reference IDs above are preserved.", _BASE))
+
+        if evidence["evidence_ids"]:
+            refs = "; ".join(
+                f"{label}={', '.join(values)}"
+                for label, values in evidence["evidence_ids"].items())
+            story.append(_para(
+                "Evidence references: " + _escape(refs), _NOTE))
+
+        for link in evidence["unresolved_links"]:
+            kind = link["kind"]
+            if link["reason"] == "not_present":
+                detail = (
+                    "not present in the saved canonical changes"
+                    if kind == "change"
+                    else "not present in the saved table changes"
+                )
+            else:
+                detail = "has no source text in the saved result"
+            story.append(_para(
+                f"Unresolved linked {kind} {_escape(link['id'])}: {detail}.",
+                _WARN))
+
+        missing = []
+        for label, values in (
+            ("old_element_ids", evidence["missing_old_ids"]),
+            ("new_element_ids", evidence["missing_new_ids"]),
+            ("change_ids", evidence["missing_change_ids"]),
+        ):
+            if values:
+                missing.append(f"{label}={', '.join(values)}")
+        if missing:
+            story.append(_para(
+                "Unresolved evidence IDs (not present in the saved canonical "
+                "changes): " + _escape("; ".join(missing)), _WARN))
 
 
 def render_pdf(comparison: dict[str, Any], output_path: Path) -> Path:
@@ -677,7 +1122,7 @@ def render_pdf(comparison: dict[str, Any], output_path: Path) -> Path:
             _render_table(table, story)
             story.append(Spacer(1, 0.1 * inch))
     if review:
-        _render_review(review, story)
+        _render_review(review, story, changes, tables)
 
     doc.build(story)
     return output_path

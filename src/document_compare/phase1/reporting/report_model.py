@@ -19,6 +19,10 @@ from document_compare.phase1.contracts.result_state import (
     canonical_uncertain_records,
     record_result_state,
 )
+from document_compare.phase1.contracts.semantic_assessment import (
+    is_deterministic_material_proof,
+    normalize_assessment,
+)
 
 REPORT_MODEL_VERSION = "1.0.0"
 NO_DIFFERENCES_MESSAGE = "No differences were found between the two documents."
@@ -116,6 +120,89 @@ def _element_text(side: dict[str, Any] | None) -> str:
         return ""
     text = side.get("text")
     return str(text) if isinstance(text, str) else ""
+
+
+def _semantic_fields(
+    record: dict[str, Any],
+    *,
+    old_element: dict[str, Any] | None = None,
+    new_element: dict[str, Any] | None = None,
+    source_state: str,
+) -> dict[str, Any]:
+    """Expose assessment axes without claiming that source text is proof.
+
+    Legacy/supported records without an assessment read ``not_assessed``; they
+    are never relabelled as semantically verified.
+    """
+    assessment = normalize_assessment(
+        record.get("semantic_assessment"),
+        old_element=old_element or None,
+        new_element=new_element or None,
+    )
+    basis = assessment.get("basis")
+    relation = assessment.get("relation")
+    correspondence = assessment.get("correspondence")
+    material_proof = is_deterministic_material_proof(assessment)
+    if material_proof:
+        notice = "Source-bound deterministic material-change witness."
+    elif source_state == "supported":
+        notice = (
+            "Source-supported text only; material meaning was not assessed "
+            "as a semantic proof."
+        )
+    elif correspondence in {"proposed", "unresolved"}:
+        notice = (
+            "Possible counterpart evidence only; old and new passages are "
+            "unpaired and are not a verified pair."
+        )
+    else:
+        notice = "Material meaning remains undetermined."
+    return {
+        "semantic_assessment": assessment,
+        "source_correspondence": correspondence,
+        "material_relation": relation,
+        "material_basis": basis,
+        "material_proof": material_proof,
+        "assessment_notice": notice,
+    }
+
+
+def _unpaired_sources(
+    evidence: dict[str, Any],
+    changes_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """All group member source passages, separated by side and pages.
+
+    The report model never pairs these passages.  A proposal group is one
+    uncertainty explanation, but every member's raw passage remains visible.
+    """
+    old: list[dict[str, Any]] = []
+    new: list[dict[str, Any]] = []
+    for change_id in evidence.get("change_ids") or []:
+        change = changes_by_id.get(change_id)
+        if not isinstance(change, dict):
+            continue
+        for side, bucket in (("old", old), ("new", new)):
+            element = change.get(side)
+            text = _element_text(element)
+            if not text:
+                continue
+            bucket.append({
+                "change_id": change.get("change_id"),
+                "source_candidate_id": change.get("source_candidate_id"),
+                "element_id": (element or {}).get("element_id"),
+                "page": (element or {}).get("primary_page"),
+                "text": text,
+            })
+    return {
+        "old": old,
+        "new": new,
+        "paired": False,
+        "notice": (
+            "Old and new passages are listed separately as unpaired proposal "
+            "evidence, not as a fabricated paired change."
+        ),
+    }
 
 
 def _side_section_map(document: dict[str, Any] | None) -> dict[str, str]:
@@ -231,8 +318,15 @@ def _change_entry(
         "token_diff": record.get("token_diff"),
         "cell_changes": [],
         "evidence": None,
+        "unpaired_sources": None,
         "linked_kind": None,
         "linked_record_id": None,
+        **_semantic_fields(
+            record,
+            old_element=old,
+            new_element=new,
+            source_state=record_result_state(record, kind="change"),
+        ),
     }
 
 
@@ -279,8 +373,15 @@ def _table_entry(
         "cell_changes_present": isinstance(record.get("cell_changes"), list),
         "cell_content_status": record.get("cell_content_status"),
         "evidence": None,
+        "unpaired_sources": None,
         "linked_kind": None,
         "linked_record_id": None,
+        **_semantic_fields(
+            record,
+            old_element=old,
+            new_element=new,
+            source_state=record_result_state(record, kind="table"),
+        ),
     }
 
 
@@ -290,6 +391,7 @@ def _review_entry(
     linked: dict[str, Any] | None,
     old_document: dict[str, Any] | None,
     new_document: dict[str, Any] | None,
+    changes_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     review = item.get("record") or {}
     evidence = review.get("evidence") if isinstance(review.get("evidence"), dict) else {}
@@ -356,6 +458,10 @@ def _review_entry(
         "linked_record_id": linked_id,
         "evidence": evidence,
         "resolution": review.get("resolution") or {},
+        "unpaired_sources": (
+            _unpaired_sources(evidence, changes_by_id or {})
+            if evidence.get("change_ids") else base.get("unpaired_sources")
+        ),
         "reasons": list(
             (review.get("resolution") or {}).get("review_reasons")
             or evidence.get("review_reasons")
@@ -363,6 +469,16 @@ def _review_entry(
             or []
         ),
     })
+    if "semantic_assessment" not in base:
+        base.update(_semantic_fields(
+            review, old_element=None, new_element=None, source_state=UNCERTAIN
+        ))
+    if evidence.get("correspondence") in {"proposed", "unresolved"}:
+        base["source_correspondence"] = evidence["correspondence"]
+        base["assessment_notice"] = (
+            "Possible counterpart evidence only; old and new passages are "
+            "unpaired and are not a verified pair."
+        )
     return base
 
 
@@ -433,12 +549,18 @@ def build_report_model(
         for item in tables
         if record_result_state(item, kind="table") == "supported"
     ]
+    changes_by_id = {
+        item.get("change_id"): item
+        for item in changes
+        if isinstance(item.get("change_id"), str)
+    }
     uncertain = [
         _review_entry(
             item,
             linked=item.get("linked"),
             old_document=old_document,
             new_document=new_document,
+            changes_by_id=changes_by_id,
         )
         for item in canonical_uncertain_records(changes, tables, reviews)
     ]

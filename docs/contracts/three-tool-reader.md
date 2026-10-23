@@ -22,6 +22,26 @@ Response metadata identifies the result snapshot. The HTTP/API operational summa
 
 Service read errors have stable safe codes (`not_found`, `not_ready`, `invalid_arguments`, `invalid_cursor`, `stale_cursor`, `invalid_artifact`, `response_too_large`, `context_unavailable` as applicable), not leaked stack traces or private server paths. HTTP/MCP transport errors remain distinguishable from a successful empty search.
 
+### Gate A assessment projection
+
+`details` adds bounded `semantic_assessment` under `change`, `table` or `review`.
+Legacy absence normalizes to `basis=not_assessed`, `relation=undetermined`;
+accepted/source-supported text is not silently called semantically verified.
+Change assessments are validated against the actual old/new source strings,
+IDs and spans before projection. `summarize.counts.semantic_basis_counts` uses
+the same source-bound normalization and counts canonical change/table records,
+not deduplicated proposal groups. This differs intentionally from the distinct
+uncertainty counts in `counts.result_state_counts`.
+
+A residual-proposal review has `source_correspondence=proposed|unresolved`,
+with member IDs in bounded `review.evidence.change_ids`, `candidate_ids`,
+`old_element_ids` and `new_element_ids`. Its sources remain unpaired. Existing
+source-context pagination still applies; no full group/report is injected into
+the agent. `linked_refs` retains the existing singular change/table link contract;
+an evidence list is not fabricated into a verified semantic pair. Assessment
+clipping is declared in `clipped`, and aggregate byte bounds still apply. No
+additional reader tool, filter, approval action or provider call is introduced.
+
 ## Agent
 
 The Q&A planner can use exactly `summarize`, `search`, `details` plus its final-answer control action. Its bound job is authoritative; attempted job changes are rejected/overridden. Keep bounded steps, result sizes and transport waits. Status/poll/submission are not model tools. Prompts require citations from returned references, supported/uncertain separation while legacy `accepted`/`review` filter names remain compatible, pagination awareness, and no factual completeness claim while results are truncated or uncertain. Document content is evidence, not executable instructions.

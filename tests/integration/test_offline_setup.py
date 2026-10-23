@@ -234,7 +234,25 @@ class DemoEndToEndTest(unittest.TestCase):
             canonical = self._canonical(root)
             self.assertEqual(canonical["statistics"]["changes"], 5)
             self.assertEqual(canonical["statistics"]["table_changes"], 1)
-            self.assertEqual(canonical["statistics"]["review_queue"], 1)
+            # Two review entries are intentional: the pre-existing ambiguous
+            # short pair plus one grouped residual-proposal uncertainty.  The
+            # legacy completions deletion and the new Embeddings paragraph are
+            # plausible counterparts under the same section, so neither may be
+            # independently accepted as an absence-based add/delete.
+            self.assertEqual(canonical["statistics"]["review_queue"], 2)
+            grouped = [
+                item for item in canonical["review_queue"]
+                if item.get("source_kind") == "residual_proposal_group"
+            ]
+            self.assertEqual(len(grouped), 1)
+            evidence = grouped[0]["evidence"]
+            self.assertEqual(
+                set(evidence["candidate_ids"]),
+                {"DELETED-CANDIDATE-000001", "ADDED-CANDIDATE-000002"},
+            )
+            self.assertEqual(evidence["old_element_ids"], ["OLD-P00006"])
+            self.assertEqual(evidence["new_element_ids"], ["NEW-P00008"])
+            self.assertIs(evidence["consumes_candidates"], False)
 
 
 if __name__ == "__main__":

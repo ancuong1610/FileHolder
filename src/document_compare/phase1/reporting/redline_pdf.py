@@ -308,6 +308,8 @@ def _render_change(entry: dict[str, Any], story: list[Any], *, suffix: str = "")
     story.append(_para(f"After \u2014 new: {flow['new']}", _STYLE))
     if flow["content_count"] or flow["wrap_count"] or flow["warning"]:
         story.append(_para(flow["summary"], _STYLE))
+    if entry.get("assessment_notice"):
+        story.append(_para(_escape(entry["assessment_notice"]), _STYLE))
     proof = _proof_line(change)
     if proof:
         story.append(_para(proof, _STYLE))
@@ -404,6 +406,41 @@ def _render_table_entry(entry: dict[str, Any], story: list[Any]) -> None:
         story.append(_para(proof, _STYLE))
 
 
+def _render_unpaired_sources(entry: dict[str, Any], story: list[Any]) -> None:
+    """Show every grouped member passage separately; never invent a pair."""
+    sources = entry.get("unpaired_sources") or {}
+    old = sources.get("old") or []
+    new = sources.get("new") or []
+    if not old and not new:
+        return
+    story.append(_para(
+        _escape(sources.get("notice") or (
+            "Old and new passages below are unpaired proposal evidence."
+        )),
+        _STYLE,
+    ))
+    for label, items in (
+        ("Old source passages (unpaired)", old),
+        ("New source passages (unpaired)", new),
+    ):
+        story.append(_para(_escape(label), _LABEL_STYLE))
+        if not items:
+            story.append(_para("None.", _STYLE))
+            continue
+        for item in items:
+            page = item.get("page")
+            element_id = item.get("element_id")
+            meta = " ".join(
+                bit for bit in (
+                    f"page {_escape(page)}" if page is not None else "",
+                    _escape(element_id) if element_id else "",
+                ) if bit
+            )
+            if meta:
+                story.append(_para(meta, _STYLE))
+            story.append(_para(_escape(item.get("text") or ""), _STYLE))
+
+
 def _render_evidence_review(entry: dict[str, Any], story: list[Any]) -> None:
     """Evidence-only uncertainty: reasons and references, never a fake pair."""
     review_id = entry.get("review_id") or entry.get("record_id") or "review"
@@ -415,6 +452,9 @@ def _render_evidence_review(entry: dict[str, Any], story: list[Any]) -> None:
         "Why this remains uncertain: " + _escape(" ".join(_human_reasons(entry))),
         _STYLE,
     ))
+    if entry.get("assessment_notice"):
+        story.append(_para(_escape(entry["assessment_notice"]), _STYLE))
+    _render_unpaired_sources(entry, story)
     story.append(_para(
         _escape("Evidence references: " + "; ".join(_evidence_lines(entry))),
         _STYLE,

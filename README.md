@@ -6,6 +6,24 @@ limitations. There is no approval task or queue to finish a comparison; the
 optional read-only agent answers questions over the saved result. Scope:
 two-version document comparison only.
 
+Gate A adds two separate evidence axes without a model or new dependency:
+source **correspondence** (verified/proposed/unresolved) and **material meaning**
+(deterministic source witness/undetermined). An unmatched residual with a
+plausible bounded counterpart is reported as uncertain rather than as an
+independent accepted add/delete. A short pair may clear only its
+`short_text_similarity_pair` review reason when Stage 14 independently
+revalidates a complete deterministic witness; model advice never accepts or
+suppresses. Legacy saved results without an assessment stay read-only and are
+reported as `not_assessed`, not as semantic proof.
+
+Gate B is a separate optional shadow experiment, not a runtime path or package
+dependency. It can assess complete clause pairs with a pinned local NLI
+cross-encoder and record advisory suggestions plus explicit protected-fact
+abstentions. It loads only an explicit local model directory, needs optional
+`torch`/`transformers` in an isolated environment, and writes a fresh evaluation
+directory. Model scores never change canonical status; see
+[evaluation/README.md](src/document_compare/phase1/evaluation/README.md).
+
 New here? Read [docs/architecture.md](docs/architecture.md) for the layout and
 15-stage map, and [docs/review-guide.md](docs/review-guide.md) to route a task to
 its owning file and check. For a real environment, see
@@ -40,7 +58,14 @@ supports paths with spaces. Inspect `output/comparison_redline.pdf`,
 `output/comparison_inline.pdf` and `output/bu_comparison_redline.html` afterwards.
 The primary HTML/PDF report includes supported changes, uncertain differences
 with plain-language reasons, section/page grouping and a separate technical
-details area or appendix. It is not an accepted-only summary.
+details area or appendix. It is not an accepted-only summary. In
+`comparison_inline.pdf`, every canonical text change stays visible, including a
+change under review; its uncertain-differences section adds reasons and separate
+unpaired OLD/NEW source passages where the saved result resolves them. If no
+passage can be resolved it names the missing evidence IDs and says the source
+passage is unavailable. Red strike/blue underline there means textual deletion/
+insertion in the report, not proof of source-PDF strikethrough formatting. This
+is separate from the HTML report and index supported-only markers.
 
 ## Commands
 
@@ -109,6 +134,11 @@ contracts are unchanged.
 - Contract/integration evidence only; no real-LLM reasoning or real-company
   semantic accuracy is claimed. Synthetic tests do not prove company-PDF or
   Windows acceptance.
+- Gate B shadow output is advisory research evidence, not calibrated confidence,
+  legal truth or an authoritative disposition. The previously exposed 72-pair
+  corpus and 48-pair holdout are development/regression evidence now. No
+  untouched holdout, >=80% supported recall, >=95% supported precision or
+  semantic release readiness is claimed from this code or its fake-backend tests.
 - Native PDF bookmarks are optional structural evidence, not a printed table of
   contents or authoritative hierarchy. Missing, partial, invalid or stale
   outline evidence falls back to the existing reconstruction path.

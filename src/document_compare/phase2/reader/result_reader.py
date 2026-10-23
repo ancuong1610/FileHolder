@@ -33,6 +33,9 @@ from document_compare.phase1.contracts.result_state import (
     record_result_state,
     result_state_counts,
 )
+from document_compare.phase1.contracts.semantic_assessment import (
+    normalize_assessment,
+)
 
 JOB_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
@@ -352,6 +355,12 @@ def summarize(
         base["ground_truth_notice"] = GROUND_TRUTH_NOTICE
         return base
     change_type_counts, resolution_status_counts = _record_counts(changes, tables)
+    semantic_basis_counts: dict[str, int] = {}
+    for item in [*changes, *tables]:
+        if not isinstance(item, dict):
+            continue
+        basis = _source_bound_assessment(item).get("basis")
+        semantic_basis_counts[basis] = semantic_basis_counts.get(basis, 0) + 1
 
     derived_limitations: list[str] = []
     if reviews:
@@ -381,6 +390,7 @@ def summarize(
                 "review_open": len(reviews),
                 "change_type_counts": change_type_counts,
                 "resolution_status_counts": resolution_status_counts,
+                "semantic_basis_counts": semantic_basis_counts,
                 "result_state_counts": result_state_counts(
                     changes, tables, reviews, _as_list(canonical.get("non_semantic_events"))
                 ),
@@ -949,6 +959,15 @@ def _bounded_table_side(side: Any) -> dict[str, Any] | None:
     return projected
 
 
+def _source_bound_assessment(record: dict[str, Any]) -> dict[str, Any]:
+    old, new = record.get("old"), record.get("new")
+    return normalize_assessment(
+        record.get("semantic_assessment"),
+        old_element=old if isinstance(old, dict) else None,
+        new_element=new if isinstance(new, dict) else None,
+    )
+
+
 def _change_projection(record: dict[str, Any], text_offset: int, text_limit: int) -> dict[str, Any]:
     old = _as_dict(record.get("old"))
     new = _as_dict(record.get("new"))
@@ -957,12 +976,16 @@ def _change_projection(record: dict[str, Any], text_offset: int, text_limit: int
     resolution, resolution_clipped = _bounded_json(_resolution(record))
     if isinstance(resolution, dict):
         resolution["result_state"] = _result_state(record, "change")
+    semantic_assessment, semantic_clipped = _bounded_json(
+        _source_bound_assessment(record)
+    )
     clipped = [
         name
         for name, flag in (
             ("token_diff", token_clipped),
             ("provenance", provenance_clipped),
             ("resolution", resolution_clipped),
+            ("semantic_assessment", semantic_clipped),
         )
         if flag
     ]
@@ -987,6 +1010,7 @@ def _change_projection(record: dict[str, Any], text_offset: int, text_limit: int
         "token_diff": token_diff,
         "similarity": record.get("similarity"),
         "resolution": resolution,
+        "semantic_assessment": semantic_assessment,
         "provenance": provenance,
         "clipped": clipped,
     }
@@ -1228,6 +1252,9 @@ def details(
         resolution, resolution_clipped = _bounded_json(_resolution(record))
         if isinstance(resolution, dict):
             resolution["result_state"] = _result_state(record, "table")
+        semantic_assessment, semantic_clipped = _bounded_json(
+            normalize_assessment(record.get("semantic_assessment"))
+        )
         out["table"] = {
             "table_change_id": record.get("table_change_id"),
             "change_type": record.get("change_type"),
@@ -1236,8 +1263,16 @@ def details(
             "old": _bounded_table_side(record.get("old")),
             "new": _bounded_table_side(record.get("new")),
             "resolution": resolution,
+            "semantic_assessment": semantic_assessment,
             "review_reasons": _bounded_reasons(record),
-            "clipped": ["resolution"] if resolution_clipped else [],
+            "clipped": [
+                name
+                for name, flag in (
+                    ("resolution", resolution_clipped),
+                    ("semantic_assessment", semantic_clipped),
+                )
+                if flag
+            ],
             **paginated,
         }
         out["context"] = {
@@ -1263,6 +1298,14 @@ def details(
         resolution, resolution_clipped = _bounded_json(_resolution(record))
         if isinstance(resolution, dict):
             resolution["result_state"] = "uncertain"
+        semantic_assessment, semantic_clipped = _bounded_json(
+            normalize_assessment(record.get("semantic_assessment"))
+        )
+        correspondence = (
+            evidence.get("correspondence")
+            if isinstance(evidence, dict) and evidence.get("correspondence")
+            else semantic_assessment.get("correspondence")
+        )
         old_anchors, new_anchors, linked_refs = _review_anchor_sources(record, index)
         out["review"] = {
             "review_id": record.get("review_id"),
@@ -1274,11 +1317,17 @@ def details(
             "needs_review": True,
             "confirmed": False,
             "resolution": resolution,
+            "semantic_assessment": semantic_assessment,
+            "source_correspondence": correspondence,
             "evidence": evidence,
             "linked_refs": linked_refs,
             "clipped": [
                 name
-                for name, flag in (("evidence", evidence_clipped), ("resolution", resolution_clipped))
+                for name, flag in (
+                    ("evidence", evidence_clipped),
+                    ("resolution", resolution_clipped),
+                    ("semantic_assessment", semantic_clipped),
+                )
                 if flag
             ],
         }

@@ -20,7 +20,7 @@ src/document_compare/
     matching/             # reconciliation, language profile
     contracts/            # validation, review identity, result-state, outcomes
     reporting/            # report model + original/inline PDF, HTML, diff spans
-    evaluation/           # optional benchmarks/diagnostics (off the runtime path)
+    evaluation/           # optional benchmarks/diagnostics + Gate B shadow (off runtime)
   phase2/                 # API, workflow, MCP, reader, agent
     api/                  # HTTP service + operational summary
     workflow/             # local submit/poll/start/stop orchestration
@@ -53,6 +53,14 @@ Runtime engine code (Phase 1) must not depend on the optional `evaluation/`
 tooling; the production `build_outcome_migration` helper lives in
 `phase1/contracts/outcomes.py` and evaluation imports it.
 
+Gate B shadow evaluation (`evaluation/semantic_shadow*.py`) is also off the
+runtime path. It runs only through an explicit local CLI and local model
+directory; its optional ML import is lazy, it has no HTTP/service endpoint and
+no package dependency. Every output row is advisory (`basis=model_advisory`,
+`authority=false`); it never changes Stage 13/14 dispositions, canonical status,
+IDs or reader output. Protected source facts and explicit abstention remain the
+safety boundary.
+
 ## Stage map (s01–s15, all Phase 1)
 
 Artifacts live under `<workspace>/output/`. The stages are deliberately separate:
@@ -68,14 +76,14 @@ than the immediately previous artifact.
 | s04 | `s04_normalize.py` | Reduce conservative Unicode/whitespace/wrap noise without rewriting raw text or meaningful quantitative differences. | document JSON | normalized JSON |
 | s05 | `s05_anchors.py` | Supply provisional heading context and additive TOC/outline/section evidence, distinguishing recurring page furniture from body content. Verified native outline links are preferred evidence; absence or staleness falls back to reconstruction. These are hypotheses, not authoritative hierarchy. | normalized JSON + outline sidecars | structured JSON + `structure_evidence` |
 | s06 | `s06_exact_matching.py` | Remove confidently unchanged pairs first; use provisional context to disambiguate repeated identical text where supported. | structured pair | exact matches |
-| s07 | `s07_modified_matching.py` | Find supported modified pairs among residuals rather than reporting every edit as unrelated deletion/addition. | structured pair + exact-match residuals | bounded modified matches |
+| s07 | `s07_modified_matching.py` | Find supported modified pairs among residuals rather than reporting every edit as unrelated deletion/addition. Attach only complete deterministic source witnesses; a short-text-only review may be nominated for clearing later. | structured pair + exact-match residuals | bounded modified matches + optional `semantic_assessment` |
 | s08 | `s08_candidates.py` | Assemble paired/unpaired candidates and token diffs while conserving all old/new elements and keeping uncertain duplicate matches visible. | exact + modified matches | candidate/change list |
-| s09 | `s09_movement.py` | Distinguish relocation and split/merge/resegmentation evidence from ordinary edits, without hiding genuine content changes. | candidates | movement-resegmented candidates |
+| s09 | `s09_movement.py` | Distinguish relocation and split/merge/resegmentation evidence from ordinary edits, without hiding genuine content changes. Record bounded plausible residual counterparts and explicit examined/unsearched coverage; proposals never consume candidates. | candidates | movement-resegmented candidates + `residual_proposals`/groups/coverage |
 | s10 | `s10_tables.py` | Compare logical tables across physical page continuations and align rows/cells, preserving unresolved table evidence. | structured pair + movement candidates | table comparison records |
-| s11 | `s11_routing.py` | Decide deterministically which cases are supported and which remain uncertain or eligible for optional advisory evaluation; no domain-specific verifier. | candidates + tables | routing with `UNCERTAIN_RESULT` |
+| s11 | `s11_routing.py` | Decide deterministically which cases are supported and which remain uncertain or eligible for optional advisory evaluation; no domain-specific verifier. Plausible residual counterparts or incomplete search coverage block absence-based add/delete acceptance. | candidates + tables | routing with `UNCERTAIN_RESULT` |
 | s12 | `s12_packets.py` | Package only eligible cases into bounded old/new evidence for optional evaluation, not an unbounded document upload. | eligible routes + evidence | bounded review packets |
 | s13 | `s13_llm_evaluator.py` | Obtain optional advisory `REAL_CHANGE` / `ARTIFACT` / `UNCERTAIN` recommendations with traceability; mock mode exercises the contract without model calls. | packets | disabled/mock/real decisions + trace |
-| s14 | `s14_canonical_result.py` | Produce the single canonical result using deterministic resolution rules; preserve LLM advice without letting it approve or suppress changes. Adds normalized `result_state` while retaining legacy status fields. | routing + candidate/table/evaluation evidence | canonical result + review queue |
+| s14 | `s14_canonical_result.py` | Produce the single canonical result using deterministic resolution rules; preserve LLM advice without letting it approve or suppress changes. Independently revalidates semantic witnesses and emits one grouped explanation for a residual proposal group while keeping every member record. Adds normalized `result_state` while retaining legacy status fields. | routing + candidate/table/evaluation evidence | canonical result + review queue |
 | s15 | `s15_serve.py` | Present/export the canonical result for human inspection and downstream reading without recomputing matching; primary HTML/PDF use canonical records, not an accepted-only projection. | canonical + structured artifacts | complete HTML/PDF/CSV/manifest/index bundle |
 
 Stage 15 is Phase 1 reporting, not Phase 2 logic. Its generated

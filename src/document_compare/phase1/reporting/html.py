@@ -352,6 +352,58 @@ def _before_after_html(entry: dict) -> str:
     )
 
 
+def _assessment_html(entry: dict) -> str:
+    """Source support and material meaning stay visibly separate."""
+    notice = entry.get("assessment_notice")
+    correspondence = entry.get("source_correspondence")
+    relation = entry.get("material_relation")
+    if not notice and not correspondence:
+        return ""
+    bits = []
+    if correspondence:
+        bits.append(f"source correspondence: {correspondence}")
+    if relation:
+        bits.append(f"material meaning: {relation}")
+    sentence = "; ".join(bits)
+    return (
+        "<p class='uncertain-reason'>"
+        f"{_esc(notice or sentence)}"
+        + (f" ({_esc(sentence)})" if sentence and notice else "")
+        + "</p>"
+    )
+
+
+def _unpaired_sources_html(entry: dict) -> str:
+    sources = entry.get("unpaired_sources") or {}
+    old = sources.get("old") or []
+    new = sources.get("new") or []
+    if not old and not new:
+        return ""
+    def side(label: str, items: list[dict]) -> str:
+        if not items:
+            return f"<div class='side'><b>{_esc(label)}</b><p>None.</p></div>"
+        rows = "".join(
+            "<li>"
+            + (
+                f"<span class='meta'>page {_esc(item.get('page'))} &middot; "
+                f"{_esc(item.get('element_id'))}</span> "
+                if item.get("page") is not None or item.get("element_id") else ""
+            )
+            + f"{_text_html(item.get('text') or '')}</li>"
+            for item in items
+        )
+        return f"<div class='side'><b>{_esc(label)}</b><ul>{rows}</ul></div>"
+    return (
+        "<p class='uncertain-reason'>"
+        f"{_esc(sources.get('notice') or 'These old and new passages are unpaired evidence.')}"
+        "</p>"
+        "<div class='beforeafter'>"
+        + side("Old source passages (unpaired)", old)
+        + side("New source passages (unpaired)", new)
+        + "</div>"
+    )
+
+
 def _is_table_entry(entry: dict) -> bool:
     """Uncertain tables are projected as reviews but keep table shape."""
     return "old_table" in entry or "new_table" in entry
@@ -447,13 +499,13 @@ def _entry_card(entry: dict) -> str:
             reason_html
             or "<p class='uncertain-reason'>This case remains uncertain; "
             "no further reason was recorded.</p>"
-        ) + _evidence_refs(entry)
+        ) + _assessment_html(entry) + _unpaired_sources_html(entry) + _evidence_refs(entry)
     else:
         heading = (
             f"{entry.get('change_type') or 'Change'} \u00b7 "
             f"{entry.get('group_title') or 'Unassigned'}"
         )
-        body = reason_html + _before_after_html(entry)
+        body = reason_html + _before_after_html(entry) + _assessment_html(entry)
     return (
         f"<article class='diffcard {_esc(state)}' data-record-id='{_esc(record_id)}' "
         f"data-review-id='{_esc(entry.get('review_id') or '')}'>"

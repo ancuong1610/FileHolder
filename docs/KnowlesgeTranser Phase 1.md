@@ -193,6 +193,46 @@ DI word confidence, anchor confidence labels, matching similarity scores and
 evaluator confidence describe different things. None is a calibrated probability
 that the comparison is legally or semantically correct.
 
+### 2.7. Gate A: correspondence is not material meaning
+
+The later Gate A policy keeps three separate questions: did source text change,
+is the old/new correspondence verified, and does a narrow source-backed witness
+support material change? Optional `semantic_assessment` records schema/policy,
+correspondence/relation/basis, side IDs, exact text hashes and code-point spans,
+source context, guard results and limitations. Older saved records normalize
+to `not_assessed`; their accepted status is preserved, not recast as semantic
+verification. See [the matching contract](contracts/phase1-matching.md).
+
+- Stage 07 may attach a narrow witness, and Stage 08 preserves it. Lexical
+  score/thresholds are not globally relaxed. A short-text-only pair can become
+  supported only with independent reciprocal correspondence, finite sufficient
+  margin, clean extraction and a valid complete deterministic witness.
+- Stage 09 records at most five possible residual counterparts per element and
+  1,000 actual additional score checks per job. Scores are cached; partial,
+  unsearched/exhausted/pruned regions stay visible. Proposals do not consume
+  either side or become matches merely by being proposed.
+- Stage 11 blocks unsupported independent add/delete acceptance when a plausible
+  counterpart or incomplete search remains. Stage 14 independently validates and
+  recomputes a nominated material proof before keeping acceptance. Stage 13
+  advice, including mock `REAL_CHANGE`, still cannot accept or suppress.
+- A proposal component produces one canonical uncertainty explanation, preserving
+  all member changes and source IDs. Stage 15 lists OLD and NEW passages separately
+  as unpaired evidence, including full numbers/negations; it does not manufacture
+  before/after correspondence. Reader details remain bounded and read-only.
+
+The initial English witness is deliberately incomplete: standalone polarity,
+different mandatory/permissive force, unambiguous numeric components and threshold
+operators over unchanged qualifying context. `must`/`shall` equivalence, quoted or
+incomplete/multiple clauses, conditions/exceptions, ambiguous numeric formats,
+signed/grouped/fractional tokens and unsupported unit-only changes abstain. This
+is an evidence policy, not a general language/legality verifier or a calibrated
+probability. Local semantic-model shadow work is a future gate, not enabled here.
+
+The old 72-pair corpus is now development/regression evidence. A fresh sealed
+48-pair set is frozen before implementation and opened only after source freeze;
+its labels are AI-authored, not expert-certified natural revisions. Synthetic
+success alone cannot establish production semantic readiness or the 80%/95% goal.
+
 ## 3. Pipeline orchestration and replay
 
 Owner: `src/document_compare/phase1/pipeline/cli.py`.

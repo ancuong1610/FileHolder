@@ -9,6 +9,7 @@ guard runs for the CLI stage runner.
 from document_compare.shared.paths import find_project_root
 from document_compare.phase1.extraction.di_fields import get_page_number, set_page_number
 from document_compare.phase1.contracts.validation import require
+from document_compare.phase1.matching.semantic_evidence import assess_pair
 
 # ---- imports and configuration constants ----
 
@@ -711,6 +712,21 @@ def build_result(
                 old_index
             ],
         )
+
+        # Additive source-bound evidence: only a complete deterministic
+        # witness is attached.  A missing witness is legacy ``not_assessed``
+        # at every consumer and never weakens the existing review rules.
+        assessment = assess_pair(
+            old,
+            new,
+            correspondence=(
+                "verified"
+                if margin >= MIN_AUTOMATIC_MARGIN
+                else "proposed"
+            ),
+        )
+        if assessment.get("basis") == "deterministic_witness":
+            pair["semantic_assessment"] = assessment
 
         if automatic:
             accepted.append(pair)

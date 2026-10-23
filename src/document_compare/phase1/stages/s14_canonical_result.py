@@ -29,7 +29,16 @@ from document_compare.phase1.contracts.result_state import (
     result_state_counts,
 )
 from document_compare.phase1.contracts.review_identity import structural_route_identity
+from document_compare.phase1.contracts.semantic_assessment import (
+    is_deterministic_material_proof,
+    normalize_assessment,
+    validate_semantic_assessment,
+)
 from document_compare.phase1.contracts.validation import require
+from document_compare.phase1.matching.semantic_evidence import (
+    independent_correspondence_verified,
+    recompute_material_proof,
+)
 
 STEP14_VERSION = "3.0.0-generic-canonical-result"
 
@@ -70,6 +79,11 @@ SEMANTIC_SIGNAL_REVIEW_REASONS = frozenset({
 PROVEN_WRAP_REVIEW_REASONS = frozenset({
     "hyphenation_wrap_source_line_break_proven",
 })
+
+# Only the existing short-text review reason may be cleared by a validated
+# deterministic material witness.  Every other reason stays in review.
+SEMANTIC_SHORT_PAIR_REASONS = frozenset({"short_text_similarity_pair"})
+SEMANTIC_ACCEPT_CASE_TYPE = "semantic_material_change"
 
 # Additive domain metadata stripped by ``generic_projection``; never part of
 # the generic comparison content.  ``authorization`` is deliberately excluded:
@@ -199,6 +213,45 @@ def _resolve(
         resolution["method"] = "llm_advisory"
         resolution["packet_decision"] = decision
     return resolution
+
+
+def _validated_semantic_proof(
+    item: dict[str, Any],
+    resolution: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Independently revalidate a deterministic short-pair material proof.
+
+    The serialized route, a forged assessment, a stale source hash, an offset
+    mismatch, a model advisory or any additional review reason cannot accept a
+    pair.  A validated proof is returned as a safe copy; ``None`` means the
+    deterministic decision remains review.
+    """
+    if resolution.get("case_type") != SEMANTIC_ACCEPT_CASE_TYPE:
+        return None
+    if resolution.get("status") != "accepted" or resolution.get("needs_review"):
+        return None
+    if set(item.get("review_reasons") or []) != SEMANTIC_SHORT_PAIR_REASONS:
+        return None
+    old = item.get("old")
+    new = item.get("new")
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return None
+    assessment = item.get("semantic_assessment")
+    validation = validate_semantic_assessment(
+        assessment, old_element=old, new_element=new
+    )
+    if not validation["valid"]:
+        return None
+    validated = validation["assessment"]
+    if not is_deterministic_material_proof(validated):
+        return None
+    if validated.get("correspondence") != "verified":
+        return None
+    if not independent_correspondence_verified(item):
+        return None
+    if not recompute_material_proof(validated, old, new):
+        return None
+    return validated
 
 
 def resolution_for(candidate_id: str) -> dict[str, Any]:
@@ -376,10 +429,44 @@ def _build_changes(
         seen_review_keys.add(key)
         review_queue.append(entry)
 
+    proposal_groups_by_id = {
+        str(group.get("group_id")): group
+        for group in movement.get("residual_proposal_groups") or []
+        if isinstance(group, dict) and group.get("group_id")
+    }
+    queued_proposal_groups: dict[str, dict[str, Any]] = {}
+
     for group in ("modified", "modified_review", "deleted", "added"):
         for item in movement.get(group) or []:
             cid = item["candidate_id"]
             resolution = _resolve(cid, routes_by_candidate, decisions_by_route)
+
+            # Stage 14 is the final deterministic owner: a semantic acceptance
+            # nomination is only kept when the actual source revalidates it.
+            validated_assessment: dict[str, Any] | None = None
+            if resolution.get("case_type") == SEMANTIC_ACCEPT_CASE_TYPE:
+                validated_assessment = _validated_semantic_proof(item, resolution)
+                if validated_assessment is None:
+                    resolution = dict(resolution)
+                    resolution.update({
+                        "status": "review",
+                        "needs_review": True,
+                        "result_state": "uncertain",
+                        "review_reasons": list(dict.fromkeys(
+                            list(resolution.get("review_reasons") or [])
+                            + ["semantic_witness_not_independently_valid"]
+                        )),
+                    })
+
+            proposal_group_id = item.get("residual_proposal_group_id")
+            if (
+                group in ("deleted", "added")
+                and isinstance(proposal_group_id, str)
+                and proposal_group_id
+            ):
+                resolution = dict(resolution)
+                resolution["proposal_group_id"] = proposal_group_id
+
             record = {
                 "change_id": f"CHANGE-{len(changes)+1:06d}",
                 "source_candidate_id": cid,
@@ -395,6 +482,15 @@ def _build_changes(
                     "matching_not_recomputed": True,
                 },
             }
+            if validated_assessment is not None:
+                record["semantic_assessment"] = validated_assessment
+            elif item.get("semantic_assessment") is not None:
+                # Never project a forged/invalid assessment as authority.
+                record["semantic_assessment"] = normalize_assessment(
+                    item.get("semantic_assessment"),
+                    old_element=item.get("old"),
+                    new_element=item.get("new"),
+                )
             record["change_fingerprint"] = change_fingerprint(
                 record["change_type"], record["old"], record["new"]
             )
@@ -408,6 +504,33 @@ def _build_changes(
 
             changes.append(record)
             if resolution["needs_review"]:
+                if (
+                    group in ("deleted", "added")
+                    and isinstance(proposal_group_id, str)
+                    and proposal_group_id
+                ):
+                    queued_proposal_groups.setdefault(
+                        proposal_group_id,
+                        {
+                            "group": proposal_groups_by_id.get(proposal_group_id, {}),
+                            "candidate_ids": [],
+                            "old_element_ids": [],
+                            "new_element_ids": [],
+                            "change_ids": [],
+                        },
+                    )
+                    entry = queued_proposal_groups[proposal_group_id]
+                    entry["candidate_ids"].append(cid)
+                    entry["change_ids"].append(record["change_id"])
+                    if isinstance(item.get("old"), dict):
+                        element_id = item["old"].get("element_id")
+                        if element_id:
+                            entry["old_element_ids"].append(element_id)
+                    if isinstance(item.get("new"), dict):
+                        element_id = item["new"].get("element_id")
+                        if element_id:
+                            entry["new_element_ids"].append(element_id)
+                    continue
                 queue_review({
                     "review_id": f"REVIEW-{len(review_queue)+1:06d}",
                     "source_kind": "non_table_change",
@@ -416,6 +539,48 @@ def _build_changes(
                     "case_type": resolution["case_type"],
                     "resolution": resolution,
                 })
+
+    # One grouped user-facing uncertainty entry per residual proposal group.
+    # The original candidate/change records are preserved; this entry only
+    # provides one canonical explanation and typed source references.
+    for group_id in sorted(queued_proposal_groups):
+        entry = queued_proposal_groups[group_id]
+        group = entry.get("group") or {}
+        proposal_ids = sorted({
+            str(proposal.get("proposal_id"))
+            for proposal in group.get("proposals") or []
+            if isinstance(proposal, dict) and proposal.get("proposal_id")
+        })
+        correspondence = group.get("correspondence") or "proposed"
+        evidence = {
+            "proposal_group_id": group_id,
+            "candidate_ids": sorted(set(entry["candidate_ids"])),
+            "change_ids": sorted(set(entry["change_ids"])),
+            "old_element_ids": sorted(set(entry["old_element_ids"])),
+            "new_element_ids": sorted(set(entry["new_element_ids"])),
+            "proposal_ids": proposal_ids,
+            "correspondence": correspondence,
+            "consumes_candidates": False,
+        }
+        queue_review({
+            "review_id": f"REVIEW-{len(review_queue)+1:06d}",
+            "source_kind": "residual_proposal_group",
+            "source_evidence_id": group_id,
+            "source_candidate_id": None,
+            "proposal_group_id": group_id,
+            "case_type": "unresolved_residual_counterpart",
+            "resolution": {
+                "route": "UNCERTAIN_RESULT",
+                "case_type": "unresolved_residual_counterpart",
+                "method": "deterministic",
+                "status": "review",
+                "needs_review": True,
+                "result_state": "uncertain",
+                "review_reasons": ["plausible_unresolved_counterpart"],
+                "proposal_group_id": group_id,
+            },
+            "evidence": evidence,
+        })
 
     # Duplicate exact assignment is never a substantive change.
     for item in movement.get("duplicate_exact_review") or []:

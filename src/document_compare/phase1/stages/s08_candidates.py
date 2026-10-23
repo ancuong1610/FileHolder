@@ -215,7 +215,7 @@ def paired_candidate(
             + ["comparison_token_equivalent_despite_text_difference"]
         ))
 
-    return {
+    candidate = {
         "candidate_id": candidate_id,
         "candidate_type": candidate_type,
         "source_match_id": match.get("match_id"),
@@ -233,6 +233,10 @@ def paired_candidate(
         "token_diff": token_diff,
         "comparison_token_equivalent": comparison_token_equivalent,
     }
+    assessment = match.get("semantic_assessment")
+    if isinstance(assessment, dict):
+        candidate["semantic_assessment"] = assessment
+    return candidate
 
 
 def single_sided_candidate(
