@@ -35,6 +35,7 @@ this order before touching code: `docs/architecture.md` → the owning folder
 | Phase selection / saved workspace reuse wrong | `phase2/workflow/local_reviewer.py`, `phase2/workflow/saved_workspace.py` | `python -m unittest tests.phase2.test_local_flow tests.phase2.test_saved_workspace` |
 | Import boundary or stage count broken | `phase1/stages/`, dependency edges | `python -m unittest tests.integration.test_architecture tests.integration.test_stage_import_safety` |
 | README / docs links broken | folder `README.md`s, `docs/` | `python -m unittest tests.integration.test_architecture.ReadmeCoverageTest` |
+| Agent harness structure, skills or route links broken | `AGENTS.md`, `docs/governance/`, `.agents/skills/`, `tools/harness/validate.py` | `python -m unittest tests.integration.test_harness` and `python tools/harness/validate.py` |
 
 ## Boundaries not to break
 

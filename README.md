@@ -31,6 +31,9 @@ its owning file and check. For a real environment, see
 For separate Phase 1 / saved-workspace Phase 2 / combined runs, see
 [phase testing](docs/operations/phase-testing.md). Coding agents should start
 with [AGENTS.md](AGENTS.md), including explanation, investigation and safe testing.
+For team use with GitHub Copilot or GitLab Duo + GPT, follow the
+[agent harness quickstart](docs/operations/agent-harness-quickstart.md); check the
+repository structure with `python tools/harness/validate.py`.
 For the full stage-by-stage logic and data transformations, read
 [Knowledge Transfer — Phase 1](docs/KnowlesgeTranser%20Phase%201.md).
 
