@@ -526,6 +526,80 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
     st.caption(f"Change ID: {record_id}")
 
 
+SPLIT_MIN_PX = 260
+SPLIT_MAX_SHARE = 0.65
+SPLITTER_JS = """
+<script>
+(function () {
+  var host = window.parent, doc = host.document;
+  if (host.__dcSplitInstalled) return;
+  host.__dcSplitInstalled = true;
+  var MIN = %(min)d, MAX_SHARE = %(max)s, KEY = 'dc_tree_width';
+  function saved() { try { return parseInt(host.localStorage.getItem(KEY), 10) || null; } catch (e) { return null; } }
+  function store(w) { try { if (w) host.localStorage.setItem(KEY, String(w)); else host.localStorage.removeItem(KEY); } catch (e) {} }
+  function parts() {
+    var block = doc.querySelector('.st-key-split [data-testid="stHorizontalBlock"]');
+    if (!block || block.children.length < 2) return null;
+    return { block: block, left: block.children[0], right: block.children[1] };
+  }
+  function stacked(p) { return host.getComputedStyle(p.block).flexDirection.indexOf('column') === 0 || p.block.clientWidth < 700; }
+  function clamp(p, w) { return Math.max(MIN, Math.min(Math.round(w), Math.round(p.block.clientWidth * MAX_SHARE))); }
+  function apply(p, w) {
+    if (!w || stacked(p)) { p.left.style.flex = ''; p.left.style.maxWidth = ''; p.right.style.flex = ''; return; }
+    w = clamp(p, w);
+    p.left.style.flex = '0 0 ' + w + 'px'; p.left.style.maxWidth = w + 'px'; p.right.style.flex = '1 1 0';
+  }
+  function place(p) {
+    var h = p.block.querySelector(':scope > .dc-split-handle');
+    if (stacked(p)) { if (h) h.style.display = 'none'; return; }
+    if (!h) {
+      h = doc.createElement('div'); h.className = 'dc-split-handle';
+      h.setAttribute('role', 'separator'); h.setAttribute('aria-orientation', 'vertical');
+      h.setAttribute('aria-label', 'Resize structure panel'); h.tabIndex = 0;
+      h.title = 'Drag to resize. Double-click to reset.';
+      h.addEventListener('mousedown', function (e) { start(e); });
+      h.addEventListener('dblclick', function () { store(null); var q = parts(); if (q) { apply(q, null); place(q); } });
+      h.addEventListener('keydown', function (e) {
+        var q = parts(); if (!q || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+        var w = clamp(q, q.left.getBoundingClientRect().width + (e.key === 'ArrowLeft' ? -24 : 24));
+        store(w); apply(q, w); place(q); e.preventDefault();
+      });
+      p.block.style.position = 'relative'; p.block.appendChild(h);
+    }
+    h.style.display = '';
+    var lr = p.left.getBoundingClientRect(), rr = p.right.getBoundingClientRect(), br = p.block.getBoundingClientRect();
+    h.style.left = ((lr.right + rr.left) / 2 - br.left - 5) + 'px';
+  }
+  function start(e) {
+    var p = parts(); if (!p) return; e.preventDefault();
+    doc.body.style.userSelect = 'none'; doc.body.style.cursor = 'col-resize';
+    function move(ev) { var q = parts(); if (!q) return; var w = clamp(q, ev.clientX - q.block.getBoundingClientRect().left); apply(q, w); place(q); store(w); }
+    function up() { doc.removeEventListener('mousemove', move); doc.removeEventListener('mouseup', up); doc.body.style.userSelect = ''; doc.body.style.cursor = ''; }
+    doc.addEventListener('mousemove', move); doc.addEventListener('mouseup', up);
+  }
+  var style = doc.createElement('style');
+  style.textContent = '.dc-split-handle{position:absolute;top:0;bottom:0;width:10px;cursor:col-resize;z-index:5;}'
+    + '.dc-split-handle::after{content:"";position:absolute;left:4px;top:0;bottom:0;width:2px;border-radius:1px;background:rgba(128,128,128,.25);}'
+    + '.dc-split-handle:hover::after,.dc-split-handle:focus::after{background:rgba(59,130,246,.8);}'
+    + '.dc-split-handle:focus{outline:none;}';
+  doc.head.appendChild(style);
+  var pending = false;
+  function sync() { pending = false; var p = parts(); if (!p) return; apply(p, saved()); place(p); }
+  new host.MutationObserver(function () { if (!pending) { pending = true; host.requestAnimationFrame(sync); } })
+    .observe(doc.body, { childList: true, subtree: true });
+  host.addEventListener('resize', function () { host.requestAnimationFrame(sync); });
+  sync();
+})();
+</script>
+""" % {"min": SPLIT_MIN_PX, "max": SPLIT_MAX_SHARE}
+
+
+def _splitter() -> None:
+    """Draggable divider between the structure panel and the viewer (width kept per browser)."""
+    import streamlit.components.v1 as components
+    components.html(SPLITTER_JS, height=0)
+
+
 def render(client, job_id: str, status: dict | None = None) -> None:
     try:
         outline = _outline(client, _key(client), job_id)
@@ -536,7 +610,8 @@ def render(client, job_id: str, status: dict | None = None) -> None:
     _header(status or {}, job_id, outline)
     _chips(chip_counts(outline))
     kind, ctype, query, flagged = _filters()
-    left, right = st.columns([2, 3])
+    _splitter()
+    left, right = st.container(key="split").columns([2, 3])
     with left:
         mode = _order_control()
     shown = with_title_root(outline)

@@ -43,3 +43,10 @@ raw HTML is two static style blocks (tree rows, evenly spread sidebar tabs).
 
 Run: `streamlit run src/document_compare/phase2/ui/app.py`.
 Check: `python -m unittest tests.phase2.test_ui_client tests.phase2.test_ui_smoke tests.phase2.test_viewer_outline`.
+
+Panel width: the divider between the structure tree and the page viewer can be
+dragged (or moved with the arrow keys when focused); width is kept per browser
+in `localStorage` (`dc_tree_width`), limited to 260 px – 65 % of the row, and a
+double-click resets it. It is a small script injected through
+`streamlit.components.v1.html` (no new dependency); on narrow screens where the
+columns stack it switches itself off.
