@@ -2,10 +2,9 @@
 
 Install, run and acceptance guidance for a real (company-machine) environment.
 
-Read first: [company-handover](company-handover.md) — Windows install, the real
-PDF/agent run and the manual acceptance checklist. For team coding-agent setup
-with GitHub Copilot or GitLab Duo, read the
-[agent harness quickstart](agent-harness-quickstart.md).
+Read first: [phase testing](phase-testing.md) — Windows setup, real PDF/agent
+runs, and the manual acceptance limits. For team coding-agent setup with GitHub
+Copilot or GitLab Duo, read the [agent harness quickstart](agent-harness-quickstart.md).
 
 Input/output: this folder is prose only; it produces no artifacts. Runtime jobs
 land under the ignored `workspace/jobs/<job_id>/`.

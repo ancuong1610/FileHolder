@@ -1,101 +1,168 @@
+<<<<<<< README.md
 # Document Comparison Service
 
-Local tool that compares two versions of the same PDF and reports one complete
-result: supported changes, uncertain differences with reasons, and extraction
-limitations. There is no approval task or queue to finish a comparison; the
-optional read-only agent answers questions over the saved result. Scope:
-two-version document comparison only.
+Compare an **old** and a **new** version of the same PDF. The project creates one
+saved result containing supported changes, uncertain differences with reasons,
+and extraction limitations. It is a local, two-version comparison tool.
 
-Gate A adds two separate evidence axes without a model or new dependency:
-source **correspondence** (verified/proposed/unresolved) and **material meaning**
-(deterministic source witness/undetermined). An unmatched residual with a
-plausible bounded counterpart is reported as uncertain rather than as an
-independent accepted add/delete. A short pair may clear only its
-`short_text_similarity_pair` review reason when Stage 14 independently
-revalidates a complete deterministic witness; model advice never accepts or
-suppresses. Legacy saved results without an assessment stay read-only and are
-reported as `not_assessed`, not as semantic proof.
+## Start here
 
-Gate B is a separate optional shadow experiment, not a runtime path or package
-dependency. It can assess complete clause pairs with a pinned local NLI
-cross-encoder and record advisory suggestions plus explicit protected-fact
-abstentions. It loads only an explicit local model directory, needs optional
-`torch`/`transformers` in an isolated environment, and writes a fresh evaluation
-directory. Model scores never change canonical status; see
-[evaluation/README.md](src/document_compare/phase1/evaluation/README.md).
+Use the following order when you are new to the project:
 
-New here? Read [docs/architecture.md](docs/architecture.md) for the layout and
-15-stage map, and [docs/review-guide.md](docs/review-guide.md) to route a task to
-its owning file and check. For a real environment, see
-[docs/operations/company-handover.md](docs/operations/company-handover.md).
-For separate Phase 1 / saved-workspace Phase 2 / combined runs, see
-[phase testing](docs/operations/phase-testing.md). Coding agents should start
-with [AGENTS.md](AGENTS.md), including explanation, investigation and safe testing.
-For team use with GitHub Copilot or GitLab Duo + GPT, follow the
-[agent harness quickstart](docs/operations/agent-harness-quickstart.md); check the
-repository structure with `python tools/harness/validate.py`.
-For the full stage-by-stage logic and data transformations, read
-[Knowledge Transfer — Phase 1](docs/KnowlesgeTranser%20Phase%201.md).
+1. Install the project into a Python virtual environment.
+2. Run the offline demo to check that the comparison engine and reports work.
+3. Run the full test suite before changing code, or focused tests while working
+   on one area.
+4. Use real PDFs only after confirming the configured data-provider and model
+   access are approved for those documents.
 
-## Install (editable)
+For the 15-stage engine and repository layout, see
+[architecture](docs/architecture.md). For task-to-file ownership and focused
+tests, see the [review guide](docs/review-guide.md). For detailed operational
+instructions, provider use, and acceptance limits, see
+[phase testing](docs/operations/phase-testing.md). Coding agents should read
+[AGENTS.md](AGENTS.md) first.
+
+## Choose a command
+
+Run commands from the repository root using the same Python interpreter that
+installed the project. On Windows, replace `python` with
+`.\\.venv\\Scripts\\python.exe`. Use a **fresh workspace** for every new demo or
+comparison; generated `workspace/` content is not source code.
+
+### 1. Install the project
+
+Use this once per virtual environment, and again after dependency or packaging
+changes. It makes `document_compare` importable for commands and subprocesses.
 
 ```bash
 python -m pip install -e .
 ```
 
-Dependencies come from `requirements.txt` (single source via `pyproject.toml`
-dynamic metadata). The internal `bbk_ai_hub_sdk` is intentionally not included;
-install it separately for the default Stage 13 provider and the local chat.
+If installation fails in the company Windows environment because of the
+setuptools/distutils shim, use the approved environment-specific workaround:
 
-## Five-minute offline demo
+```bash
+SETUPTOOLS_USE_DISTUTILS=stdlib python -m pip install --no-deps --no-build-isolation -e .
+```
 
-No credentials, network or PDF uploads. It seeds a bundled synthetic DI pair and
-runs Stages 02–15 with the mock evaluator:
+Do not disable TLS verification or organizational security policies. The internal
+`bbk_ai_hub_sdk` is intentionally not installed by this repository; install it
+only from the approved company index when real Stage 13 or saved-result chat
+requires it.
+
+### 2. Verify the engine offline — recommended first run
+
+Run this when you want a quick, safe confirmation that Phase 1 can produce a
+complete result and reports. It uses bundled synthetic extraction data, runs
+stages 02–15 with mock evaluation, and makes no provider, network, or PDF-upload
+call.
 
 ```bash
 python -m document_compare demo --fixture internal_policy_report --root "workspace/demo run"
 ```
 
-The root must be fresh; the demo refuses to overwrite existing `output/` and
-supports paths with spaces. Inspect `output/comparison_redline.pdf`,
-`output/comparison_inline.pdf` and `output/bu_comparison_redline.html` afterwards.
-The primary HTML/PDF report includes supported changes, uncertain differences
-with plain-language reasons, section/page grouping and a separate technical
-details area or appendix. It is not an accepted-only summary. In
-`comparison_inline.pdf`, every canonical text change stays visible, including a
-change under review; its uncertain-differences section adds reasons and separate
-unpaired OLD/NEW source passages where the saved result resolves them. If no
-passage can be resolved it names the missing evidence IDs and says the source
-passage is unavailable. Red strike/blue underline there means textual deletion/
-insertion in the report, not proof of source-PDF strikethrough formatting. This
-is separate from the HTML report and index supported-only markers.
+The destination must be new. Afterwards inspect the `output/` directory,
+particularly `comparison_result.json`, `comparison_redline.pdf`,
+`comparison_inline.pdf`, and `bu_comparison_redline.html`.
 
-## Commands
+### 3. Test the codebase
+
+Run the complete suite before merging broad changes. A failure means an assertion
+did not match; an error means a test could not complete; a skip means a test was
+intentionally not run (for example, a private fixture is unavailable).
 
 ```bash
-python -m pip install -e .
-python -m document_compare demo --fixture internal_policy_report --root "workspace/demo run"
-python -m document_compare run --root JOB_ROOT --from-stage 02 --to-stage 15
+# All tests
+python -m unittest discover -s tests
+
+# Tests by area
+python -m unittest discover -s tests/phase1
+python -m unittest discover -s tests/phase2
+python -m unittest discover -s tests/integration
+
+# Focused examples
+python -m unittest tests.phase1.test_reconcile
+python -m unittest tests.phase2.test_reader
+```
+
+Synthetic tests prove code and contract behavior, not universal comparison
+accuracy or acceptance for private documents.
+
+### 4. Run Phase 1 on real PDFs
+
+Use this only when the PDFs and any configured extraction provider are approved
+for use. Phase 1 is all 15 comparison and reporting stages. Set `CRR_OLD_PDF`
+and `CRR_NEW_PDF` to the old and new document, then choose a fresh workspace.
+
+```bash
 python -m document_compare.phase2.workflow.local_reviewer --phase phase1 --workspace JOB_ROOT
+```
+
+This explicit mode reads the repository `.env`; `--workspace` overrides
+`CRR_PROJECT_ROOT`. With `CRR_RUN_LLM=mock`, Stage 13 does not call a real LLM,
+but Stage 1 may still use configured document extraction for PDFs without saved
+artifacts. See [phase testing](docs/operations/phase-testing.md#3-real-phase-1-only)
+for configuration and data-handling requirements.
+
+Use the direct pipeline command only to replay a saved stage range. It does not
+load `.env` for you and can replace downstream artifacts:
+
+```bash
+python -m document_compare run --root JOB_ROOT --from-stage 02 --to-stage 15
+```
+
+### 5. Read an existing comparison result (Phase 2)
+
+Use Phase 2 after Phase 1 has completed. It reads the selected workspace in
+place—it does not rerun the comparison or alter source PDFs. Pass the directory
+that contains `output/`, not `output/` itself.
+
+```bash
+# Offline structural/readability check; no chat model call
 python -m document_compare.phase2.workflow.local_reviewer --phase phase2 --workspace JOB_ROOT --check-only
+
+# Interactive saved-result chat; requires approved chat configuration
 python -m document_compare.phase2.workflow.local_reviewer --phase phase2 --workspace JOB_ROOT
+```
+
+Each chat question is bounded to at most ten planner/tool turns over the saved
+reader result. The limit prevents repeated retrieval loops; a question that does
+not reach a final answer within that budget reports an error rather than making
+unbounded model calls.
+
+### 6. Run comparison, then chat
+
+Use this only when both real PDF extraction and interactive chat are approved.
+The workspace must be fresh. If Phase 1 succeeds but chat setup fails, keep the
+artifacts and later use `--phase phase2`; do not rerun the full comparison.
+
+```bash
 python -m document_compare.phase2.workflow.local_reviewer --phase both --workspace FRESH_JOB_ROOT
-python -m document_compare.phase2.workflow.local_reviewer
+```
+
+### Advanced local interfaces
+
+These commands are for API/MCP transport development and diagnostics, rather
+than the normal first-run path:
+
+```bash
+# Seed a synthetic reader workspace for transport checks
 python -m document_compare.phase2.agent.mock_reader --out workspace/reader-mock
+
+# Start local MCP servers
 python -m document_compare.phase2.mcp.workflow_server
 python -m document_compare.phase2.mcp.reader_server
+
+# Start the loopback HTTP API
 python -m uvicorn document_compare.phase2.api.service:app --host 127.0.0.1 --port 8321
-python -m unittest discover -s tests
+
+# Legacy combined interactive API/MCP/chat flow; prompts for PDFs and uses real Stage 13
+python -m document_compare.phase2.workflow.local_reviewer
 ```
 
-Tests may also run by area, e.g. `python -m unittest tests.phase1.test_reconcile`
-or `python -m unittest tests.phase2.test_reader`.
-
-Explicit phase modes load the repository `.env`; `--workspace` overrides
-`CRR_PROJECT_ROOT`. Phase 2 reads the selected completed workspace in place,
-without rerunning Phase 1. `--check-only` is offline; saved-result chat is real
-and uses the local reader, not HTTP/MCP. No flags keeps the original combined
-upload/API/MCP/chat flow. See the testing guide for credentials and acceptance.
+The local services remain loopback-only. The no-flag reviewer command is not a
+replacement for the explicit Phase 1/Phase 2 workflow above.
 
 ## Old → new commands (no compatibility shim)
 
@@ -148,7 +215,9 @@ contracts are unchanged.
 - Source-PDF strikethrough detection is explicitly deferred. Report
   strike-through marks compare old/new text; they are not source formatting.
   Private table-extraction quality remains unverified without a representative
-  failing sample, and the Stage 10 all-pairs performance issue is not repaired
-  in this slice.
+  failing sample. Stage 10 bounds fuzzy table scoring through deterministic
+  header/body/context/shape candidate retrieval, but this does not prove that
+  every true table counterpart is retrieved on private documents.
 - `workspace/` and `input/*` (except `input/.gitkeep`) are gitignored; keep
   credentials in `.env` only and never commit or paste them.
+

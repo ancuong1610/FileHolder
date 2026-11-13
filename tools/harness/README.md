@@ -27,13 +27,17 @@ fixture.
 - Active Markdown links resolve as local files/directories, including encoded
   spaces. External URLs are ignored, fenced code examples are not treated as
   links, and destinations escaping the selected root are rejected.
-- The five `fileholder-` skills have a `SKILL.md`, matching directory/name,
+- The declared `bbk-` skills have a `SKILL.md`, matching directory/name,
   description, unique ID and an index entry. No per-client skill copies are
   allowed.
 - Decision files have an ID matching the filename, a valid status, an index entry
   and a recorded approval before `accepted`.
 - Task routes link Knowledge Transfer, architecture, phase testing, review guide
   and current contracts.
+- The definition of done and handover skill state the pre-push documentation
+  impact rule: update the owning documentation for code-visible behavior, or
+  explicitly record why the diff has no documentation impact. This structural
+  check does not prove that every prose claim is semantically aligned with code.
 
 ## Scope and limits
 

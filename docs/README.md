@@ -16,9 +16,8 @@ deferred, not a prerequisite of that guide.
 - `governance/` — harness authority, proportional workflows and decisions.
 - `operations/` — install/run/acceptance and the
   [agent harness quickstart](operations/agent-harness-quickstart.md).
+- `plans/` — versioned, decision-backed implementation plans for multi-step work.
 - `releases/` — historical release/status notes and the export manifest.
-- `superpowers/` — dated design/plan process records; historical background, not
-  the current runtime specification.
 
 Check: `python -m unittest tests.integration.test_architecture.ReadmeCoverageTest`
 and, for the coding-agent harness, `python tools/harness/validate.py`.

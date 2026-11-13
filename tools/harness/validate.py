@@ -1,7 +1,6 @@
 """Read-only structural validation for the repository coding-agent harness.
 
-The validator checks declared active entrypoints and local Markdown paths, the
-five shared project skills, and the new governance decision records. It rejects
+The validator checks declared active entrypoints and local Markdown paths, the declared project skills, and the new governance decision records. It rejects
 symlinked declared paths/components and link destinations into ignored roots
 before content reads or directory enumeration. It does not scan ignored
 input/workspace trees, fetch URLs, execute documented commands, or prove that a
@@ -21,11 +20,12 @@ from pathlib import Path
 from urllib.parse import unquote
 
 SKILL_IDS = (
-    "fileholder-investigate",
-    "fileholder-change",
-    "fileholder-evaluate",
-    "fileholder-read-results",
-    "fileholder-handover",
+    "bbk-plan",
+    "bbk-investigate",
+    "bbk-change",
+    "bbk-evaluate",
+    "bbk-read-results",
+    "bbk-handover",
 )
 
 REQUIRED_FILES = (
@@ -37,6 +37,7 @@ REQUIRED_FILES = (
     *(f".agents/skills/{skill}/SKILL.md" for skill in SKILL_IDS),
     "docs/README.md",
     "docs/architecture.md",
+    "docs/plans/README.md",
     "docs/review-guide.md",
     "docs/KnowlesgeTranser Phase 1.md",
     "docs/operations/README.md",
@@ -69,11 +70,10 @@ REQUIRED_ROUTES = (
 )
 
 OPTIONAL_ACTIVE_DOCUMENTS = (
-    "docs/superpowers/README.md",
     "tests/integration/README.md",
 )
 
-SKILL_NAME_PATTERN = re.compile(r"^fileholder-[a-z0-9]+(?:-[a-z0-9]+)*$")
+SKILL_NAME_PATTERN = re.compile(r"^bbk-[a-z0-9]+(?:-[a-z0-9]+)*$")
 MAX_SKILL_NAME_LENGTH = 64
 ALLOWED_DECISION_STATUSES = {"accepted", "proposed", "superseded", "rejected"}
 ESCAPES_ROOT = "<outside-repository>"
@@ -446,6 +446,35 @@ def _check_skills(root: Path, findings: list[str]) -> None:
         findings.append("duplicate-duo-chat-rules: .gitlab/duo/chat-rules.md")
 
 
+def _check_documentation_handoff_policy(root: Path, findings: list[str]) -> None:
+    """Require the declared pre-push documentation-impact governance rule.
+
+    This check pins the process rule and its handover route. It cannot establish
+    that every prose statement is semantically correct; diff review remains the
+    required evidence for that judgment.
+    """
+    done = _read_active_text(root, "docs/governance/definition-of-done.md", findings)
+    handover = _read_active_text(
+        root, ".agents/skills/bbk-handover/SKILL.md", findings
+    )
+    if done is not None:
+        required_done_markers = (
+            "Before any push",
+            "documentation impact",
+            "no documentation impact",
+        )
+        if not all(marker in done for marker in required_done_markers):
+            findings.append("missing-pre-push-documentation-rule: docs/governance/definition-of-done.md")
+    if handover is not None:
+        required_handover_markers = (
+            "Before any push",
+            "documentation impact",
+            "owning document",
+        )
+        if not all(marker in handover for marker in required_handover_markers):
+            findings.append("missing-pre-push-documentation-rule: .agents/skills/bbk-handover/SKILL.md")
+
+
 def _check_decisions(root: Path, findings: list[str]) -> None:
     decisions_root = _safe_directory(
         root, "docs/governance/decisions", findings, "decisions-directory"
@@ -519,6 +548,7 @@ def validate_repository(root: Path) -> list[str]:
     _check_routes(root, findings)
     _check_markdown_links(root, findings)
     _check_skills(root, findings)
+    _check_documentation_handoff_policy(root, findings)
     _check_decisions(root, findings)
     return sorted(set(findings))
 

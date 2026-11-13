@@ -9,11 +9,12 @@ reading and verification guide, not a mandatory ceremony.
 | --- | --- | --- |
 | Question, review, status or inspection | Read-only; cite owners and unknowns | No edit or full suite |
 | Tiny clear edit or visual micro-fix | Direct edit; one focused check | Smallest relevant check |
-| Stage error, regression or unexplained result | [investigate skill](../../.agents/skills/fileholder-investigate/SKILL.md) | Reproduce, trace producer, regression before repair |
-| Approved implementation or bounded correction | [change skill](../../.agents/skills/fileholder-change/SKILL.md) | Focused tests, then boundary check |
-| Version/extraction/semantic comparison | [evaluate skill](../../.agents/skills/fileholder-evaluate/SKILL.md) | Dataset/direction evidence, separate claims |
-| Explain a saved result | [read-results skill](../../.agents/skills/fileholder-read-results/SKILL.md) | Bounded reader, typed IDs, no rerun |
-| Agreed change ready to hand off | [handover skill](../../.agents/skills/fileholder-handover/SKILL.md) | Real diff, exact checks, docs, skips |
+| Multi-step feature, fix or high-uncertainty change that needs a locked execution path | [plan skill](../../.agents/skills/bbk-plan/SKILL.md) | Bounded plan with decisions, release states, owners and checks |
+| Stage error, regression or unexplained result | [investigate skill](../../.agents/skills/bbk-investigate/SKILL.md) | Reproduce, trace producer, regression before repair |
+| Approved implementation or bounded correction | [change skill](../../.agents/skills/bbk-change/SKILL.md) | Focused tests, then boundary check |
+| Version/extraction/semantic comparison | [evaluate skill](../../.agents/skills/bbk-evaluate/SKILL.md) | Dataset/direction evidence, separate claims |
+| Explain a saved result | [read-results skill](../../.agents/skills/bbk-read-results/SKILL.md) | Bounded reader, typed IDs, no rerun |
+| Agreed change ready to hand off | [handover skill](../../.agents/skills/bbk-handover/SKILL.md) | Real diff, exact checks, docs, skips |
 
 A question that becomes a change starts a new bounded step. A tiny edit that
 reveals an unknown-cause defect switches to investigation before repair.
@@ -32,6 +33,10 @@ reveals an unknown-cause defect switches to investigation before repair.
    per-file or per-microtask step.
 6. After two substantially similar unsuccessful corrections, change the diagnosis
    or escalate the concrete blocker. Do not repeat the loop.
+7. Before any push, inspect the actual diff for documentation impact. Update the
+   owning documentation for code-visible behavior in the same change, or record
+   why no documentation impact exists; the harness checks this policy is present,
+   while diff review remains responsible for semantic alignment.
 
 ## Stop conditions
 

@@ -19,3 +19,4 @@ azure-ai-documentintelligence>=1.0.0
 pymupdf>=1.24
 openai>=1.30
 reportlab>=4.0
+bbk_ai_hub_sdk

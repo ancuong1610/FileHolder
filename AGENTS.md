@@ -68,11 +68,12 @@ separate observed code/artifact evidence from hypotheses and unknowns.
 | --- | --- |
 | Question, review, status, inspection | Answer read-only; no plan or reviewer required |
 | Tiny clear edit or UI micro-fix | Smallest direct edit; one focused check |
-| Stage error or unexplained regression | [investigate](.agents/skills/fileholder-investigate/SKILL.md): reproduce and trace before repair |
-| Approved implementation or bounded correction | [change](.agents/skills/fileholder-change/SKILL.md): preserve contracts and user work |
-| Version/extraction/semantic comparison | [evaluate](.agents/skills/fileholder-evaluate/SKILL.md): state dataset and OLD/NEW orientation |
-| Explain a saved result | [read-results](.agents/skills/fileholder-read-results/SKILL.md): bounded reader, no rerun |
-| Agreed change ready to hand off | [handover](.agents/skills/fileholder-handover/SKILL.md): real diff and exact checks |
+| Multi-step feature, fix or high-uncertainty change needing an explicit execution path | [plan](.agents/skills/bbk-plan/SKILL.md): record decisions, task releases, owners and checks before coding |
+| Stage error or unexplained regression | [investigate](.agents/skills/bbk-investigate/SKILL.md): reproduce and trace before repair |
+| Approved implementation or bounded correction | [change](.agents/skills/bbk-change/SKILL.md): preserve contracts and user work |
+| Version/extraction/semantic comparison | [evaluate](.agents/skills/bbk-evaluate/SKILL.md): state dataset and OLD/NEW orientation |
+| Explain a saved result | [read-results](.agents/skills/bbk-read-results/SKILL.md): bounded reader, no rerun |
+| Agreed change ready to hand off | [handover](.agents/skills/bbk-handover/SKILL.md): real diff and exact checks |
 
 Inspect current changes before editing. Keep one writer for overlapping files;
 parallelize read-only discovery only. Independent review is reserved for
@@ -82,8 +83,10 @@ change the diagnosis or escalate the concrete blocker.
 
 ## Documentation impact
 
-Assess impact from the actual diff before commit and update the owning document in
-the same change:
+Assess impact from the actual diff before commit or push and update the owning
+document in the same change. If no documentation changes, record the specific
+reason in the handover; never treat a passing harness as proof that prose
+semantics match code:
 
 | Change | Documentation to assess/update |
 | --- | --- |

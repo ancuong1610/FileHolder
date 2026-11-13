@@ -703,7 +703,16 @@ def _frontier(movement: dict[str, Any], side_key: str) -> int | None:
 def route_table_match(match: dict[str, Any]) -> tuple[str,str,list[str]]:
     cls = match.get("classification")
     reasons = list(match.get("review_reasons") or [])
+    # An equivalent cell/table representation is non-semantic only when there
+    # is no independent extraction or assignment uncertainty.  Keeping this
+    # distinction here prevents Stage 14 from suppressing visible review work.
     if cls in {"UNCHANGED", "LAYOUT_EQUIVALENT"}:
+        if match.get("needs_review") or reasons:
+            return (
+                "UNCERTAIN_RESULT",
+                "table_non_semantic_with_review_evidence",
+                reasons,
+            )
         return "NON_SEMANTIC", "table_non_semantic", reasons
     if cls == "EXTRACTION_ARTIFACT_REVIEW":
         return "SPECIAL_CASE_RULE", "table_extraction_artifact", reasons

@@ -24,14 +24,15 @@ ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR = ROOT / "tools" / "harness" / "validate.py"
 KNOWLEDGE_TRANSFER = ROOT / "docs" / "KnowlesgeTranser Phase 1.md"
 KNOWLEDGE_TRANSFER_SHA256 = (
-    "801a034d61de3be2c07814ce3a348b847b6ce2027125f93ba944b2e97d675e21"
+    "2eb2543551dbee3502abec2dce7531708496a77f5596dccc15c7773e317c0b11"
 )
 SKILL_IDS = (
-    "fileholder-investigate",
-    "fileholder-change",
-    "fileholder-evaluate",
-    "fileholder-read-results",
-    "fileholder-handover",
+    "bbk-plan",
+    "bbk-investigate",
+    "bbk-change",
+    "bbk-evaluate",
+    "bbk-read-results",
+    "bbk-handover",
 )
 
 
@@ -91,8 +92,18 @@ def _minimal_harness(root: Path) -> None:
             "---\n\n"
             "Read [review guide](../../../docs/review-guide.md).\n",
         )
+    _write(
+        root,
+        ".agents/skills/bbk-handover/SKILL.md",
+        "---\n"
+        "name: bbk-handover\n"
+        "description: Use for a bounded, read-only fixture procedure.\n"
+        "---\n\n"
+        "Before any push, assess documentation impact and update the owning document.\n",
+    )
     _write(root, "docs/README.md", "[architecture](architecture.md)\n")
     _write(root, "docs/architecture.md", "# Architecture\n")
+    _write(root, "docs/plans/README.md", "# Implementation plans\n")
     _write(root, "docs/review-guide.md", "# Review guide\n")
     _write(root, "docs/KnowlesgeTranser Phase 1.md", "# Knowledge Transfer\n")
     _write(
@@ -111,7 +122,12 @@ def _minimal_harness(root: Path) -> None:
     )
     _write(root, "docs/governance/authority.md", "# Authority\n")
     _write(root, "docs/governance/workflows.md", "# Workflows\n")
-    _write(root, "docs/governance/definition-of-done.md", "# Done\n")
+    _write(
+        root,
+        "docs/governance/definition-of-done.md",
+        "# Done\n\nBefore any push, assess documentation impact and record why "
+        "there is no documentation impact when applicable.\n",
+    )
     _write(
         root,
         "docs/governance/decisions/README.md",
@@ -194,9 +210,9 @@ class HarnessFixtureTest(unittest.TestCase):
     def test_invalid_skill_name_is_a_finding(self):
         _write(
             self.root,
-            ".agents/skills/fileholder-INVALID/SKILL.md",
+            ".agents/skills/bbk-INVALID/SKILL.md",
             "---\n"
-            "name: fileholder-INVALID\n"
+            "name: bbk-INVALID\n"
             "description: Use for an invalid-name fixture.\n"
             "---\n",
         )
@@ -209,9 +225,9 @@ class HarnessFixtureTest(unittest.TestCase):
     def test_unterminated_quoted_skill_name_is_not_valid(self):
         _write(
             self.root,
-            ".agents/skills/fileholder-change/SKILL.md",
+            ".agents/skills/bbk-change/SKILL.md",
             "---\n"
-            'name: "fileholder-change\n'
+            'name: "bbk-change\n'
             "description: Use for an unterminated-name fixture.\n"
             "---\n",
         )
@@ -224,9 +240,9 @@ class HarnessFixtureTest(unittest.TestCase):
     def test_unterminated_quoted_skill_description_is_not_valid(self):
         _write(
             self.root,
-            ".agents/skills/fileholder-change/SKILL.md",
+            ".agents/skills/bbk-change/SKILL.md",
             "---\n"
-            "name: fileholder-change\n"
+            "name: bbk-change\n"
             'description: "Use for an unterminated-description fixture.\n'
             "---\n",
         )
@@ -237,11 +253,11 @@ class HarnessFixtureTest(unittest.TestCase):
         )
 
     def test_external_skill_symlink_is_not_read(self):
-        skill_path = self.root / ".agents/skills/fileholder-change/SKILL.md"
+        skill_path = self.root / ".agents/skills/bbk-change/SKILL.md"
         with tempfile.TemporaryDirectory() as outside:
             external = Path(outside) / "SKILL.md"
             external.write_text(
-                "---\nname: fileholder-change\ndescription: external\n---\n",
+                "---\nname: bbk-change\ndescription: external\n---\n",
                 encoding="utf-8",
             )
             skill_path.unlink()
@@ -269,7 +285,7 @@ class HarnessFixtureTest(unittest.TestCase):
         self.assertNotIn(external.resolve(), read_paths)
 
     def test_self_referential_skill_symlink_fails_closed_without_traceback(self):
-        skill_path = self.root / ".agents/skills/fileholder-change/SKILL.md"
+        skill_path = self.root / ".agents/skills/bbk-change/SKILL.md"
         skill_path.unlink()
         try:
             skill_path.symlink_to(skill_path)
@@ -403,30 +419,38 @@ class HarnessFixtureTest(unittest.TestCase):
     def test_duplicate_skill_name_is_a_finding(self):
         _write(
             self.root,
-            ".agents/skills/fileholder-extra/SKILL.md",
+            ".agents/skills/bbk-extra/SKILL.md",
             "---\n"
-            "name: fileholder-investigate\n"
+            "name: bbk-investigate\n"
             "description: Use for a duplicate-name fixture.\n"
             "---\n",
         )
         findings = self.findings()
         self.assertTrue(
-            any(item.startswith("skill-duplicate-name: fileholder-investigate") for item in findings),
+            any(item.startswith("skill-duplicate-name: bbk-investigate") for item in findings),
             findings,
         )
 
     def test_malformed_skill_metadata_is_a_finding(self):
         _write(
             self.root,
-            ".agents/skills/fileholder-change/SKILL.md",
-            "---\nname: fileholder-change\n---\n",
+            ".agents/skills/bbk-change/SKILL.md",
+            "---\nname: bbk-change\n---\n",
         )
         findings = self.findings()
         self.assertTrue(
             any(
-                item.startswith("skill-missing-description: .agents/skills/fileholder-change")
+                item.startswith("skill-missing-description: .agents/skills/bbk-change")
                 for item in findings
             ),
+            findings,
+        )
+
+    def test_missing_pre_push_documentation_policy_is_a_finding(self):
+        _write(self.root, "docs/governance/definition-of-done.md", "# Done\n")
+        findings = self.findings()
+        self.assertIn(
+            "missing-pre-push-documentation-rule: docs/governance/definition-of-done.md",
             findings,
         )
 
@@ -481,7 +505,7 @@ class HarnessFixtureTest(unittest.TestCase):
         self.assertEqual(self.findings(), [])
 
     def test_historical_documents_are_not_treated_as_active_links(self):
-        _write(self.root, "docs/superpowers/historical.md", "[old](missing.md)\n")
+        _write(self.root, "docs/historical/historical.md", "[old](missing.md)\n")
         self.assertEqual(self.findings(), [])
 
     def test_findings_are_stable_and_repository_relative(self):
@@ -518,7 +542,7 @@ class RealRepositoryHarnessTest(unittest.TestCase):
         digest = hashlib.sha256(KNOWLEDGE_TRANSFER.read_bytes()).hexdigest()
         self.assertEqual(digest, KNOWLEDGE_TRANSFER_SHA256)
 
-    def test_five_shared_skills_have_matching_ids(self):
+    def test_shared_skills_have_matching_ids(self):
         for skill in SKILL_IDS:
             path = ROOT / ".agents" / "skills" / skill / "SKILL.md"
             self.assertTrue(path.is_file(), path)

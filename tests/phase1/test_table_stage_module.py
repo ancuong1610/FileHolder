@@ -21,14 +21,18 @@ pattern:
 """
 from __future__ import annotations
 
+import copy
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 S10 = ROOT / "src" / "document_compare" / "phase1" / "stages" / "s10_tables.py"
@@ -502,6 +506,322 @@ class CellCoordinateContractTest(unittest.TestCase):
         self.assertEqual(count, 2)
 
 
+class ContinuationEvidenceTest(unittest.TestCase):
+    """Continuation grouping must preserve fragments and local evidence."""
+
+    @staticmethod
+    def _header() -> list[dict]:
+        return [
+            _cell(0, "Region", kind="columnHeader"),
+            _cell(1, "Volume", kind="columnHeader"),
+        ]
+
+    def test_distinct_local_labels_reject_same_header_adjacent_tables(self):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        first = _physical_table(
+            6,
+            rows=[self._header(), [_cell(0, "North"), _cell(1, "10")]],
+            element_id="NEW-PHY-0001",
+        )
+        second = _physical_table(
+            7,
+            rows=[self._header(), [_cell(0, "South"), _cell(1, "20")]],
+            element_id="NEW-PHY-0002",
+        )
+        context = {
+            "by_table": {
+                "NEW-PHY-0001": {
+                    "nearby_labels": ["table 1: opening balances"],
+                    "preceding_boundaries": [],
+                    "following_boundaries": [],
+                },
+                "NEW-PHY-0002": {
+                    "nearby_labels": ["table 2: closing balances"],
+                    "preceding_boundaries": [],
+                    "following_boundaries": [],
+                },
+            }
+        }
+
+        tables, audit = s10.make_logical_tables("new", [first, second], {}, context)
+
+        self.assertEqual(len(tables), 2)
+        self.assertEqual([table["source_fragment_count"] for table in tables], [1, 1])
+        self.assertEqual(
+            [table["source_table_ids"] for table in tables],
+            [["NEW-PHY-0001"], ["NEW-PHY-0002"]],
+        )
+        self.assertEqual(len(audit), 1)
+        self.assertFalse(audit[0]["joined"])
+        self.assertIn("contradictory_local_boundary_evidence", audit[0]["reason_codes"])
+        self.assertEqual(
+            audit[0]["contradictory_evidence"]["previous_nearby_labels"],
+            ["table 1: opening balances"],
+        )
+        self.assertEqual(
+            audit[0]["contradictory_evidence"]["current_nearby_labels"],
+            ["table 2: closing balances"],
+        )
+
+    def test_direct_neighbor_context_does_not_skip_over_unrelated_elements(self):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        table_a = _physical_table(
+            3, rows=[[_cell(0, "A")]], element_id="PHY-A", reading_order=2
+        )
+        table_a["element_type"] = "table"
+        table_b = _physical_table(
+            3, rows=[[_cell(0, "B")]], element_id="PHY-B", reading_order=4
+        )
+        table_b["element_type"] = "table"
+        elements = [
+            {"element_id": "CAP-A", "element_type": "paragraph", "primary_page": 3,
+             "reading_order": 1, "text": "Table A: opening balances"},
+            table_a,
+            {"element_id": "P", "element_type": "paragraph", "primary_page": 3,
+             "reading_order": 3, "text": "Ordinary intervening paragraph."},
+            table_b,
+            {"element_id": "CAP-B", "element_type": "paragraph", "primary_page": 3,
+             "reading_order": 5, "text": "Table B: closing balances"},
+        ]
+
+        context = s10.build_continuation_context(elements)
+
+        self.assertEqual(
+            context["by_table"]["PHY-A"]["nearby_labels"],
+            ["table a: opening balances"],
+        )
+        self.assertEqual(context["by_table"]["PHY-B"]["nearby_labels"], ["table b: closing balances"])
+        self.assertEqual(context["by_table"]["PHY-A"]["following_boundaries"], [])
+        self.assertEqual(context["by_table"]["PHY-B"]["preceding_boundaries"], [])
+
+    def test_repeated_header_continuation_audit_and_cell_accounting(self):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        first = _physical_table(
+            6,
+            rows=[
+                [_cell(0, "Region", cell_id="h1", kind="columnHeader"),
+                 _cell(1, "Volume", cell_id="h2", kind="columnHeader")],
+                [_cell(0, "North", cell_id="n1"), _cell(1, "10", cell_id="n2")],
+            ],
+            element_id="NEW-PHY-0001",
+        )
+        second = _physical_table(
+            7,
+            rows=[
+                [_cell(0, "Region", cell_id="h3", kind="columnHeader"),
+                 _cell(1, "Volume", cell_id="h4", kind="columnHeader")],
+                [_cell(0, "South", cell_id="s1"), _cell(1, "20", cell_id="s2")],
+            ],
+            element_id="NEW-PHY-0002",
+        )
+
+        tables, audit = s10.make_logical_tables("new", [first, second], {})
+
+        self.assertEqual(len(tables), 1)
+        table = tables[0]
+        self.assertEqual(table["source_table_ids"], ["NEW-PHY-0001", "NEW-PHY-0002"])
+        self.assertEqual(table["source_fragment_count"], 2)
+        self.assertEqual(table["omitted_repeated_header_rows"], 1)
+        self.assertEqual(table["omitted_repeated_header_cells"], 2)
+        retained_ids = {cell["cell_id"] for row in table["rows"] for cell in row["cells"]}
+        self.assertEqual(retained_ids, {"h1", "h2", "n1", "n2", "s1", "s2"})
+        self.assertEqual(retained_ids | {"h3", "h4"}, {"h1", "h2", "n1", "n2", "h3", "h4", "s1", "s2"})
+        self.assertEqual(len(audit), 1)
+        self.assertTrue(audit[0]["joined"])
+        self.assertEqual(audit[0]["decision"], "joined")
+        self.assertIn("strong_repeated_header", audit[0]["reason_codes"])
+        self.assertEqual(audit[0]["missing_evidence"], ["local_boundary_context"])
+        self.assertIn("evidence", audit[0])
+        self.assertIn("local_boundary_evidence", audit[0]["evidence"])
+
+    def test_missing_caption_context_and_geometry_use_safe_header_fallback(self):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        first = _physical_table(
+            10,
+            rows=[self._header(), [_cell(0, "East"), _cell(1, "30")]],
+            element_id="NEW-PHY-0010",
+        )
+        second = _physical_table(
+            11,
+            rows=[self._header(), [_cell(0, "West"), _cell(1, "40")]],
+            element_id="NEW-PHY-0011",
+        )
+        first["element_type"] = "table"
+        second["element_type"] = "table"
+
+        context = s10.build_continuation_context([first, second])
+        tables, audit = s10.make_logical_tables("new", [first, second], {})
+
+        self.assertEqual(set(context["by_table"]), {"NEW-PHY-0010", "NEW-PHY-0011"})
+        self.assertEqual(len(tables), 1)
+        self.assertTrue(audit[0]["joined"])
+        self.assertIn("strong_repeated_header", audit[0]["reason_codes"])
+        self.assertEqual(audit[0]["missing_evidence"], ["local_boundary_context"])
+
+
+class BoundedTableRetrievalTest(unittest.TestCase):
+    """Bounded retrieval must retain uncertainty rather than infer absence."""
+
+    @staticmethod
+    def _logical(side: str, index: int, value: str, columns: int = 2) -> dict:
+        import document_compare.phase1.stages.s10_tables as s10
+
+        headers = [_cell(0, "Risk register", kind="columnHeader")]
+        data = [_cell(0, value)]
+        for column in range(1, columns):
+            headers.append(_cell(column, f"Field {column}", kind="columnHeader"))
+            data.append(_cell(column, f"{value} {column}"))
+        fragment = _physical_table(
+            1, rows=[headers, data], element_id=f"{side.upper()}-PHY-{index:04}",
+            reading_order=index,
+        )
+        table = s10.make_logical_tables(side, [fragment], {})[0][0]
+        table["logical_table_id"] = f"{side.upper()}-LT{index:04}"
+        return table
+
+    def test_per_table_limit_records_excluded_endpoint_evidence(self):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        old = [self._logical("old", 1, "changed source")]
+        new = [self._logical("new", index, f"changed target {index}") for index in range(1, 14)]
+        pairs, audit = s10.retrieve_table_candidate_pairs(old, new)
+
+        self.assertEqual(audit["possible_residual_pairs"], 13)
+        self.assertEqual(len(pairs), s10.MAX_RETRIEVED_CANDIDATES_PER_TABLE)
+        self.assertEqual(audit["old_tables_with_incomplete_candidate_search"], [old[0]["logical_table_id"]])
+        self.assertEqual(len(audit["excluded_candidate_pairs"]), 1)
+        excluded = audit["excluded_candidate_pairs"][0]
+        self.assertEqual(excluded["exclusion_reason"], "per_table_candidate_limit")
+        self.assertIn(excluded["new_table_id"], audit["new_tables_with_incomplete_candidate_search"])
+
+    def test_per_counterpart_limit_records_both_endpoints(self):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        old = [self._logical("old", index, f"changed source {index}") for index in range(1, 14)]
+        new = [self._logical("new", 1, "changed target")]
+        pairs, audit = s10.retrieve_table_candidate_pairs(old, new)
+
+        self.assertEqual(len(pairs), s10.MAX_RETRIEVED_CANDIDATES_PER_COUNTERPART)
+        self.assertEqual(audit["new_tables_with_incomplete_candidate_search"], [new[0]["logical_table_id"]])
+        excluded = audit["excluded_candidate_pairs"][0]
+        self.assertEqual(excluded["exclusion_reason"], "per_counterpart_candidate_limit")
+        self.assertIn(excluded["old_table_id"], audit["old_tables_with_incomplete_candidate_search"])
+
+    def test_feature_poor_fallback_is_bounded(self):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        old = _logical_table("old", [])
+        old["column_count"] = 2
+        new = []
+        for index in range(1, 5):
+            table = _logical_table("new", [])
+            table["logical_table_id"] = f"NEW-LT{index:04}"
+            table["column_count"] = 2
+            new.append(table)
+        pairs, audit = s10.retrieve_table_candidate_pairs([old], new)
+
+        self.assertEqual(len(pairs), s10.FEATURE_POOR_FALLBACK_CANDIDATES)
+        self.assertEqual(audit["candidate_pairs_pruned_by_limit"], 1)
+        self.assertEqual(audit["excluded_candidate_pairs"][0]["retrieval_evidence"], ["feature_poor_shape_fallback"])
+
+    def test_excluded_competitor_blocks_fuzzy_acceptance_and_bounds_scoring(self):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        old = [self._logical("old", index, f"account {index} before") for index in range(1, 14)]
+        new = [self._logical("new", index, f"account {index} after") for index in range(1, 14)]
+        matches, unmatched_old, unmatched_new, audit = s10.match_logical_tables(old, new)
+
+        self.assertEqual(audit["possible_residual_pairs"], 169)
+        self.assertLess(audit["candidate_pairs_scored"], audit["possible_residual_pairs"])
+        self.assertGreater(audit["candidate_pairs_pruned_by_limit"], 0)
+        self.assertEqual(matches, [])
+        self.assertEqual(len(unmatched_old), len(old))
+        self.assertEqual(len(unmatched_new), len(new))
+
+    def test_pruned_competitor_blocks_otherwise_supported_fuzzy_match(self):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        old = self._logical("old", 1, "counterparty exposure revised")
+        retained = self._logical("new", 1, "counterparty exposure revised today")
+        omitted = self._logical("new", 2, "counterparty exposure revised tomorrow")
+
+        with mock.patch.object(s10, "MAX_RETRIEVED_CANDIDATES_PER_TABLE", 1):
+            matches, unmatched_old, unmatched_new, audit = s10.match_logical_tables(
+                [old], [retained, omitted]
+            )
+
+        self.assertEqual(audit["candidate_pairs_scored"], 1)
+        self.assertEqual(audit["candidate_pairs_pruned_by_limit"], 1)
+        self.assertEqual(audit["fuzzy_candidate_pairs"], 1)
+        self.assertEqual(audit["fuzzy_matches"], 0)
+        self.assertEqual(matches, [])
+        self.assertEqual(unmatched_old, [old])
+        self.assertEqual(unmatched_new, [retained, omitted])
+
+    def test_incomplete_search_groups_preserve_evidence_and_exclude_one_sided(self):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        old = self._logical("old", 1, "counterparty exposure")
+        new = self._logical("new", 1, "counterparty exposure revised")
+        audit = {
+            "old_tables_with_incomplete_candidate_search": [old["logical_table_id"]],
+            "new_tables_with_incomplete_candidate_search": [new["logical_table_id"]],
+            "excluded_candidate_pairs": [{
+                "old_table_id": old["logical_table_id"],
+                "new_table_id": new["logical_table_id"],
+                "retrieval_evidence": ["shared_header_token", "shared_body_token"],
+                "exclusion_reason": "per_table_candidate_limit",
+            }],
+        }
+
+        groups, unresolved_old, unresolved_new = s10.incomplete_search_unresolved_groups(
+            [old], [new], audit, starting_group_index=3
+        )
+
+        self.assertEqual(unresolved_old, {old["logical_table_id"]})
+        self.assertEqual(unresolved_new, {new["logical_table_id"]})
+        self.assertEqual(len(groups), 1)
+        group = groups[0]
+        self.assertEqual(group["review_group_id"], "TABLE-REVIEW-0003")
+        self.assertEqual(group["reason"], "incomplete_bounded_candidate_search_requires_review")
+        self.assertEqual(group["old_tables"][0]["logical_table_id"], old["logical_table_id"])
+        self.assertEqual(group["new_tables"][0]["logical_table_id"], new["logical_table_id"])
+        self.assertEqual(group["excluded_candidate_evidence"], audit["excluded_candidate_pairs"])
+        self.assertEqual(
+            [table for table in [old] if table["logical_table_id"] not in unresolved_old],
+            [],
+        )
+        self.assertEqual(
+            [table for table in [new] if table["logical_table_id"] not in unresolved_new],
+            [],
+        )
+
+    def test_moved_changed_column_count_is_retrieved_and_one_sided_stays_complete(self):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        old = self._logical("old", 1, "counterparty exposure", 2)
+        new = self._logical("new", 1, "counterparty exposure revised", 3)
+        pairs, retrieval = s10.retrieve_table_candidate_pairs([old], [new])
+        matches, unmatched_old, unmatched_new, audit = s10.match_logical_tables([old], [new])
+        one_sided_matches, one_sided_old, one_sided_new, one_sided_audit = s10.match_logical_tables([old], [])
+
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(retrieval["old_tables_with_incomplete_candidate_search"], [])
+        self.assertEqual(retrieval["new_tables_with_incomplete_candidate_search"], [])
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(unmatched_old, [])
+        self.assertEqual(unmatched_new, [])
+        self.assertEqual(audit["fuzzy_matches"], 1)
+        self.assertEqual(one_sided_matches, [])
+        self.assertEqual(one_sided_old, [old])
+        self.assertEqual(one_sided_new, [])
+        self.assertEqual(one_sided_audit["old_tables_with_incomplete_candidate_search"], [])
+
+
 class UnmatchedTableContentTest(unittest.TestCase):
     """A deleted/added table must keep its real cell content, not metadata only.
 
@@ -590,6 +910,200 @@ class UnmatchedTableContentTest(unittest.TestCase):
             with self.assertRaises(s10.ContractError) as raised:
                 s10.compact_unmatched_table(old, "DELETED")
         self.assertIn("missing", str(raised.exception))
+
+
+class IntegratedBoundedRetrievalValidationTest(unittest.TestCase):
+    """T4 synthetic integration evidence; no provider or extraction inputs."""
+
+    @staticmethod
+    def _fragments(side: str, *, distinguishable: bool) -> list[dict]:
+        elements = []
+        for index in range(1, 14):
+            label = f"portfolio{index:03d}" if distinguishable else "account"
+            header = [
+                _cell(
+                    0,
+                    f"{label} heading{index:03d}" if distinguishable else "Risk register",
+                    kind="columnHeader",
+                ),
+                _cell(1, f"measure{index:03d}" if distinguishable else "Measure", kind="columnHeader"),
+            ]
+            changed = (
+                f"{label} legacy{index:03d}" if side == "old"
+                else f"{label} revised{index:03d}"
+            )
+            first_id = f"{side.upper()}-PHY-{index:03d}A"
+            second_id = f"{side.upper()}-PHY-{index:03d}B"
+            elements.append(_physical_table(
+                index * 3 - 2,
+                rows=[header, [_cell(0, label), _cell(1, changed)]],
+                element_id=first_id,
+                reading_order=index * 3 - 2,
+                context_keys=[label] if distinguishable else [],
+            ))
+            elements.append(_physical_table(
+                index * 3 - 1,
+                rows=[header, [_cell(0, label), _cell(1, f"{label} retained{index:03d}")]],
+                element_id=second_id,
+                reading_order=index * 3 - 1,
+                context_keys=[label] if distinguishable else [],
+            ))
+        return elements
+
+    @classmethod
+    def _logical_pair(cls, *, distinguishable: bool):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        old, old_audit = s10.make_logical_tables(
+            "old", cls._fragments("old", distinguishable=distinguishable), {}
+        )
+        new, new_audit = s10.make_logical_tables(
+            "new", cls._fragments("new", distinguishable=distinguishable), {}
+        )
+        return old, new, old_audit, new_audit
+
+    def test_distinguishable_repeated_header_fixture_retrieves_and_accepts_labels(self):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        old, new, old_audit, new_audit = self._logical_pair(distinguishable=True)
+        matches, unmatched_old, unmatched_new, audit = s10.match_logical_tables(old, new)
+        pairs = {
+            (item["old"]["logical_table_id"], item["new"]["logical_table_id"])
+            for item in matches
+        }
+        expected = {(f"OLD-LT{index:04d}", f"NEW-LT{index:04d}") for index in range(1, 14)}
+
+        self.assertEqual(len(old), 13)
+        self.assertEqual(len(new), 13)
+        self.assertTrue(all(table["source_fragment_count"] == 2 for table in old + new))
+        self.assertTrue(all(table["omitted_repeated_header_rows"] == 1 for table in old + new))
+        self.assertEqual(sum(item["joined"] for item in old_audit + new_audit), 26)
+        self.assertEqual(pairs, expected, audit)
+        self.assertEqual(unmatched_old, [])
+        self.assertEqual(unmatched_new, [])
+        self.assertEqual(audit["fuzzy_matches"], 13)
+        self.assertEqual(audit["candidate_pairs_scored"], 13)
+        self.assertEqual(audit["candidate_pairs_pruned_by_limit"], 0)
+        self.assertEqual(audit["old_tables_with_incomplete_candidate_search"], [])
+        self.assertEqual(audit["new_tables_with_incomplete_candidate_search"], [])
+
+    def test_ambiguous_fixture_baseline_comparison_and_incomplete_uncertainty(self):
+        import document_compare.phase1.stages.s10_tables as current
+
+        old, new, _, _ = self._logical_pair(distinguishable=False)
+        with tempfile.TemporaryDirectory(prefix="crr-s10-baseline-") as directory:
+            baseline_path = Path(directory) / "s10_tables_prefx.py"
+            completed = subprocess.run(
+                ["git", "show", "HEAD:src/document_compare/phase1/stages/s10_tables.py"],
+                cwd=str(ROOT), capture_output=True, text=True, check=True,
+            )
+            baseline_path.write_text(completed.stdout, encoding="utf-8")
+            spec = importlib.util.spec_from_file_location("s10_prefx_validation", baseline_path)
+            baseline = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(baseline)
+
+            def measure(module):
+                calls = 0
+                original = module.table_similarity
+
+                def counted(left, right):
+                    nonlocal calls
+                    calls += 1
+                    return original(left, right)
+
+                with mock.patch.object(module, "table_similarity", side_effect=counted):
+                    start = time.perf_counter()
+                    result = module.match_logical_tables(copy.deepcopy(old), copy.deepcopy(new))
+                    elapsed = time.perf_counter() - start
+                return result, calls, elapsed
+
+            baseline_result, baseline_calls, _ = measure(baseline)
+            current_result, current_calls, _ = measure(current)
+
+        matches, unmatched_old, unmatched_new, audit = current_result
+        groups, unresolved_old, unresolved_new = current.incomplete_search_unresolved_groups(
+            unmatched_old, unmatched_new, audit, starting_group_index=1
+        )
+        self.assertEqual(baseline_calls, 169)
+        self.assertEqual(current_calls, 144)
+        self.assertEqual(len(matches), 0)
+        self.assertEqual(audit["possible_residual_pairs"], 169)
+        self.assertEqual(audit["candidate_pairs_scored"], 144)
+        self.assertEqual(audit["candidate_pairs_pruned_by_limit"], 25)
+        self.assertEqual(len(unresolved_old), 13)
+        self.assertEqual(len(unresolved_new), 13)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["reason"], "incomplete_bounded_candidate_search_requires_review")
+        self.assertTrue(groups[0]["excluded_candidate_evidence"])
+
+    def test_stage10_entrypoint_preserves_incomplete_groups_through_routing_and_canonical(self):
+        from document_compare.phase1.stages import s11_routing, s14_canonical_result
+
+        with tempfile.TemporaryDirectory(prefix="crr-s10-t4-entrypoint-") as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir()
+            old_elements = self._fragments("old", distinguishable=False)
+            new_elements = self._fragments("new", distinguishable=False)
+            for element in old_elements + new_elements:
+                element["element_type"] = "table"
+            old_document = {"schema_version": "0.3.0", "document": {"document_id": "OLD-SYN", "elements": old_elements}}
+            new_document = {"schema_version": "0.3.0", "document": {"document_id": "NEW-SYN", "elements": new_elements}}
+            movement = {
+                "comparison_stage": s11_routing.EXPECTED_STEP9_STAGE,
+                "old_document": {"document_id": "OLD-SYN"},
+                "new_document": {"document_id": "NEW-SYN"},
+                "modified": [], "modified_review": [], "duplicate_exact_review": [],
+                "relocated": [], "deleted": [], "added": [], "movement_review": [],
+                "structural_split_merge_review": [], "structural_boundary_review": [],
+                "resegmentation_review": [],
+            }
+            for name, payload in (
+                ("old_document_structured.json", old_document),
+                ("new_document_structured.json", new_document),
+                ("comparison_candidates_with_movement.json", movement),
+            ):
+                (output / name).write_text(json.dumps(payload), encoding="utf-8")
+            completed = _run(
+                f"import runpy; runpy.run_path({str(S10)!r}, run_name='__main__')",
+                _env(root),
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            tables = json.loads((output / "table_comparison_result.json").read_text(encoding="utf-8"))
+
+        groups = tables["unresolved_table_groups"]
+        self.assertEqual(len(groups), 1)
+        group = groups[0]
+        self.assertEqual(group["reason"], "incomplete_bounded_candidate_search_requires_review")
+        self.assertTrue(group["excluded_candidate_evidence"])
+        self.assertEqual(len(group["old_tables"]), 13)
+        self.assertEqual(len(group["new_tables"]), 13)
+        self.assertTrue(all(table["source_table_ids"] for table in group["old_tables"] + group["new_tables"]))
+        unresolved_old = {table["logical_table_id"] for table in group["old_tables"]}
+        unresolved_new = {table["logical_table_id"] for table in group["new_tables"]}
+        self.assertFalse(unresolved_old & {table["logical_table_id"] for table in tables["deleted_table_candidates"]})
+        self.assertFalse(unresolved_new & {table["logical_table_id"] for table in tables["added_table_candidates"]})
+
+        generic = s11_routing.build_generic_routing(movement, tables)
+        records = s11_routing.build_domain_verification_records(
+            generic["routes"], {"mode": "generic"}, None
+        )
+        routing = {
+            "comparison_stage": "deterministic_review_routing", "schema_version": "1.0.0",
+            **generic,
+            "domain_profile": {"mode": "generic"},
+            "domain_verification": {"enabled": False, "records": records, "status_counts": {}},
+            "domain_verification_review": [], "statistics": {},
+        }
+        canonical = s14_canonical_result.build_comparison_result(movement, tables, routing)
+        self.assertTrue(any(route["candidate_id"] == group["review_group_id"] and route["route"] == "UNCERTAIN_RESULT" for route in generic["table_routes"]))
+        self.assertEqual(len(canonical["unresolved_table_reviews"]), 1)
+        review = canonical["unresolved_table_reviews"][0]
+        self.assertEqual(review["source_candidate_id"], group["review_group_id"])
+        self.assertEqual(review["resolution"]["result_state"], "uncertain")
+        self.assertEqual(review["evidence"]["reason"], group["reason"])
+        self.assertTrue(review["evidence"]["old_tables"][0]["source_table_ids"])
 
 
 if __name__ == "__main__":

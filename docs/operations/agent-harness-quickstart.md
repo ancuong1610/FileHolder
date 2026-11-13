@@ -60,30 +60,38 @@ not list or load project skills, see the fallback below.
 Paste this into the client:
 
 ```text
-Use fileholder-read-results in read-only mode. Explain how to inspect the saved
+Use bbk-read-results in read-only mode. Explain how to inspect the saved
 comparison in workspace/agent demo: confirm the OLD/NEW orientation, use the
 bounded summarize/search/details reader calls, and cite typed IDs and pages. Do
 not rerun the engine, modify the workspace, or call a provider. If that workspace
 is absent, ask me for it instead of guessing.
 ```
 
-Expected route: `fileholder-read-results`, the reader contract and phase testing.
+Expected route: `bbk-read-results`, the reader contract and phase testing.
 No code change, provider call or workspace mutation is expected.
+
+## Plan multi-step work
+
+For a feature, migration, or complex defect where implementation should follow
+pre-decided steps, use `bbk-plan`. It creates or reviews a versioned plan
+under `docs/plans/`; the executing agent follows only explicitly released tasks
+and stops at the next release boundary. It does not authorize provider calls,
+commits, pushes, or scope expansion.
 
 ## Five workflow examples
 
 | Goal | Example request | Expected route |
 | --- | --- | --- |
-| Investigate a Stage 5 defect | `Use fileholder-investigate for a Stage 5 heading/furniture defect. Name the owning stage, the smallest saved evidence you need, and the focused test. Do not edit yet.` | Stage 5/structure owner, reproduction and producer trace before repair |
-| Make a bounded change | `Use fileholder-change for a wording-only heading fix in the inline PDF report. Read the review guide and report owner, add the smallest test, and do not run the full suite or commit.` | Report owner and focused report tests |
-| Evaluate evidence | `Use fileholder-evaluate. Explain what a shadow NLI score can and cannot prove for canonical status, and list the dataset/OLD-NEW facts you need before any evaluation.` | Stage 13 advisory/Stage 14 authority; no 80%/95% readiness claim |
-| Read a saved result | `Use fileholder-read-results to summarize the saved workspace I name. Cite change/review IDs and pages, keep unresolved items unresolved, and do not rerun or overwrite it.` | Bounded reader, typed IDs, read-only workspace |
-| Hand off a change | `Use fileholder-handover. Inspect the real diff, run the focused checks, report documentation impact and skipped cases, and do not commit or push.` | Actual diff, exact checks, explicit gaps |
+| Investigate a Stage 5 defect | `Use bbk-investigate for a Stage 5 heading/furniture defect. Name the owning stage, the smallest saved evidence you need, and the focused test. Do not edit yet.` | Stage 5/structure owner, reproduction and producer trace before repair |
+| Make a bounded change | `Use bbk-change for a wording-only heading fix in the inline PDF report. Read the review guide and report owner, add the smallest test, and do not run the full suite or commit.` | Report owner and focused report tests |
+| Evaluate evidence | `Use bbk-evaluate. Explain what a shadow NLI score can and cannot prove for canonical status, and list the dataset/OLD-NEW facts you need before any evaluation.` | Stage 13 advisory/Stage 14 authority; no 80%/95% readiness claim |
+| Read a saved result | `Use bbk-read-results to summarize the saved workspace I name. Cite change/review IDs and pages, keep unresolved items unresolved, and do not rerun or overwrite it.` | Bounded reader, typed IDs, read-only workspace |
+| Hand off a change | `Use bbk-handover. Inspect the real diff, run the focused checks, report documentation impact and skipped cases, and do not commit or push.` | Actual diff, exact checks, explicit gaps |
 
 ## Manual fallback (not native discovery)
 
 If a client does not support project skills on your surface/version, explicitly
-attach or read the relevant `.agents/skills/<fileholder-id>/SKILL.md` as Markdown
+attach or read the relevant `.agents/skills/<bbk-id>/SKILL.md` as Markdown
 in the conversation. This is a **manual read-file fallback**, not native skill
 discovery. Tell the user which fallback you used. Do not copy the skill into a
 client-specific folder.

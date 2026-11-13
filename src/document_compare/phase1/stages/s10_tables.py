@@ -50,8 +50,15 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-STEP10_VERSION = "2.0.0-current-provisional-context"
+STEP10_VERSION = "2.1.0-bounded-table-candidates"
 EXPECTED_STEP9_STAGE = "movement_and_structural_reconciliation_evidence"
+
+# Candidate retrieval is deliberately bounded before expensive full-table
+# SequenceMatcher scoring.  These are deterministic safety limits, not match
+# acceptance thresholds: affected residuals remain review work.
+MAX_RETRIEVED_CANDIDATES_PER_TABLE = 12
+MAX_RETRIEVED_CANDIDATES_PER_COUNTERPART = 12
+FEATURE_POOR_FALLBACK_CANDIDATES = 3
 
 
 class ContractError(ValueError):
@@ -327,10 +334,45 @@ def nearest_provisional_context_key(
 
 
 # ---- cell 8 ----
+def _continuation_boundary_evidence(
+    previous: dict[str, Any],
+    current: dict[str, Any],
+    continuation_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Return local boundary evidence without treating it as hierarchy truth.
+
+    The optional context maps a physical table id to explicit nearby labels or
+    boundary elements collected by the caller.  Missing context is neutral so
+    direct helper callers keep the historic, conservative header fallback.
+    """
+    context = continuation_context or {}
+    by_table = context.get("by_table") or {}
+    previous_info = by_table.get(previous.get("element_id")) or {}
+    current_info = by_table.get(current.get("element_id")) or {}
+    previous_labels = set(previous_info.get("nearby_labels") or [])
+    current_labels = set(current_info.get("nearby_labels") or [])
+    previous_boundaries = list(previous_info.get("following_boundaries") or [])
+    current_boundaries = list(current_info.get("preceding_boundaries") or [])
+    contradictory = bool(
+        previous_labels
+        and current_labels
+        and previous_labels != current_labels
+    ) or bool(previous_boundaries or current_boundaries)
+    return {
+        "previous_nearby_labels": sorted(previous_labels),
+        "current_nearby_labels": sorted(current_labels),
+        "previous_following_boundaries": previous_boundaries,
+        "current_preceding_boundaries": current_boundaries,
+        "contradictory": contradictory,
+        "available": bool(previous_info or current_info),
+    }
+
+
 def can_continue_logical_table(
     previous: dict[str, Any],
     current: dict[str, Any],
     key_map: dict[str, str],
+    continuation_context: dict[str, Any] | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     previous_page = previous.get("primary_page")
     current_page = current.get("primary_page")
@@ -340,14 +382,18 @@ def can_continue_logical_table(
         "same_column_count": False,
         "header_similarity": 0.0,
         "context_support": None,
+        "local_boundary_evidence": {},
+        "reason_codes": [],
         "context_is_authoritative_hierarchy": False,
     }
 
     if not isinstance(previous_page, int) or not isinstance(current_page, int):
+        evidence["reason_codes"].append("missing_page_provenance")
         return False, evidence
 
     evidence["adjacent_pages"] = current_page == previous_page + 1
     if not evidence["adjacent_pages"]:
+        evidence["reason_codes"].append("not_adjacent_pages")
         return False, evidence
 
     previous_columns = (previous.get("table") or {}).get("column_count")
@@ -357,6 +403,7 @@ def can_continue_logical_table(
         and previous_columns == current_columns
     )
     if not evidence["same_column_count"]:
+        evidence["reason_codes"].append("column_count_differs")
         return False, evidence
 
     previous_header = header_signature(previous)
@@ -369,30 +416,37 @@ def can_continue_logical_table(
     evidence["header_similarity"] = similarity
 
     if not previous_header or not current_header:
+        evidence["reason_codes"].append("missing_repeated_header")
         return False, evidence
 
-    context_support = same_document_context_support(
-        previous,
-        current,
-        key_map,
-    )
+    context_support = same_document_context_support(previous, current, key_map)
     evidence["context_support"] = context_support
+    boundary = _continuation_boundary_evidence(
+        previous, current, continuation_context
+    )
+    evidence["local_boundary_evidence"] = boundary
+    if boundary["contradictory"]:
+        evidence["reason_codes"].append("contradictory_local_boundary_evidence")
+        return False, evidence
 
-    # Normal continuation threshold.
     if similarity >= 0.80 and context_support["has_shared_context"]:
+        evidence["reason_codes"].append("shared_context_repeated_header")
         return True, evidence
 
-    # Context may be missing or may differ because headings themselves changed.
-    # In that case require a stronger repeated-header match.
+    # Context may be absent or change with a heading; a very strong repeated
+    # header remains sufficient only when local evidence does not contradict.
     if similarity >= 0.92:
+        evidence["reason_codes"].append("strong_repeated_header")
         return True, evidence
 
+    evidence["reason_codes"].append("header_similarity_below_continuation_threshold")
     return False, evidence
 
 
 def group_physical_tables(
     tables: list[dict[str, Any]],
     key_map: dict[str, str],
+    continuation_context: dict[str, Any] | None = None,
 ) -> tuple[list[list[dict[str, Any]]], list[dict[str, Any]]]:
     ordered = sorted(
         tables,
@@ -414,15 +468,27 @@ def group_physical_tables(
                 previous,
                 table,
                 key_map,
+                continuation_context,
             )
+            boundary = evidence.get("local_boundary_evidence") or {}
+            join_audit.append({
+                "previous_table_id": previous.get("element_id"),
+                "current_table_id": table.get("element_id"),
+                "joined": allowed,
+                "decision": "joined" if allowed else "not_joined",
+                "reason_codes": list(evidence.get("reason_codes") or []),
+                "supporting_evidence": {
+                    "header_similarity": evidence.get("header_similarity"),
+                    "context_support": evidence.get("context_support"),
+                },
+                "contradictory_evidence": boundary,
+                "missing_evidence": (
+                    [] if boundary.get("available") else ["local_boundary_context"]
+                ),
+                "evidence": evidence,
+            })
             if allowed:
                 groups[-1].append(table)
-                join_audit.append({
-                    "previous_table_id": previous.get("element_id"),
-                    "current_table_id": table.get("element_id"),
-                    "joined": True,
-                    "evidence": evidence,
-                })
                 continue
 
         groups.append([table])
@@ -559,8 +625,13 @@ def make_logical_tables(
     side: str,
     tables: list[dict[str, Any]],
     key_map: dict[str, str],
+    continuation_context: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    groups, join_audit = group_physical_tables(tables, key_map)
+    groups, join_audit = group_physical_tables(
+        tables,
+        key_map,
+        continuation_context,
+    )
 
     logical = [
         build_logical_table(
@@ -647,6 +718,136 @@ def table_context_relation(
         "old_context_keys": list(old_keys),
         "new_context_keys": list(new_keys),
         "context_is_authoritative_hierarchy": False,
+    }
+
+
+def _feature_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[\w]+", value.casefold(), flags=re.UNICODE)
+        if len(token) >= 3
+    }
+
+
+def table_retrieval_features(table: dict[str, Any]) -> dict[str, Any]:
+    """Build cheap, reusable retrieval features without similarity scoring."""
+    header_tokens = _feature_tokens(logical_header_text(table))
+    body_tokens = _feature_tokens(logical_full_text(table))
+    # Headers are both more stable and more discriminating than repeated body
+    # values, so body retrieval keeps a bounded deterministic vocabulary.
+    body_tokens.difference_update(header_tokens)
+    return {
+        "logical_table_id": table["logical_table_id"],
+        "header_tokens": frozenset(header_tokens),
+        "body_tokens": frozenset(sorted(body_tokens)[:80]),
+        "context_keys": frozenset(table.get("provisional_context_keys") or []),
+        "column_count": int(table.get("column_count") or 0),
+        "row_count": int(table.get("row_count") or 0),
+    }
+
+
+def retrieve_table_candidate_pairs(
+    old_tables: list[dict[str, Any]],
+    new_tables: list[dict[str, Any]],
+) -> tuple[list[tuple[dict[str, Any], dict[str, Any], list[str]]], dict[str, Any]]:
+    """Return bounded plausible pairs without calling ``SequenceMatcher``."""
+    old_features = {table["logical_table_id"]: table_retrieval_features(table) for table in old_tables}
+    new_features = {table["logical_table_id"]: table_retrieval_features(table) for table in new_tables}
+    new_by_id = {table["logical_table_id"]: table for table in new_tables}
+    old_by_id = {table["logical_table_id"]: table for table in old_tables}
+    new_index: dict[str, dict[Any, set[str]]] = {
+        "header": defaultdict(set), "body": defaultdict(set), "context": defaultdict(set),
+    }
+    for table_id, feature in new_features.items():
+        for token in feature["header_tokens"]:
+            new_index["header"][token].add(table_id)
+        for token in feature["body_tokens"]:
+            new_index["body"][token].add(table_id)
+        for key in feature["context_keys"]:
+            new_index["context"][key].add(table_id)
+
+    selected: dict[tuple[str, str], list[str]] = {}
+    incomplete_old: set[str] = set()
+    incomplete_new: set[str] = set()
+    excluded_pairs: dict[tuple[str, str], dict[str, Any]] = {}
+    possible_pairs = 0
+    for old_id, feature in old_features.items():
+        reasons: dict[str, set[str]] = defaultdict(set)
+        for token in feature["header_tokens"]:
+            for new_id in new_index["header"].get(token, ()):
+                reasons[new_id].add("shared_header_token")
+        for token in feature["body_tokens"]:
+            for new_id in new_index["body"].get(token, ()):
+                reasons[new_id].add("shared_body_token")
+        for key in feature["context_keys"]:
+            for new_id in new_index["context"].get(key, ()):
+                reasons[new_id].add("shared_provisional_context")
+        # Feature-poor tables get a small shape-compatible fallback.  Shape is
+        # retrieval support only; it never accepts a match by itself.
+        if not reasons and not (feature["header_tokens"] or feature["body_tokens"]):
+            for new_id, new_feature in new_features.items():
+                if feature["column_count"] and feature["column_count"] == new_feature["column_count"]:
+                    reasons[new_id].add("feature_poor_shape_fallback")
+        ranked = sorted(
+            reasons,
+            key=lambda new_id: (
+                -len(reasons[new_id]),
+                new_id,
+            ),
+        )
+        possible_pairs += len(ranked)
+        limit = (FEATURE_POOR_FALLBACK_CANDIDATES if ranked and
+                 all(reasons[new_id] == {"feature_poor_shape_fallback"} for new_id in ranked)
+                 else MAX_RETRIEVED_CANDIDATES_PER_TABLE)
+        if len(ranked) > limit:
+            incomplete_old.add(old_id)
+        for new_id in ranked[:limit]:
+            selected[(old_id, new_id)] = sorted(reasons[new_id])
+        for new_id in ranked[limit:]:
+            incomplete_new.add(new_id)
+            excluded_pairs[(old_id, new_id)] = {
+                "old_table_id": old_id,
+                "new_table_id": new_id,
+                "retrieval_evidence": sorted(reasons[new_id]),
+                "exclusion_reason": "per_table_candidate_limit",
+            }
+
+    by_new: dict[str, list[tuple[str, list[str]]]] = defaultdict(list)
+    for (old_id, new_id), reasons in selected.items():
+        by_new[new_id].append((old_id, reasons))
+    retained: dict[tuple[str, str], list[str]] = {}
+    for new_id, candidates in by_new.items():
+        ranked = sorted(candidates, key=lambda item: (-len(item[1]), item[0]))
+        if len(ranked) > MAX_RETRIEVED_CANDIDATES_PER_COUNTERPART:
+            incomplete_new.add(new_id)
+        for old_id, reasons in ranked[:MAX_RETRIEVED_CANDIDATES_PER_COUNTERPART]:
+            retained[(old_id, new_id)] = reasons
+        for old_id, reasons in ranked[MAX_RETRIEVED_CANDIDATES_PER_COUNTERPART:]:
+            incomplete_old.add(old_id)
+            excluded_pairs[(old_id, new_id)] = {
+                "old_table_id": old_id,
+                "new_table_id": new_id,
+                "retrieval_evidence": list(reasons),
+                "exclusion_reason": "per_counterpart_candidate_limit",
+            }
+
+    pairs = [
+        (old_by_id[old_id], new_by_id[new_id], reasons)
+        for (old_id, new_id), reasons in sorted(retained.items())
+    ]
+    return pairs, {
+        "residual_old_tables": len(old_tables),
+        "residual_new_tables": len(new_tables),
+        "possible_residual_pairs": possible_pairs,
+        "candidate_pairs_retrieved": len(selected),
+        "candidate_pairs_retained": len(pairs),
+        "candidate_pairs_pruned_by_limit": len(excluded_pairs),
+        "old_tables_with_incomplete_candidate_search": sorted(incomplete_old),
+        "new_tables_with_incomplete_candidate_search": sorted(incomplete_new),
+        "excluded_candidate_pairs": [
+            excluded_pairs[key]
+            for key in sorted(excluded_pairs)
+        ],
     }
 
 
@@ -766,40 +967,45 @@ def match_logical_tables(
     ]
 
     candidate_pairs: list[dict[str, Any]] = []
+    retrieved_pairs, retrieval_audit = retrieve_table_candidate_pairs(
+        remaining_old,
+        remaining_new,
+    )
 
-    for old in remaining_old:
-        for new in remaining_new:
-            evidence = table_similarity(old, new)
-            context = table_context_relation(old, new)
-
-            # Content/header similarity drives retrieval.
-            # Shared provisional context can support weaker candidates;
-            # different context requires stronger content evidence.
-            if context["relation"] == "shared_provisional_context":
-                candidate_allowed = (
-                    evidence["content_similarity"] >= 0.35
-                    or evidence["header_similarity"] >= 0.70
+    # Full SequenceMatcher scoring begins only after deterministic feature
+    # retrieval.  Retrieval records plausible pairs by a union of header,
+    # body, context and sparse-table fallback evidence; detailed scoring still
+    # applies the historic conservative thresholds below.
+    for old, new, retrieval_reasons in retrieved_pairs:
+        evidence = table_similarity(old, new)
+        context = table_context_relation(old, new)
+        if context["relation"] == "shared_provisional_context":
+            candidate_allowed = (
+                evidence["content_similarity"] >= 0.35
+                or evidence["header_similarity"] >= 0.70
+            )
+        else:
+            candidate_allowed = (
+                evidence["content_similarity"] >= 0.70
+                or (
+                    evidence["content_similarity"] >= 0.55
+                    and evidence["header_similarity"] >= 0.90
                 )
-            else:
-                candidate_allowed = (
-                    evidence["content_similarity"] >= 0.70
-                    or (
-                        evidence["content_similarity"] >= 0.55
-                        and evidence["header_similarity"] >= 0.90
-                    )
-                )
+            )
+        if not candidate_allowed:
+            continue
+        evidence = dict(evidence)
+        evidence["provisional_context"] = context
+        evidence["retrieval_evidence"] = retrieval_reasons
+        candidate_pairs.append({"old": old, "new": new, "evidence": evidence})
 
-            if not candidate_allowed:
-                continue
-
-            evidence = dict(evidence)
-            evidence["provisional_context"] = context
-
-            candidate_pairs.append({
-                "old": old,
-                "new": new,
-                "evidence": evidence,
-            })
+    retrieval_audit["candidate_pairs_scored"] = len(retrieved_pairs)
+    incomplete_old_ids = set(
+        retrieval_audit["old_tables_with_incomplete_candidate_search"]
+    )
+    incomplete_new_ids = set(
+        retrieval_audit["new_tables_with_incomplete_candidate_search"]
+    )
 
     by_old: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_new: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -844,6 +1050,13 @@ def match_logical_tables(
         if score < 0.62 or old_margin < 0.03 or new_margin < 0.03:
             continue
 
+        # A retained best pair is not independently supported if retrieval
+        # omitted any plausible rival on either endpoint.  The omitted pair is
+        # retained in the audit for unresolved handling rather than inflating a
+        # best/second-best margin with an artificial zero competitor.
+        if old_id in incomplete_old_ids or new_id in incomplete_new_ids:
+            continue
+
         if old_id in matched_old or new_id in matched_new:
             continue
 
@@ -884,15 +1097,19 @@ def match_logical_tables(
         if table["logical_table_id"] not in matched_new
     ]
 
-    return matches, unmatched_old, unmatched_new, {
+    audit = {
         "exact_matches": sum(
             match["match_method"] == "exact_logical_table_content"
             for match in matches
         ),
         "fuzzy_matches": fuzzy_selected,
         "ambiguous_exact_groups": ambiguous_exact_groups,
+        # Preserved for existing consumers: this means scored candidates that
+        # passed the detailed candidate threshold, not all retrieved pairs.
         "fuzzy_candidate_pairs": len(candidate_pairs),
     }
+    audit.update(retrieval_audit)
+    return matches, unmatched_old, unmatched_new, audit
 
 
 # ---- cell 12 ----
@@ -1434,6 +1651,145 @@ def residual_context_key(
     return table.get("nearest_provisional_context_key")
 
 
+def build_continuation_context(elements: list[dict[str, Any]]) -> dict[str, Any]:
+    """Collect conservative local labels/boundaries around physical tables.
+
+    This is deliberately evidence-only.  It uses adjacent reading-order
+    elements on the same page where available and never infers hierarchy.
+    """
+    ordered = sorted(
+        elements,
+        key=lambda item: (
+            item.get("primary_page") if isinstance(item.get("primary_page"), int) else 10**12,
+            item.get("reading_order") if isinstance(item.get("reading_order"), int) else 10**12,
+            item.get("element_id") or "",
+        ),
+    )
+    by_table: dict[str, dict[str, Any]] = {}
+    for index, element in enumerate(ordered):
+        if element.get("element_type") != "table" or not element.get("element_id"):
+            continue
+        page = element.get("primary_page")
+        nearby_labels: list[str] = []
+        preceding_boundaries: list[str] = []
+        following_boundaries: list[str] = []
+        for neighbor, direction in ((ordered[index - 1] if index else None, "preceding"),
+                                    (ordered[index + 1] if index + 1 < len(ordered) else None, "following")):
+            if not neighbor or neighbor.get("primary_page") != page:
+                continue
+            text = str(neighbor.get("normalized_text") or neighbor.get("text") or "").strip()
+            kind = str(neighbor.get("element_type") or "")
+            if text and len(text) <= 160 and ("table" in text.casefold() or "tabelle" in text.casefold()):
+                nearby_labels.append(layout_text(text))
+            if kind in {"heading", "title", "section_header"}:
+                (preceding_boundaries if direction == "preceding" else following_boundaries).append(kind)
+        by_table[element["element_id"]] = {
+            "nearby_labels": nearby_labels,
+            "preceding_boundaries": preceding_boundaries,
+            "following_boundaries": following_boundaries,
+        }
+    return {"by_table": by_table}
+
+
+def incomplete_search_unresolved_groups(
+    unmatched_old_tables: list[dict[str, Any]],
+    unmatched_new_tables: list[dict[str, Any]],
+    matching_audit: dict[str, Any],
+    *,
+    starting_group_index: int,
+) -> tuple[list[dict[str, Any]], set[str], set[str]]:
+    """Group residuals affected by bounded retrieval as review evidence.
+
+    Only unmatched endpoints are considered: exact matches retain their existing
+    status, while every affected residual is consumed by one unresolved group.
+    """
+    incomplete_old_ids = set(
+        matching_audit.get("old_tables_with_incomplete_candidate_search") or []
+    )
+    incomplete_new_ids = set(
+        matching_audit.get("new_tables_with_incomplete_candidate_search") or []
+    )
+    unmatched_old_by_id = {
+        table["logical_table_id"]: table for table in unmatched_old_tables
+    }
+    unmatched_new_by_id = {
+        table["logical_table_id"]: table for table in unmatched_new_tables
+    }
+    excluded_pairs = matching_audit.get("excluded_candidate_pairs") or []
+    adjacency: dict[tuple[str, str], set[tuple[str, str]]] = defaultdict(set)
+    for excluded in excluded_pairs:
+        old_id = excluded.get("old_table_id")
+        new_id = excluded.get("new_table_id")
+        if old_id not in unmatched_old_by_id or new_id not in unmatched_new_by_id:
+            continue
+        old_node = ("old", old_id)
+        new_node = ("new", new_id)
+        adjacency[old_node].add(new_node)
+        adjacency[new_node].add(old_node)
+
+    affected_nodes = {
+        ("old", table_id)
+        for table_id in incomplete_old_ids
+        if table_id in unmatched_old_by_id
+    } | {
+        ("new", table_id)
+        for table_id in incomplete_new_ids
+        if table_id in unmatched_new_by_id
+    }
+    for node in affected_nodes:
+        adjacency.setdefault(node, set())
+
+    groups: list[dict[str, Any]] = []
+    unresolved_old_ids: set[str] = set()
+    unresolved_new_ids: set[str] = set()
+    visited_nodes: set[tuple[str, str]] = set()
+    for node in sorted(affected_nodes):
+        if node in visited_nodes:
+            continue
+        pending = [node]
+        component: set[tuple[str, str]] = set()
+        while pending:
+            current = pending.pop()
+            if current in visited_nodes:
+                continue
+            visited_nodes.add(current)
+            component.add(current)
+            pending.extend(adjacency[current] - visited_nodes)
+
+        component_old_ids = sorted(
+            table_id for side, table_id in component if side == "old"
+        )
+        component_new_ids = sorted(
+            table_id for side, table_id in component if side == "new"
+        )
+        unresolved_old_ids.update(component_old_ids)
+        unresolved_new_ids.update(component_new_ids)
+        component_pairs = [
+            excluded
+            for excluded in excluded_pairs
+            if excluded.get("old_table_id") in component_old_ids
+            and excluded.get("new_table_id") in component_new_ids
+        ]
+        groups.append({
+            "review_group_id": (
+                f"TABLE-REVIEW-{starting_group_index + len(groups):04}"
+            ),
+            "provisional_context_key": None,
+            "context_is_authoritative_hierarchy": False,
+            "reason": "incomplete_bounded_candidate_search_requires_review",
+            "old_tables": [
+                compact_logical_table(unmatched_old_by_id[table_id])
+                for table_id in component_old_ids
+            ],
+            "new_tables": [
+                compact_logical_table(unmatched_new_by_id[table_id])
+                for table_id in component_new_ids
+            ],
+            "excluded_candidate_evidence": component_pairs,
+        })
+    return groups, unresolved_old_ids, unresolved_new_ids
+
+
 def main() -> None:
     """Run Stage 10 against the workspace and save the table result."""
 
@@ -1520,18 +1876,24 @@ def main() -> None:
 
     old_anchor_keys = anchor_key_map(old_meta)
     new_anchor_keys = anchor_key_map(new_meta)
-
-
+    old_continuation_context = build_continuation_context(
+        list(old_meta.get("elements") or [])
+    )
+    new_continuation_context = build_continuation_context(
+        list(new_meta.get("elements") or [])
+    )
 
     old_tables, old_join_audit = make_logical_tables(
         "old",
         old_physical_tables,
         old_anchor_keys,
+        old_continuation_context,
     )
     new_tables, new_join_audit = make_logical_tables(
         "new",
         new_physical_tables,
         new_anchor_keys,
+        new_continuation_context,
     )
 
     print(f"OLD logical tables: {len(old_tables)}")
@@ -1580,7 +1942,14 @@ def main() -> None:
 
 
     # Residual tables that remain on both sides under the same provisional
-    # context are not safe to finalize as add/delete yet.
+    # context are not safe to finalize as add/delete yet.  The same is true
+    # when bounded candidate retrieval pruned plausible counterparts.
+    incomplete_old_ids = set(
+        matching_audit.get("old_tables_with_incomplete_candidate_search") or []
+    )
+    incomplete_new_ids = set(
+        matching_audit.get("new_tables_with_incomplete_candidate_search") or []
+    )
     old_residual_by_context: dict[
         str,
         list[dict[str, Any]],
@@ -1639,6 +2008,21 @@ def main() -> None:
                 for table in new_group
             ],
         })
+
+    # Retrieval truncation is uncertainty evidence, not absence evidence.
+    # Group affected residual endpoints by omitted plausible pairs, preserving
+    # their compact source references and preventing one-sided duplication.
+    incomplete_groups, incomplete_old_ids, incomplete_new_ids = (
+        incomplete_search_unresolved_groups(
+            unmatched_old_tables,
+            unmatched_new_tables,
+            matching_audit,
+            starting_group_index=len(unresolved_table_groups) + 1,
+        )
+    )
+    unresolved_table_groups.extend(incomplete_groups)
+    unresolved_old_ids.update(incomplete_old_ids)
+    unresolved_new_ids.update(incomplete_new_ids)
 
     deleted_table_candidates = [
         table

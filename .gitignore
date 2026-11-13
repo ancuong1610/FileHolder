@@ -6,7 +6,7 @@
 venv/
 
 # Runtime / generated workspace output.
-workspace/
+workspace/*
 output/
 runtime/
 temp/

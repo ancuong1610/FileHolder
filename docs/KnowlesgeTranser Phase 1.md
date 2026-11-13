@@ -884,6 +884,12 @@ requires adjacent pages, equal column count and repeated-header evidence:
 header similarity >= **0.80** with shared context, or >= **0.92** when context
 support is missing/different. Equal column count alone is insufficient.
 
+Where available, shared provisional-anchor context keys are recorded as
+**supporting evidence** that adjacent physical fragments belong to the same
+logical table. They lower only the repeated-header threshold; they do not by
+themselves join fragments, establish hierarchy, or override page/column/header
+requirements. Missing or different context keeps the stricter header threshold.
+
 Repeated continuation headers may be omitted from logical body rows, but omitted
 rows/cells are counted explicitly. Logical cells preserve physical source-table
 and source-row identities.
@@ -1381,8 +1387,10 @@ Specific limits in this slice:
   paragraph model does not retain source-format evidence, and report
   strike-through marks are comparison deletions, not source formatting.
 - Private table-extraction quality remains unverified without a representative
-  failing page/artifacts. No speculative extraction or matching change is
-  claimed, and the Stage 10 all-pairs performance finding is not repaired here.
+  failing page/artifacts. Stage 10 bounds fuzzy table scoring through
+  deterministic header/body/context/shape candidate retrieval; pruned plausible
+  counterparts remain unresolved review evidence. This does not prove full
+  table-counterpart recall on private documents.
 - Synthetic outline/report/routing tests do not prove real-provider, company-PDF
   or Windows acceptance.
 

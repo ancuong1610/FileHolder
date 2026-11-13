@@ -9,6 +9,8 @@ replacement for product ownership.
 - [Definition of done](definition-of-done.md) — evidence for the selected task.
 - [Decisions](decisions/README.md) — consequential harness choices and status.
 - [Project skills](../../.agents/skills/README.md) — narrow task procedures.
+- [Implementation plans](../plans/README.md) — versioned decision-backed plans for
+  released multi-step work.
 - [Team quickstart](../operations/agent-harness-quickstart.md) — client setup.
 
 Use the lowest route that fits. Questions and inspections stay read-only; tiny

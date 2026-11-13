@@ -195,6 +195,94 @@ class RoutingSemanticsTest(unittest.TestCase):
         self.assertEqual(legacy["method"], "llm_advisory")
         self.assertIn("packet_decision", legacy)
 
+    def test_equivalent_tables_keep_clean_non_semantic_and_review_evidence_uncertain(self):
+        movement = _movement()
+        tables = _empty_tables()
+        tables["table_matches"] = [
+            {
+                "table_match_id": "TABLE-MATCH-UNCHANGED-REVIEW",
+                "classification": "UNCHANGED",
+                "needs_review": True,
+                "review_reasons": ["source_table_requires_extraction_review"],
+                "old": {"logical_table_id": "OLD-LT0001", "source_pages": [1]},
+                "new": {"logical_table_id": "NEW-LT0001", "source_pages": [1]},
+                "cell_changes": [],
+            },
+            {
+                "table_match_id": "TABLE-MATCH-UNCHANGED-CLEAN",
+                "classification": "UNCHANGED",
+                "needs_review": False,
+                "review_reasons": [],
+                "old": {"logical_table_id": "OLD-LT0002", "source_pages": [2]},
+                "new": {"logical_table_id": "NEW-LT0002", "source_pages": [2]},
+                "cell_changes": [],
+            },
+            {
+                "table_match_id": "TABLE-MATCH-LAYOUT-REVIEW",
+                "classification": "LAYOUT_EQUIVALENT",
+                "needs_review": True,
+                "review_reasons": ["table_assignment_ambiguous"],
+                "old": {"logical_table_id": "OLD-LT0003", "source_pages": [3]},
+                "new": {"logical_table_id": "NEW-LT0003", "source_pages": [4]},
+                "cell_changes": [],
+            },
+            {
+                "table_match_id": "TABLE-MATCH-LAYOUT-CLEAN",
+                "classification": "LAYOUT_EQUIVALENT",
+                "needs_review": False,
+                "review_reasons": [],
+                "old": {"logical_table_id": "OLD-LT0004", "source_pages": [5]},
+                "new": {"logical_table_id": "NEW-LT0004", "source_pages": [6]},
+                "cell_changes": [],
+            },
+        ]
+        routing = _routing(movement, tables)
+        routes = {route["candidate_id"]: route for route in routing["table_routes"]}
+        for candidate_id in (
+            "TABLE-MATCH-UNCHANGED-REVIEW",
+            "TABLE-MATCH-LAYOUT-REVIEW",
+        ):
+            self.assertEqual(routes[candidate_id]["route"], "UNCERTAIN_RESULT")
+            self.assertEqual(
+                routes[candidate_id]["case_type"],
+                "table_non_semantic_with_review_evidence",
+            )
+        for candidate_id in (
+            "TABLE-MATCH-UNCHANGED-CLEAN",
+            "TABLE-MATCH-LAYOUT-CLEAN",
+        ):
+            self.assertEqual(routes[candidate_id]["route"], "NON_SEMANTIC")
+            self.assertEqual(routes[candidate_id]["case_type"], "table_non_semantic")
+
+        result = s14_canonical_result.build_comparison_result(
+            movement, tables, routing
+        )
+        self.assertEqual(len(result["table_changes"]), 2)
+        retained = {
+            item["source_table_match_id"]: item
+            for item in result["table_changes"]
+        }
+        self.assertEqual(
+            set(retained),
+            {"TABLE-MATCH-UNCHANGED-REVIEW", "TABLE-MATCH-LAYOUT-REVIEW"},
+        )
+        for source_match_id, reason in (
+            ("TABLE-MATCH-UNCHANGED-REVIEW", "source_table_requires_extraction_review"),
+            ("TABLE-MATCH-LAYOUT-REVIEW", "table_assignment_ambiguous"),
+        ):
+            table_change = retained[source_match_id]
+            self.assertEqual(table_change["resolution"]["result_state"], "uncertain")
+            self.assertTrue(table_change["resolution"]["needs_review"])
+            self.assertIn(reason, table_change["resolution"]["review_reasons"])
+            self.assertEqual(table_change["old"]["logical_table_id"].replace("OLD", "NEW"),
+                             table_change["new"]["logical_table_id"])
+            self.assertTrue(any(
+                item.get("table_change_id") == table_change["table_change_id"]
+                and item.get("source_candidate_id") == source_match_id
+                and reason in item["resolution"]["review_reasons"]
+                for item in result["review_queue"]
+            ))
+
 
 def _saved_documents():
     old = structure_fixtures.load("toc_text")

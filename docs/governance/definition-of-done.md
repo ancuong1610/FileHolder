@@ -17,7 +17,10 @@ followed these instructions.
 - **Evaluation** — dataset/workspace identity, OLD/NEW orientation, exact command
   and counts, separated regression/extraction/semantic/production claims.
 - **Handover** — actual diff inspection, `git diff --check`, exact checks/results,
-  documentation impact and skipped or unverified cases.
+  documentation impact and skipped or unverified cases. Before any push, update
+  the owning documentation for code-visible behavior or explicitly record why
+  the diff has no documentation impact; run the harness when harness/governance
+  files change.
 
 ## Always report
 

@@ -15,8 +15,7 @@ experiment is not completing general semantic understanding.
 Owners: `phase1/evaluation/semantic_shadow.py`, `semantic_shadow_model.py`,
 `semantic_shadow_cli.py`; usage and input schema are in
 [the evaluation README](../../src/document_compare/phase1/evaluation/README.md).
-The [execution plan](../superpowers/plans/2026-10-23-semantic-confidence-gate-b.md)
-records constraints and checks.
+The historical execution plan is not retained in this checkout.
 
 ## Actual inference, not mock results
 

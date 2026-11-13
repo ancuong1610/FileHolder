@@ -630,7 +630,14 @@ def _build_changes(
         resolution = _resolve(cid, routes_by_candidate, decisions_by_route)
         cls = match.get("classification")
 
-        if cls in {"UNCHANGED", "LAYOUT_EQUIVALENT"}:
+        # Clean equivalent tables are intentionally omitted from canonical
+        # changes.  Equivalent tables with routed uncertainty remain visible:
+        # their review evidence is the change requiring user attention.
+        if (
+            cls in {"UNCHANGED", "LAYOUT_EQUIVALENT"}
+            and resolution["status"] == "non_semantic"
+            and not resolution["needs_review"]
+        ):
             continue
 
         record = {

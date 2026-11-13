@@ -239,7 +239,7 @@ async def chat_saved_workspace(workspace: Path, check_only: bool = False) -> Non
         raise ValueError(f"Missing chat configuration: {', '.join(missing)} (values not printed)")
     print(json.dumps(gateway.summarize(gateway.job_id), ensure_ascii=False, indent=2))
     print("Saved-workspace reader: read-only local mode (no API/MCP transport).")
-    agent = TiaComparisonAgent(TiaTextClient(os.environ["TIA_API_KEY"]), gateway, max_steps=5, result_limit=8)
+    agent = TiaComparisonAgent(TiaTextClient(os.environ["TIA_API_KEY"]), gateway, max_steps=10, result_limit=8)
     while True:
         try:
             question = await asyncio.to_thread(input, "you> ")

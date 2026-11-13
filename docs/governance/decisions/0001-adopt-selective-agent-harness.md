@@ -6,8 +6,7 @@
 - Owner: project maintainer
 - Approval: owner accepted the design and approved implementation (“làm đi”);
   technical execution remains with the coding lead.
-- Design record: `docs/superpowers/specs/2026-10-23-agent-harness-migration-design.md`
-- Plan record: `docs/superpowers/plans/2026-10-23-agent-harness-migration.md`
+- Historical design and migration-plan records are not retained in this checkout.
 
 ## Decision
 

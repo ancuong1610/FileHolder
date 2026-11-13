@@ -1,8 +1,7 @@
 # Architecture
 
-Authoritative map of the phase-separated layout. The approved intent lives in
-[the design spec](superpowers/specs/2026-10-16-phase-layout-design.md); this page
-is the navigation summary for a reviewer.
+Authoritative map of the phase-separated layout and navigation summary for a
+reviewer.
 
 ## Repository tree
 
@@ -79,7 +78,7 @@ than the immediately previous artifact.
 | s07 | `s07_modified_matching.py` | Find supported modified pairs among residuals rather than reporting every edit as unrelated deletion/addition. Attach only complete deterministic source witnesses; a short-text-only review may be nominated for clearing later. | structured pair + exact-match residuals | bounded modified matches + optional `semantic_assessment` |
 | s08 | `s08_candidates.py` | Assemble paired/unpaired candidates and token diffs while conserving all old/new elements and keeping uncertain duplicate matches visible. | exact + modified matches | candidate/change list |
 | s09 | `s09_movement.py` | Distinguish relocation and split/merge/resegmentation evidence from ordinary edits, without hiding genuine content changes. Record bounded plausible residual counterparts and explicit examined/unsearched coverage; proposals never consume candidates. | candidates | movement-resegmented candidates + `residual_proposals`/groups/coverage |
-| s10 | `s10_tables.py` | Compare logical tables across physical page continuations and align rows/cells, preserving unresolved table evidence. | structured pair + movement candidates | table comparison records |
+| s10 | `s10_tables.py` | Compare logical tables across physical page continuations and align rows/cells. Exact matching remains first; bounded header/body/context/shape retrieval limits expensive fuzzy scoring while preserving unresolved table evidence. | structured pair + movement candidates | table comparison records |
 | s11 | `s11_routing.py` | Decide deterministically which cases are supported and which remain uncertain or eligible for optional advisory evaluation; no domain-specific verifier. Plausible residual counterparts or incomplete search coverage block absence-based add/delete acceptance. | candidates + tables | routing with `UNCERTAIN_RESULT` |
 | s12 | `s12_packets.py` | Package only eligible cases into bounded old/new evidence for optional evaluation, not an unbounded document upload. | eligible routes + evidence | bounded review packets |
 | s13 | `s13_llm_evaluator.py` | Obtain optional advisory `REAL_CHANGE` / `ARTIFACT` / `UNCERTAIN` recommendations with traceability; mock mode exercises the contract without model calls. | packets | disabled/mock/real decisions + trace |
