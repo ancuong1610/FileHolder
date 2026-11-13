@@ -20,9 +20,12 @@ as the title root with every other top-level section as its child; the root star
 An "Order" radio above the tree switches sibling order between "Document order" (default;
 a caption notes when section numbers are not ascending) and "Section number" (natural sort
 by the first integer in the title, unnumbered siblings after, relative order kept).
-Filters are Type, Kind and a case-insensitive Search over item labels and section titles;
-they apply client-side, chips show unfiltered totals, and Previous/Next follow the
-filtered set. Review-queue items are returned by the API but not shown in the UI.
+Filters are Type (including Review), Kind, a case-insensitive Search over item labels and
+section titles, and a "Needs review only" checkbox; they apply client-side, chips show
+unfiltered totals (including "Needs review N"), and Previous/Next follow the filtered set.
+Items flagged for review show a purple "Review" tag after the type dot and a
+`Needs review - <reason>` line under the breadcrumb; review records that match no change
+are tree items of their own (purple dot). Their page highlights are purple and dashed.
 Opening a job or selecting an item expands the path to the selected item; other sections
 stay collapsed. When a finding exists on one side only, the other side shows the page of
 the same section ("section context", no highlight) from the outline's `context_old` /

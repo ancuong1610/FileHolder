@@ -84,12 +84,48 @@ class SeededLocationTests(unittest.TestCase):
             result = resolve_locations(self.out, canonical, "change", "CHANGE-000003")
             self.assertEqual(result["sides"]["old"]["counterpart"], "none")
 
-    def test_review_record_is_unavailable(self) -> None:
+    def test_review_record_without_any_element_is_unavailable(self) -> None:
         canonical = {"review_queue": [{"review_id": "REVIEW-1"}]}
         result = resolve_locations(self.out, canonical, "review", "REVIEW-1")
         for side in ("old", "new"):
             self.assertEqual(result["sides"][side]["location"], "unavailable")
             self.assertEqual(result["sides"][side]["regions"], [])
+        self.assertTrue(result["needs_review"])
+
+    def test_review_record_resolves_regions_from_evidence(self) -> None:
+        change = self.canonical["changes"][0]
+        evidence = {"old_element_ids": [change["old"]["element_id"]], "new_element_ids": [change["new"]["element_id"]]}
+        canonical = {"changes": [], "review_queue": [{
+            "review_id": "REVIEW-1", "case_type": "movement_block_review", "evidence": evidence,
+            "resolution": {"status": "review", "review_reasons": []}}]}
+        result = resolve_locations(self.out, canonical, "review", "REVIEW-1")
+        for side in ("old", "new"):
+            info = result["sides"][side]
+            self.assertEqual(info["location"], "polygon")
+            self.assertTrue(info["regions"] and all(r["role"] == "element" for r in info["regions"]))
+        self.assertEqual((result["needs_review"], result["review_reason"]), (True, "Block of content moved"))
+
+    def test_review_record_with_empty_evidence_follows_linked_change(self) -> None:
+        for link in ({"change_ids": ["CHANGE-000001"]}, {"source_candidate_id": "CAND-1"}):
+            canonical = copy.deepcopy(self.canonical)
+            canonical["changes"][0]["source_candidate_id"] = "CAND-1"
+            review = {"review_id": "REVIEW-1", "case_type": "ambiguous_modified_pair", "evidence": {},
+                      "source_candidate_id": link.get("source_candidate_id")}
+            if "change_ids" in link:
+                review["evidence"] = dict(link)
+            canonical["review_queue"] = [review]
+            result = resolve_locations(self.out, canonical, "review", "REVIEW-1")
+            self.assertEqual(result["sides"]["new"]["location"], "polygon", link)
+            self.assertEqual(result["sides"]["old"]["primary_page"], 3)
+            # the change itself is flagged because the review record points at it
+            changed = resolve_locations(self.out, canonical, "change", "CHANGE-000001")
+            self.assertTrue(changed["needs_review"])
+            self.assertEqual(changed["review_reason"], "Short or ambiguous change \u2014 LLM could not decide")
+
+    def test_unflagged_change_has_no_review_fields_set(self) -> None:
+        result = resolve_locations(self.out, self.canonical, "change", "CHANGE-000003")
+        self.assertIn("needs_review", result)
+        self.assertIn("review_reason", result)
 
     def test_unknown_record_is_not_found(self) -> None:
         with self.assertRaises(ReaderError) as ctx:
@@ -227,7 +263,7 @@ class TableLocationTests(unittest.TestCase):
         result = resolve_locations(self.out, self.canonical, "table", self.table_id)
         info = result["sides"]["old"]
         self.assertEqual(info["location"], "polygon")
-        self.assertEqual([r["page_number"] for r in info["regions"]], [3])
+        self.assertEqual([(r["page_number"], r["role"]) for r in info["regions"]], [(3, "table"), (2, "table")])
         self.assertEqual(result["sides"]["new"]["location"], "page_only")
 
     def test_cell_polygon_is_used_when_present(self) -> None:
@@ -236,6 +272,24 @@ class TableLocationTests(unittest.TestCase):
         info = resolve_locations(self.out, self.canonical, "table", self.table_id)["sides"]["old"]
         self.assertEqual(info["location"], "polygon")
         self.assertEqual(info["regions"][0]["polygon"], [0.1, 0.1, 0.5, 0.1, 0.5, 0.2, 0.1, 0.2])
+
+    def test_table_region_plus_cell_regions_only_for_changed_cells(self) -> None:
+        table = self.canonical["table_changes"][0]
+        table["cell_changes"] = [
+            {"classification": "UNCHANGED", "old": {"primary_page": 3, "primary_polygon": [1, 1, 2, 1, 2, 2, 1, 2]},
+             "new": None},
+            {"classification": "MODIFIED", "old": {"primary_page": 3, "primary_polygon": [1, 2, 5, 2, 5, 4, 1, 4]},
+             "new": {"primary_page": 3, "primary_polygon": [1, 2, 5, 2, 5, 4, 1, 4]}},
+            {"classification": "ADDED", "old": None, "new": {"primary_page": 3, "primary_polygon": [6, 2, 9, 2, 9, 4, 6, 4]}},
+        ]
+        old = [_element("OLD-TBL", [_rect(3, 1, 2, 9, 10)], 3, table_id="OLD-T1")]
+        self._docs(old, [])
+        result = resolve_locations(self.out, self.canonical, "table", self.table_id)
+        self.assertEqual([r["role"] for r in result["sides"]["old"]["regions"]], ["table", "cell"])
+        # new side has no table element: cells only (ADDED has a new cell, UNCHANGED has none on that side)
+        self.assertEqual([r["role"] for r in result["sides"]["new"]["regions"]], ["cell", "cell"][:2])
+        self.assertEqual(result["sides"]["old"]["regions"][1]["polygon"], [0.1, 0.1, 0.5, 0.1, 0.5, 0.2, 0.1, 0.2])
+        self.assertFalse(result["needs_review"])
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ current backend.
 New, self-contained (copy as-is):
 
 - `src/document_compare/phase2/viewer/` — `locations.py` (finding → page +
-  normalized polygons), `outline.py` (section tree with change counts and
+  normalized polygons), `import_workspace.py` (saved workspace → job, one command), `outline.py` (section tree with change counts and
   section-context pages), `page_render.py` (PyMuPDF page PNG + highlight),
   `synthetic.py` (offline demo job seeder), `README.md`.
 - `src/document_compare/phase2/ui/` — Streamlit app: `app.py` (sidebar tabs
@@ -28,7 +28,7 @@ New, self-contained (copy as-is):
   HTTP client of the API), `README.md`.
 - `.streamlit/config.toml` — loopback bind, headless, no telemetry, 50 MB upload.
 - Tests: `tests/phase2/test_viewer_synthetic.py`, `test_viewer_locations.py`,
-  `test_viewer_outline.py`, `test_page_render.py`, `test_view_api.py`,
+  `test_viewer_outline.py`, `test_viewer_import_workspace.py`, `test_page_render.py`, `test_view_api.py`,
   `test_ui_client.py`, `test_ui_smoke.py`, `ui_stub.py`.
 - Docs: `docs/contracts/view-endpoints.md`, this file.
 
@@ -107,7 +107,7 @@ reader), `{old,new}_document.json` (polygons), `{old,new}_document_structured.js
    python -m unittest discover -s tests
    ```
 
-   Off-site baseline: phase2 278 OK; full suite 966 with 7 failures that are
+   Off-site baseline: phase2 304 OK; full suite 992 with 7 failures that are
    environment-only (no git, missing hub SDK, checksums of the copy). On the work
    laptop those 7 should pass; any new failure is a migration defect.
 7. Manual check, loopback only:
@@ -129,6 +129,17 @@ reader), `{old,new}_document.json` (polygons), `{old,new}_document_structured.js
      highlight); ADDED mirrored in green; both pages the same size;
    - Previous / Next side by side under the pages.
 
+## Opening a real saved workspace (no rerun, no provider call)
+
+```bash
+python -m document_compare.phase2.viewer.import_workspace --workspace workspace/EBA_STEP2 --old "input/OLD.pdf" --new "input/NEW.pdf"
+```
+
+Run without arguments to be asked for the paths. It copies the workspace's
+`output/` and the two PDFs (same OLD/NEW orientation as that run) into a new
+`workspace/jobs/<id>/`, prints the ID, and never modifies the workspace. Open the
+ID in the UI's "Open job" tab. Delete the job folder when done.
+
 ## Not verified off-site — do these on the work laptop
 
 - Highlight placement on **real** PDFs (rotated pages, crop boxes, scanned
@@ -147,10 +158,24 @@ reader), `{old,new}_document.json` (polygons), `{old,new}_document_structured.js
 
 ## Deliberate UI decisions (from user review, 2026-11-13)
 
-- Uncertain / supported counts, the State filter, the limitations text and the
-  "Flagged for review" group are hidden in the UI. The API and reader still
-  return them; nothing was removed from contracts.
+- Uncertain / supported counts, the State filter and the limitations text are
+  hidden in the UI. The API and reader still return them; nothing was removed
+  from contracts.
+- Review items ARE shown (user decision, later the same day): items whose
+  `resolution.status` is `review` get a purple "Review" tag and a plain reason;
+  review-queue records linked to a change mark that change; standalone records
+  (e.g. moved blocks) are their own tree items, highlighted purple dashed from
+  their evidence element IDs. "Needs review N" chip and "Needs review only"
+  filter. `/view/locations` now returns polygons for review records (it used to
+  return `unavailable`).
+- Tables highlight only changed cells (`cell_changes`), with a thin outline of
+  the whole table; labelled "Table · p.N · N cells changed".
+- LLM opinion (advisory) box: shown only for items with
+  `resolution.packet_decision` — outcome, reason, evaluator, element IDs. The
+  confidence number is deliberately not shown (not calibrated). Check it with a
+  real Stage 13 run; off-site only the mock evaluator was seen.
 - The text/details block under the pages is removed; only the change ID remains.
+- Agent activity log under the chat: discussed, deferred.
 
 ## Boundaries
 

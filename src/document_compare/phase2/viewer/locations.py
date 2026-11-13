@@ -134,6 +134,63 @@ def record_side_ref(kind: str, record: dict[str, Any], side: str) -> str | None:
     return part[key]
 
 
+_REASONS = {
+    "unresolved_residual_counterpart": "Possible match on the other side not confirmed",
+    "plausible_unresolved_counterpart": "Possible match on the other side not confirmed",
+    "movement_block_review": "Block of content moved",
+    "contiguous_structural_block_relative_order_relocation": "Block of content moved",
+    "ambiguous_modified_pair": "Short or ambiguous change \u2014 LLM could not decide",
+    "short_text_similarity_pair": "Short or ambiguous change \u2014 LLM could not decide",
+}
+
+
+def _humanize(text: Any) -> str:
+    plain = str(text).replace("_", " ").strip()
+    return plain[:1].upper() + plain[1:]
+
+
+def review_reason(record: dict[str, Any]) -> str | None:
+    """Plain-words reason a record needs review (None when the record names none)."""
+    resolution = record.get("resolution") if isinstance(record.get("resolution"), dict) else {}
+    cases = [c for c in (record.get("case_type"), resolution.get("case_type")) if isinstance(c, str) and c]
+    reasons = [r for key in (resolution, record) for r in (key.get("review_reasons") or []) if isinstance(r, str) and r]
+    for name in cases + reasons:
+        if name in _REASONS:
+            return _REASONS[name]
+    named = (cases + reasons)[:1]
+    return _humanize(named[0]) if named else None
+
+
+def needs_review_status(record: dict[str, Any]) -> bool:
+    resolution = record.get("resolution")
+    return isinstance(resolution, dict) and resolution.get("status") == "review"
+
+
+def linked_change_ids(review: dict[str, Any], changes: list[Any]) -> list[str]:
+    """Existing change IDs a review record is about: named in its evidence, or sharing its candidate ID."""
+    existing = {c["change_id"]: c for c in changes if isinstance(c, dict) and isinstance(c.get("change_id"), str)}
+    evidence = review.get("evidence") if isinstance(review.get("evidence"), dict) else {}
+    named = [i for i in evidence.get("change_ids") or [] if isinstance(i, str)] + [review.get("change_id")]
+    out = [i for i in named if isinstance(i, str) and i in existing]
+    candidate = review.get("source_candidate_id")
+    if isinstance(candidate, str) and candidate:
+        out += [cid for cid, c in existing.items() if c.get("source_candidate_id") == candidate]
+    return list(dict.fromkeys(out))
+
+
+def reviews_by_change(canonical: Any) -> dict[str, list[dict[str, Any]]]:
+    """Review records grouped under the change IDs they are linked to."""
+    canonical = canonical if isinstance(canonical, dict) else {}
+    changes = canonical.get("changes") if isinstance(canonical.get("changes"), list) else []
+    reviews = canonical.get("review_queue") if isinstance(canonical.get("review_queue"), list) else []
+    out: dict[str, list[dict[str, Any]]] = {}
+    for review in reviews:
+        if isinstance(review, dict) and isinstance(review.get("review_id"), str):
+            for cid in linked_change_ids(review, changes):
+                out.setdefault(cid, []).append(review)
+    return out
+
+
 def _present(side: Any, id_key: str) -> bool:
     return isinstance(side, dict) and isinstance(side.get(id_key), str) and bool(side[id_key])
 
@@ -146,7 +203,7 @@ def _change_side(side: Any, doc: _Doc) -> dict[str, Any]:
     element = doc.elements.get(side["element_id"])
     if element is None:
         return _side("present", "unavailable", doc)
-    regions = _dedupe(doc.element_regions(element))
+    regions = [dict(r, role="element") for r in _dedupe(doc.element_regions(element))]
     page = _page_of(element.get("primary_page"))
     if page is None:
         page = _page_of(side.get("primary_page"))
@@ -159,18 +216,53 @@ def _change_side(side: Any, doc: _Doc) -> dict[str, Any]:
     return _side("present", "unavailable", doc)
 
 
-def _cell_regions(cell: dict[str, Any], doc: _Doc) -> tuple[list[dict[str, Any]], int | None]:
-    page = _page_of(cell.get("primary_page"))
-    direct = doc.region(page, cell.get("primary_polygon"))
-    if direct is not None:
-        return [direct], page
-    table_id = cell.get("source_table_id")
-    found: list[dict[str, Any]] = []
-    if isinstance(table_id, str) and table_id and page is not None:
-        for element in doc.element_list:
-            if element.get("represented_by_table_id") == table_id:
-                found.extend(r for r in doc.element_regions(element) if r["page_number"] == page)
-    return _dedupe(found), page
+def _elements_side(ids: list[str], doc: _Doc) -> dict[str, Any]:
+    """One side of a review record: the union of the regions of the named elements."""
+    if not ids:
+        return _side("none", "unavailable", doc)
+    if not doc.ok:
+        return _side("present", "unavailable", doc)
+    regions: list[dict[str, Any]] = []
+    pages: list[int] = []
+    for eid in ids:
+        element = doc.elements.get(eid)
+        if element is None:
+            continue
+        found = doc.element_regions(element)
+        regions.extend(dict(r, role="element") for r in found)
+        page = _page_of(element.get("primary_page"))
+        if page is not None and page in doc.pages:
+            pages.append(page)
+    regions = _dedupe(regions)
+    if regions:
+        return _side("present", "polygon", doc, regions[0]["page_number"], regions)
+    if pages:
+        return _side("present", "page_only", doc, pages[0])
+    return _side("present", "unavailable", doc)
+
+
+def _review_ids(record: dict[str, Any], canonical: dict[str, Any]) -> dict[str, list[str]]:
+    evidence = record.get("evidence") if isinstance(record.get("evidence"), dict) else {}
+    ids = {s: [i for i in evidence.get(f"{s}_element_ids") or [] if isinstance(i, str)] for s in SIDES}
+    if any(ids.values()):
+        return ids
+    changes = canonical.get("changes") if isinstance(canonical.get("changes"), list) else []
+    wanted = set(linked_change_ids(record, changes))
+    for change in changes:
+        if isinstance(change, dict) and change.get("change_id") in wanted:
+            for side in SIDES:
+                if _present(change.get(side), "element_id"):
+                    ids[side].append(change[side]["element_id"])
+    return ids
+
+
+def _table_elements(part: dict[str, Any], doc: _Doc) -> list[dict[str, Any]]:
+    """Document elements of one side's logical table (by represented_by_table_id, else source table IDs)."""
+    wanted = {part.get("logical_table_id")} | {i for i in part.get("source_table_ids") or [] if isinstance(i, str)}
+    found = [e for e in doc.element_list if e.get("represented_by_table_id") in wanted]
+    if not found:
+        found = [doc.elements[i] for i in part.get("source_table_ids") or [] if i in doc.elements]
+    return found
 
 
 def _table_side(record: dict[str, Any], side: str, doc: _Doc) -> dict[str, Any]:
@@ -180,17 +272,22 @@ def _table_side(record: dict[str, Any], side: str, doc: _Doc) -> dict[str, Any]:
         return _side("present", "unavailable", doc)
     cells = [c for c in record.get("cell_changes") or [] if isinstance(c, dict)]
     changed = [c for c in cells if c.get("classification") != "UNCHANGED"]
-    regions: list[dict[str, Any]] = []
+    table_regions: list[dict[str, Any]] = []
+    for element in _table_elements(record[side], doc):
+        table_regions.extend(dict(r, role="table") for r in doc.element_regions(element))
+    cell_regions: list[dict[str, Any]] = []
     pages: list[int] = []
     for change in changed or cells:
         cell = change.get(side)
         if not isinstance(cell, dict):
             continue
-        found, page = _cell_regions(cell, doc)
-        regions.extend(found)
+        page = _page_of(cell.get("primary_page"))
+        direct = doc.region(page, cell.get("primary_polygon"))
+        if direct is not None and change in changed:
+            cell_regions.append(dict(direct, role="cell"))
         if page is not None and page in doc.pages:
             pages.append(page)
-    regions = _dedupe(regions)
+    regions = _dedupe(table_regions) + _dedupe(cell_regions)
     if regions:
         return _side("present", "polygon", doc, regions[0]["page_number"], regions)
     if pages:
@@ -221,6 +318,17 @@ def resolve_locations(output_dir: Path, canonical: dict, kind: str, record_id: s
         sides = {s: _table_side(record, s, docs[s]) for s in SIDES}
     else:
         result["change_type"] = None
-        sides = {s: _side("present", "unavailable", docs[s]) for s in SIDES}
+        ids = _review_ids(record, canonical)
+        sides = {s: _elements_side(ids[s], docs[s]) for s in SIDES}
     result["sides"] = sides
+    linked = []
+    if kind == "change":
+        linked = reviews_by_change(canonical).get(record_id, [])
+    elif kind == "review":
+        linked = [record]
+    result["needs_review"] = kind == "review" or needs_review_status(record) or bool(linked)
+    reason = review_reason(record) if kind == "review" or needs_review_status(record) else None
+    for review in linked:
+        reason = reason or review_reason(review)
+    result["review_reason"] = reason if result["needs_review"] else None
     return result

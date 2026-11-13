@@ -9,7 +9,7 @@ except ImportError:  # pragma: no cover - streamlit is an optional extra
     raise unittest.SkipTest("streamlit is not installed")
 
 from document_compare.phase2.ui import review
-from tests.phase2.ui_stub import StubClient, default_outline
+from tests.phase2.ui_stub import StubClient, default_outline, item
 
 
 def _script(stub):
@@ -226,7 +226,7 @@ class ReviewTests(unittest.TestCase):
         self.assertIn("new\\_policy\\.pdf", main_text)
         self.assertIn("4 pages", main_text)
         self.assertIn("Job ID: job1", main_text)
-        for chip in (":blue-badge[Changes 2]", ":violet-badge[Tables 0]", ":green-badge[Added 1]",
+        for chip in (":blue-badge[Changes 2]", ":gray-badge[Tables 0]", ":green-badge[Added 1]",
                      ":red-badge[Deleted 0]", ":orange-badge[Modified 1]"):
             self.assertIn(chip, main_text)
         for gone in ("Limitations", "not legal or semantic ground truth", "Uncertain", "Supported"):
@@ -470,6 +470,82 @@ class ReviewTests(unittest.TestCase):
         at = open_job(make_app(stub))
         self.assertFalse(at.exception)
         self.assertIn("No findings in this result.", texts(at.main.info))
+
+
+def review_outline() -> dict:
+    """Default outline, plus: CHANGE-000001 flagged, and a standalone review item in Section A."""
+    outline = default_outline()
+    top = outline["sections"][0]
+    flagged = top["items"][0]
+    flagged.update(needs_review=True, review_reason="Possible match on the other side not confirmed",
+                   review_ids=["REVIEW-000001"])
+    plain = [i for n in (top, top["children"][0]) for i in n["items"] if i is not flagged]
+    for i in plain:
+        i.update(needs_review=False, review_reason=None, review_ids=[])
+    standalone = item("review", "REVIEW-000002", "REVIEW", "Moved block text", ["Section A"], 1, 3)
+    standalone.update(needs_review=True, review_reason="Block of content moved", review_ids=["REVIEW-000002"])
+    top["items"].append(standalone)
+    top["change_count"] += 1
+    return outline
+
+
+class NeedsReviewTests(unittest.TestCase):
+    def test_chip_pill_and_header_reason(self):
+        stub = StubClient(outline_value=review_outline())
+        at = open_job(make_app(stub))
+        self.assertFalse(at.exception)
+        main_text = texts(at.main.markdown) + texts(at.main.caption)
+        self.assertIn(":violet-badge[Needs review 2]", main_text)
+        self.assertIn("purple dashed = needs review", main_text)
+        labels = {b.key: b.label for b in at.main.button}
+        self.assertIn(":violet[Review]", labels["pick::change::CHANGE-000001"])
+        self.assertTrue(labels["pick::change::CHANGE-000001"].startswith(":orange["))  # type dot stays first
+        self.assertTrue(labels["pick::review::REVIEW-000002"].startswith(":violet[\u25cf] :violet[Review]"))
+        self.assertIn("Needs review \u2014 Possible match on the other side not confirmed", main_text)
+
+    def test_llm_opinion_panel_only_on_items_the_llm_saw(self):
+        outline = review_outline()
+        flagged = next(i for i in review.flatten(outline) if i["record_id"] == "CHANGE-000001")
+        flagged["llm_opinion"] = {"outcome": "UNCERTAIN", "reason": "Ambiguous pair.",
+                                  "evaluator": "mock-evaluator-v1", "evidence_refs": ["OLD-P1", "NEW-P1"]}
+        at = open_job(make_app(StubClient(outline_value=outline)))
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["selected"]["record_id"], "CHANGE-000001")
+        shown = texts(at.main.markdown) + texts(at.main.caption)
+        self.assertIn("LLM opinion · advisory", shown)
+        self.assertIn(":violet-badge[Uncertain] Ambiguous pair\\.", shown)
+        self.assertIn("mock-evaluator-v1 · looked at OLD-P1, NEW-P1", shown.replace("\\", ""))
+        self.assertNotIn("0.3", shown)
+        at.session_state["selected"] = {"kind": "review", "record_id": "REVIEW-000002"}
+        at.run()
+        self.assertNotIn("LLM opinion · advisory", texts(at.main.markdown) + texts(at.main.caption))
+
+    def test_needs_review_only_filter_and_review_type(self):
+        stub = StubClient(outline_value=review_outline())
+        at = open_job(make_app(stub))
+        self.assertEqual(at.main.checkbox(key="f_needs_review").label, "Needs review only")
+        self.assertFalse(at.main.checkbox(key="f_needs_review").value)
+        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001", "pick::review::REVIEW-000002"])
+        at.main.checkbox(key="f_needs_review").check()
+        at.run()
+        self.assertFalse(at.exception)
+        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001", "pick::review::REVIEW-000002"])
+        self.assertNotIn("pick::change::CHANGE-000002", [b.key for b in at.main.button])
+        at.main.selectbox(key="f_type").select("Review")  # combines: only standalone review items
+        at.run()
+        self.assertEqual(tree_keys(at), ["pick::review::REVIEW-000002"])
+        self.assertEqual(at.session_state["selected"], {"kind": "review", "record_id": "REVIEW-000002"})
+        self.assertIn("Needs review \u2014 Block of content moved", texts(at.main.markdown))
+        self.assertEqual(len(at.main.get("image")), 2)
+        calls = [c for c in stub.calls if c[0] == "page_png" and c[4] == "review"]
+        self.assertTrue(calls and all(c[6] for c in calls))  # review highlights are drawn dashed
+
+    def test_only_flagged_filter_hides_unflagged_items(self):
+        outline = review_outline()
+        flagged = review.filter_outline(outline, flagged_only=True)
+        self.assertEqual([i["record_id"] for i in review.flatten(flagged)], ["CHANGE-000001", "REVIEW-000002"])
+        self.assertEqual(review.chip_counts(outline)["Needs review"], 2)
+        self.assertEqual(review.chip_counts(outline)["Changes"], 2)  # review items are not changes
 
 
 class ChatTests(unittest.TestCase):

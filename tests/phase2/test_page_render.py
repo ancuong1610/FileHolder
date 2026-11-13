@@ -72,7 +72,8 @@ class PageRenderTests(unittest.TestCase):
         self.assertEqual(style_for("ADDED", "new"), "added")
         self.assertEqual(style_for("MODIFIED", "new"), "modified")
         self.assertEqual(style_for("MOVED", "old"), "modified")
-        self.assertEqual(set(STYLES), {"deleted", "added", "modified"})
+        self.assertEqual(set(STYLES), {"deleted", "added", "modified", "review"})
+        self.assertEqual(STYLES["review"], (124, 58, 237))
 
     def test_pixel_inside_polygon_is_tinted_and_outside_is_not(self):
         base = _png_pixmap(render_page(self.pdf, 1, []))
@@ -87,6 +88,29 @@ class PageRenderTests(unittest.TestCase):
         self.assertGreater(r, 150)  # light tint of green (22,163,74) at 0.25
         self.assertGreater(g, r)
         self.assertEqual(hit.pixel(*outside), base.pixel(*outside))
+
+    def test_table_role_draws_outline_without_fill(self):
+        s = 1.5 * 72
+        base = _png_pixmap(render_page(self.pdf, 1, []))
+        table = _png_pixmap(render_page(self.pdf, 1, [POLY], roles=["table"]))
+        cell = _png_pixmap(render_page(self.pdf, 1, [POLY], roles=["cell"]))
+        inside = (int(3.0 * s), int(2.97 * s) - 1)
+        self.assertEqual(table.pixel(*inside), base.pixel(*inside))  # no tint inside a table frame
+        self.assertNotEqual(cell.pixel(*inside), base.pixel(*inside))
+        edge = (int(1.0 * s), int(2.5 * s))  # left edge of the box carries the outline
+        self.assertNotEqual(table.pixel(*edge), base.pixel(*edge))
+        self.assertEqual(_png_pixmap(render_page(self.pdf, 1, [POLY])).samples, cell.samples)  # default = element
+
+    def test_review_style_is_purple_and_roles_are_validated(self):
+        s = 1.5 * 72
+        inside = (int(3.0 * s), int(2.97 * s) - 1)
+        r, g, b = _png_pixmap(render_page(self.pdf, 1, [POLY], style="review")).pixel(*inside)[:3]
+        self.assertGreater(b, g)  # tint of (124, 58, 237) at 0.25 on white
+        self.assertGreater(r, g)
+        with self.assertRaises(ValueError):
+            render_page(self.pdf, 1, [POLY], roles=["bogus"])
+        with self.assertRaises(ValueError):
+            render_page(self.pdf, 1, [POLY], roles=[])
 
     def test_image_size_follows_scale(self):
         for scale in (0.5, 1.5, 3.0):

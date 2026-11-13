@@ -47,12 +47,22 @@ Returns where one finding sits on each side.
   `unavailable`. A location is never guessed: an element ID missing from the
   document JSON, a missing document file or an unusable polygon degrades to
   `page_only` or `unavailable`.
-- `table` findings return the changed cells' polygons. A cell without a polygon
-  falls back to the regions of elements whose `represented_by_table_id` equals
-  the cell's `source_table_id`, limited to the cell's `primary_page`; if none,
-  `page_only`.
-- `review` records carry no element reference, so both sides are `unavailable`
-  (text only) and `change_type` is `null`.
+- Every region carries an additive `role`: `element` (change and review
+  elements), `table` (the whole table: bounding regions of the table element,
+  found by `represented_by_table_id` or the side's `source_table_ids`) or `cell`.
+- `table` findings return one `table` region per table-element region plus one
+  `cell` region per changed cell (`classification` not `UNCHANGED`, side has a cell
+  with a polygon; inches normalized like any polygon). If nothing resolves but a
+  changed cell names a page, the side is `page_only`.
+- `review` records resolve their regions from `evidence.old_element_ids` /
+  `new_element_ids`. When the evidence names no element at all, the elements of the
+  linked changes are used (a change is linked when named in `evidence.change_ids` or
+  when its `source_candidate_id` equals the record's). `location` is
+  `polygon`/`page_only`, and `unavailable` only when nothing resolves.
+  `change_type` is `null`.
+- Top level also carries `needs_review` (the record's `resolution.status` is
+  `review`, a review record, or a review record is linked to the change) and
+  `review_reason` (plain words, `null` when none is recorded).
 
 ## `GET /jobs/{job_id}/view/outline`
 
@@ -69,12 +79,15 @@ in it. Same job rules as above (404 unknown job, 409 `not_ready`).
      "items": [{"kind": "change", "record_id": "CHANGE-000001", "change_type": "MODIFIED",
                 "label": "first 90 characters of the change text...",
                 "page_old": 3, "page_new": 3, "context_old": false, "context_new": false,
-                "section_path": ["Section 4"]}]}
+                "section_path": ["Section 4"],
+                "needs_review": false, "review_reason": null, "review_ids": []}]}
   ],
   "unplaced": [],
   "review": [{"kind": "review", "record_id": "REVIEW-000001", "change_type": null,
               "label": "unresolved residual counterpart", "page_old": null, "page_new": null,
-              "context_old": false, "context_new": false, "section_path": []}],
+              "context_old": false, "context_new": false, "section_path": [],
+              "needs_review": true, "review_reason": "Block of content moved",
+              "review_ids": ["REVIEW-000001"], "linked_to": []}],
   "total": 4
 }
 ```
@@ -102,8 +115,32 @@ in it. Same job rules as above (404 unknown job, 409 `not_ready`).
   that exists on the missing side; if there is none (or no sections at all), the
   other side's page clamped to the missing document's page count. It stays `null`
   when no page can be derived. Context pages carry no highlight.
-- `review` lists `review_queue` records (no geometry, no pages); `total` is the
-  count of all items including review.
+- LLM opinion. Every item has `llm_opinion`: `null`, or
+  `{"outcome", "reason", "evaluator", "evidence_refs"}` copied from the record's
+  `resolution.packet_decision` (Stage 13, advisory; a linked review record's
+  decision is copied onto its change). The model's `confidence` is deliberately
+  not passed on because it is not calibrated. Stage 14 `resolution.status` stays
+  the final decision.
+- Review linking. Every item has `needs_review` (its `resolution.status` is
+  `review`, or a review record is linked to it), `review_reason` and `review_ids`.
+  Reasons: `unresolved_residual_counterpart` / `plausible_unresolved_counterpart`
+  "Possible match on the other side not confirmed"; `movement_block_review` /
+  `contiguous_structural_block_relative_order_relocation` "Block of content
+  moved"; `ambiguous_modified_pair` / `short_text_similarity_pair` "Short or
+  ambiguous change — LLM could not decide"; otherwise the case type in words.
+  A review record is linked to a change when `evidence.change_ids` names it or its
+  `source_candidate_id` equals the change's; a linked record marks those items and
+  is not an item itself. Every other review record is an item with `kind: "review"`,
+  `change_type: "REVIEW"`, placed in the section of its first new (else old)
+  element, pages from its first element on each side, label from the evidence text
+  preview or the reason; without an element it is `unplaced`.
+- Table items are labelled `Table · p.<page> · <n> cells changed`
+  (n = cells not `UNCHANGED`; omitted when 0). A table outside any section goes to
+  the nearest previous section in reading order on that side (also found through
+  `source_table_ids`); with no previous section it is `unplaced`.
+- `review` (kept for compatibility) lists ALL `review_queue` records, each with
+  `linked_to` (change IDs it is linked to). `total` counts the items in `sections`
+  and `unplaced` (standalone review items included, linked ones not twice).
 - A missing structured artifact is not an error (`409 invalid_artifact` only for
   unparsable JSON). Sections are an evidence-based hypothesis, not legal structure.
 
@@ -116,11 +153,12 @@ Returns a PNG (`Cache-Control: no-store`) of one source-PDF page.
 | `side` | `old` or `new`. |
 | `page` | Page number from 1; must exist in the PDF. |
 | `kind`, `record_id` | Optional, only together (else 422 `invalid_arguments`). Outlines the finding's regions that lie on this page. |
-| `uncertain` | Optional boolean, default `false`. Draws the outline dashed. |
+| `uncertain` | Optional boolean, default `false`. Draws the outline dashed; also forced on when the record `needs_review`. |
 | `scale` | Optional, default 1.5, allowed 0.5-3.0. |
 
 Highlight colour follows the finding type: deleted red, added green, anything
-else amber. Type and state are shown as text by the UI; colour is not the only
+else amber; review records are purple. `table` regions are thin outlines without
+tint, `cell` and `element` regions are tinted and outlined. Type and state are shown as text by the UI; colour is not the only
 signal. Page rotation is handled by PyMuPDF; accuracy on real PDFs with rotation
 or crop boxes is not verified.
 

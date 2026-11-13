@@ -551,20 +551,24 @@ def view_page_png(
     if (kind is None) != (record_id is None):
         raise _reader_http(reader.ReaderError("invalid_arguments", "kind and record_id must be given together"))
     polygons: list[list[float]] = []
+    roles: list[str] = []
     style = "modified"
     if kind is not None and record_id is not None:
         try:
             located = resolve_locations(_job_dir(job_id) / "output", canonical, kind, record_id)
         except reader.ReaderError as exc:
             raise _reader_http(exc) from exc
-        style = style_for(str(located.get("change_type") or ""), side)
+        style = "review" if kind == "review" else style_for(str(located.get("change_type") or ""), side)
+        uncertain = uncertain or bool(located.get("needs_review"))
         regions = ((located.get("sides") or {}).get(side) or {}).get("regions") or []
-        polygons = [r["polygon"] for r in regions if r.get("page_number") == page]
+        on_page = [r for r in regions if r.get("page_number") == page]
+        polygons = [r["polygon"] for r in on_page]
+        roles = [r.get("role") or "element" for r in on_page]
     pdf_path = _job_dir(job_id) / "input" / "document" / f"{side}.pdf"
     if not pdf_path.is_file():
         raise _coded(404, "source_pdf_unavailable", "The source PDF for this side is not available.")
     try:
-        png = render_page(pdf_path, page, polygons, style=style, uncertain=uncertain, scale=scale)
+        png = render_page(pdf_path, page, polygons, style=style, uncertain=uncertain, scale=scale, roles=roles)
     except ValueError as exc:
         raise _coded(422, "invalid_arguments", "page or scale is outside the allowed range.") from exc
     except (RuntimeError, OSError) as exc:  # pymupdf.FileDataError and friends: stored PDF is unreadable

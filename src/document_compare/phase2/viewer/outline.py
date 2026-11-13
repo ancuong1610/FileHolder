@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from document_compare.phase2.reader.result_reader import ID_FIELDS, ReaderError
-from document_compare.phase2.viewer.locations import SIDES, _CONTAINERS, _load_document, record_side_ref
+from document_compare.phase2.viewer.locations import (
+    SIDES, _CONTAINERS, _load_document, linked_change_ids, needs_review_status, record_side_ref, review_reason,
+)
 
 LABEL_LIMIT = 90
 _MAX_DOC_BYTES = 256 * 1024 * 1024
@@ -26,6 +28,8 @@ def _norm(title: Any) -> str:
 
 
 def _collapse(text: Any) -> str:
+    if isinstance(text, (list, tuple)):
+        text = " · ".join(_collapse(part) for part in text if _collapse(part))
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
@@ -100,6 +104,30 @@ class _Side:
             heading = self.heading_page(section_id)
             return (heading, heading) if heading is not None else None
         return min(pages), max(pages)
+
+    def table_element_for(self, part: Any) -> str | None:
+        """Element of a table record's side: by logical table ID, else by its source table IDs."""
+        if not isinstance(part, dict):
+            return None
+        found = self.table_element.get(part.get("logical_table_id"))
+        for sid in part.get("source_table_ids") or []:
+            if found is None and sid in self.elements:
+                found = sid
+        return found
+
+    def previous_section(self, element_id: str | None) -> str | None:
+        """Section whose heading is the last one at or before the element in reading order."""
+        element = self.elements.get(element_id or "")
+        order = _int(element.get("reading_order")) if element else None
+        if order is None:
+            return None
+        best: tuple[int, str] | None = None
+        for section in self.sections:
+            heading = self.elements.get(section.get("heading_element_id"))
+            h_order = _int(heading.get("reading_order")) if heading else None
+            if h_order is not None and h_order <= order and (best is None or h_order >= best[0]):
+                best = (h_order, section["section_id"])
+        return best[1] if best else None
 
     def element_for(self, kind: str, ref: str | None) -> str | None:
         if ref is None:
@@ -188,20 +216,6 @@ def _table_pages(record: dict[str, Any], side: str) -> int | None:
     return None
 
 
-def _table_text(record: dict[str, Any], sides: tuple[str, ...]) -> str:
-    cells = [c for c in record.get("cell_changes") or [] if isinstance(c, dict)]
-    for change in [c for c in cells if c.get("classification") != "UNCHANGED"] + cells:
-        for side in sides:
-            part = change.get(side)
-            if isinstance(part, dict) and _collapse(part.get("text")):
-                return part["text"]
-    for side in sides:
-        header = (record.get(side) or {}).get("header_signature") if isinstance(record.get(side), dict) else None
-        if isinstance(header, list) and header:
-            return " | ".join(str(h) for h in header)
-    return ""
-
-
 def _item(kind: str, record: dict[str, Any], sides: dict[str, _Side]) -> dict[str, Any]:
     ctype = record.get("change_type") if isinstance(record.get("change_type"), str) else None
     item: dict[str, Any] = {
@@ -226,25 +240,47 @@ def _item(kind: str, record: dict[str, Any], sides: dict[str, _Side]) -> dict[st
             item[f"page_{side}"] = page
     elif kind == "table":
         pref = ("old", "new") if ctype and "DELETED" in ctype else ("new", "old")
-        item["label"] = _label("Table: " + (_table_text(record, pref) or str(record.get(ID_FIELDS[kind]))))
         for side in SIDES:
             item[f"page_{side}"] = _table_pages(record, side)
+        page = next((item[f"page_{side}"] for side in pref if item[f"page_{side}"] is not None), None)
+        cells = [c for c in record.get("cell_changes") or [] if isinstance(c, dict)
+                 and c.get("classification") != "UNCHANGED"]
+        label = "Table" + (f" \u00b7 p.{page}" if page is not None else "")
+        if cells:
+            label += f" \u00b7 {len(cells)} cell{'s' if len(cells) != 1 else ''} changed"
+        item["label"] = label
     else:
+        evidence = record.get("evidence") if isinstance(record.get("evidence"), dict) else {}
+        text = next((evidence.get(k) for k in ("new_text_preview", "old_text_preview") if _collapse(evidence.get(k))), "")
         case = record.get("case_type") or record.get("source_kind") or "review item"
-        item["label"] = _label(str(case).replace("_", " "))
+        item["label"] = _label(text or review_reason(record) or str(case).replace("_", " "))
+        item["change_type"] = None
+    resolved = needs_review_status(record) or kind == "review"
+    item["needs_review"] = resolved
+    item["review_reason"] = review_reason(record) if resolved else None
+    item["review_ids"] = [record[ID_FIELDS["review"]]] if kind == "review" else []
+    item["llm_opinion"] = llm_opinion(record)
     return item
 
 
-def _order(kind: str, record: dict[str, Any], sides: dict[str, _Side], pref: tuple[str, ...], index: int) -> tuple[int, int]:
-    for side in pref:
-        ref = record_side_ref(kind, record, side)
-        element = sides[side].elements.get(sides[side].element_for(kind, ref) or "")
-        order = _int(element.get("reading_order")) if element else None
-        if order is None and kind == "change" and isinstance(record.get(side), dict):
-            order = _int(record[side].get("reading_order"))
-        if order is not None:
-            return (order, index)
-    return (_BIG, index)
+def llm_opinion(record: dict[str, Any]) -> dict[str, Any] | None:
+    """The advisory LLM decision stored on a record (Stage 13), or None.
+
+    Read from ``resolution.packet_decision``. Only outcome, reason, evaluator and the
+    element IDs it looked at are passed on; the model's confidence number is left out
+    on purpose because it is not calibrated.
+    """
+    resolution = record.get("resolution") if isinstance(record.get("resolution"), dict) else {}
+    decision = resolution.get("packet_decision")
+    if not isinstance(decision, dict) or not isinstance(decision.get("outcome"), str):
+        return None
+    refs = decision.get("evidence_refs")
+    return {
+        "outcome": decision["outcome"],
+        "reason": _collapse(decision.get("reason")) or None,
+        "evaluator": decision.get("evaluator") if isinstance(decision.get("evaluator"), str) else None,
+        "evidence_refs": [r for r in refs if isinstance(r, str)] if isinstance(refs, list) else [],
+    }
 
 
 def _preorder(nodes: list[_Node]) -> list[_Node]:
@@ -301,6 +337,57 @@ def _fill_context_pages(roots: list[_Node], placed: list[tuple[_Node, dict[str, 
         fill(item, None)
 
 
+def _review_element(record: dict[str, Any], side: str) -> str | None:
+    evidence = record.get("evidence") if isinstance(record.get("evidence"), dict) else {}
+    ids = [i for i in evidence.get(f"{side}_element_ids") or [] if isinstance(i, str)]
+    return ids[0] if ids else None
+
+
+def _place(kind: str, record: dict[str, Any], sides: dict[str, _Side], index: dict[tuple[str, str], _Node],
+           pref: tuple[str, ...]) -> _Node | None:
+    """Section node of a record: its own section on the preferred side, else (tables) the nearest
+    previous section in reading order."""
+    for fallback in ((False, True) if kind == "table" else (False,)):
+        for side in pref:
+            if kind == "review":
+                eid = _review_element(record, side)
+            elif kind == "table":
+                eid = sides[side].table_element_for(record.get(side))
+            else:
+                eid = sides[side].element_for(kind, record_side_ref(kind, record, side))
+            if not eid:
+                continue
+            sid = sides[side].previous_section(eid) if fallback else sides[side].by_element.get(eid)
+            node = index.get((side, sid)) if sid else None
+            if node is not None:
+                return node
+    return None
+
+
+def _order_of(kind: str, record: dict[str, Any], sides: dict[str, _Side], pref: tuple[str, ...],
+              position: int) -> tuple[int, int]:
+    for side in pref:
+        if kind == "review":
+            eid = _review_element(record, side)
+        elif kind == "table":
+            eid = sides[side].table_element_for(record.get(side))
+        else:
+            eid = sides[side].element_for(kind, record_side_ref(kind, record, side))
+        element = sides[side].elements.get(eid or "")
+        order = _int(element.get("reading_order")) if element else None
+        if order is None and kind == "change" and isinstance(record.get(side), dict):
+            order = _int(record[side].get("reading_order"))
+        if order is not None:
+            return (order, position)
+    return (_BIG, position)
+
+
+def _review_pages(item: dict[str, Any], record: dict[str, Any], sides: dict[str, _Side]) -> None:
+    for side in SIDES:
+        element = sides[side].elements.get(_review_element(record, side) or "")
+        item[f"page_{side}"] = _int(element.get("primary_page")) if element else None
+
+
 def build_outline(output_dir: Path, canonical: dict) -> dict:
     """Section tree (NEW document first, OLD-only sections appended) with findings placed in it."""
     sides = {side: _Side(_load_structured(output_dir, side)) for side in SIDES}
@@ -309,34 +396,59 @@ def build_outline(output_dir: Path, canonical: dict) -> dict:
     placed_items: list[tuple[_Node, dict[str, Any]]] = []
     review: list[dict[str, Any]] = []
     canonical = canonical if isinstance(canonical, dict) else {}
+    by_id: dict[str, dict[str, Any]] = {}
+
+    def put(kind: str, record: dict[str, Any], item: dict[str, Any], position: int) -> None:
+        ctype = record.get("change_type") if isinstance(record.get("change_type"), str) else ""
+        pref = ("old", "new") if "DELETED" in ctype else ("new", "old")
+        node = _place(kind, record, sides, index, pref)
+        if node is None:
+            unplaced.append(item)
+        else:
+            item["section_path"] = list(node.path)
+            node.items.append((_order_of(kind, record, sides, pref, position), item))
+            placed_items.append((node, item))
 
     for kind in ("change", "table"):
         rows = canonical.get(_CONTAINERS[kind])
         for position, record in enumerate(rows if isinstance(rows, list) else []):
             if not isinstance(record, dict) or not isinstance(record.get(ID_FIELDS[kind]), str):
                 continue
-            ctype = record.get("change_type") if isinstance(record.get("change_type"), str) else ""
-            pref = ("old", "new") if "DELETED" in ctype else ("new", "old")
-            node = None
-            for side in pref:
-                sid = sides[side].section_of(kind, record_side_ref(kind, record, side))
-                node = index.get((side, sid)) if sid else None
-                if node is not None:
-                    break
             item = _item(kind, record, sides)
-            if node is None:
-                unplaced.append(item)
-            else:
-                item["section_path"] = list(node.path)
-                node.items.append((_order(kind, record, sides, pref, position), item))
-                placed_items.append((node, item))
+            by_id[record[ID_FIELDS[kind]]] = item
+            put(kind, record, item, position)
 
+    changes = canonical.get("changes") if isinstance(canonical.get("changes"), list) else []
     rows = canonical.get(_CONTAINERS["review"])
-    for record in rows if isinstance(rows, list) else []:
-        if isinstance(record, dict) and isinstance(record.get(ID_FIELDS["review"]), str):
-            entry = _item("review", record, sides)
-            entry["context_old"] = entry["context_new"] = False
-            review.append(entry)
+    for position, record in enumerate(rows if isinstance(rows, list) else []):
+        if not isinstance(record, dict) or not isinstance(record.get(ID_FIELDS["review"]), str):
+            continue
+        rid = record[ID_FIELDS["review"]]
+        linked = [cid for cid in linked_change_ids(record, changes) if cid in by_id]
+        entry = _item("review", record, sides)
+        entry["context_old"] = entry["context_new"] = False
+        entry["linked_to"] = list(linked)
+        review.append(entry)
+        if linked:
+            for cid in linked:
+                target = by_id[cid]
+                target["needs_review"] = True
+                if rid not in target["review_ids"]:
+                    target["review_ids"].append(rid)
+                target["review_reason"] = target["review_reason"] or entry["review_reason"]
+                target["llm_opinion"] = target.get("llm_opinion") or entry.get("llm_opinion")
+            continue
+        item = dict(entry, review_ids=list(entry["review_ids"]))
+        item.pop("linked_to")
+        item["change_type"] = "REVIEW"
+        _review_pages(item, record, sides)
+        put("review", record, item, position)
+
+    for item in [i for _, i in placed_items] + unplaced:
+        if item["needs_review"] and not item["review_reason"]:
+            item["review_reason"] = "Needs review"
+    for entry in review:
+        entry["review_reason"] = entry["review_reason"] or "Needs review"
 
     documents = {}
     for side in SIDES:
@@ -350,4 +462,4 @@ def build_outline(output_dir: Path, canonical: dict) -> dict:
     sections = [n.as_dict() for n in roots]
     placed = sum(n["change_count"] for n in sections)
     return {"documents": documents, "sections": sections, "unplaced": unplaced, "review": review,
-            "total": placed + len(unplaced) + len(review)}
+            "total": placed + len(unplaced)}

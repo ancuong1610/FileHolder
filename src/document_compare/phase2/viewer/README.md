@@ -14,3 +14,13 @@ network call. Phase 1 never imports this package.
 
 Check: `python -m unittest tests.phase2.test_viewer_synthetic`.
 Manual seed: `python -m document_compare.phase2.viewer.synthetic --jobs-root PATH`.
+
+Open a real saved workspace in the UI (copies its `output/` and the two source
+PDFs into a new job; the workspace is only read; asks for missing paths):
+`python -m document_compare.phase2.viewer.import_workspace --workspace workspace/EBA_STEP2 --old "input/OLD.pdf" --new "input/NEW.pdf"`.
+Check: `python -m unittest tests.phase2.test_viewer_import_workspace`.
+
+Locations and outline (`locations.py`, `outline.py`): review records are linked to
+changes through `evidence.change_ids` or `source_candidate_id`; regions carry a `role`
+(`element`, `table`, `cell`); `page_render.render_page` takes optional aligned `roles`
+(`table` = outline only). Contract: `docs/contracts/view-endpoints.md`.

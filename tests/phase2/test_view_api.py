@@ -66,6 +66,26 @@ class ViewApiTest(_Base):
         self.assertEqual(set(body["sections"][0]),
                          {"section_id", "title", "side", "level", "change_count", "children", "items"})
 
+    def test_locations_carry_review_flags(self):
+        body = self.client.get(f"/jobs/{self.job_id}/view/locations", params=REC).json()
+        self.assertIn("needs_review", body)
+        self.assertIn("review_reason", body)
+        r = self.client.get(f"/jobs/{self.job_id}/view/locations", params={"kind": "review", "record_id": "REVIEW-000002"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json()["needs_review"])
+        self.assertTrue(r.json()["review_reason"])
+
+    def test_page_png_for_review_record(self):
+        located = self.client.get(f"/jobs/{self.job_id}/view/locations",
+                                  params={"kind": "review", "record_id": "REVIEW-000002"}).json()
+        regions = located["sides"]["new"]["regions"]
+        self.assertTrue(regions)
+        page = regions[0]["page_number"]
+        marked = self._page(page=page, kind="review", record_id="REVIEW-000002")
+        self.assertEqual(marked.status_code, 200, marked.text)
+        self.assertTrue(marked.content.startswith(PNG))
+        self.assertNotEqual(marked.content, self._page(page=page).content)
+
     def test_outline_unknown_job_404_and_running_409(self):
         self.assertEqual(self.client.get("/jobs/000000000000/view/outline").status_code, 404)
         self._set_state("running")

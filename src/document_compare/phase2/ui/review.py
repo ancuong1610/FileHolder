@@ -16,10 +16,12 @@ import streamlit as st
 
 from document_compare.phase2.ui.api_client import ApiError
 
-TYPE_OPTIONS = {"All": "all", "Added": "ADDED", "Deleted": "DELETED", "Modified": "MODIFIED"}
+TYPE_OPTIONS = {"All": "all", "Added": "ADDED", "Deleted": "DELETED", "Modified": "MODIFIED", "Review": "REVIEW"}
 KIND_OPTIONS = {"All": "all", "Change": "change", "Table": "table"}
-TAGS = {"ADDED": ":green[ADDED]", "DELETED": ":red[DELETED]", "MODIFIED": ":orange[MODIFIED]"}
-LEGEND = "Red = deleted, green = added, amber = modified (dashed outline = uncertain match)."
+TAGS = {"ADDED": ":green[ADDED]", "DELETED": ":red[DELETED]", "MODIFIED": ":orange[MODIFIED]",
+        "REVIEW": ":violet[REVIEW]"}
+LEGEND = ("Red = deleted, green = added, amber = modified, purple dashed = needs review "
+          "(dashed outline = uncertain match).")
 TREE_CSS = (
     "<style>"
     # one-line rows: the row is a keyed container holding [button | right-aligned pill]
@@ -58,7 +60,7 @@ ORDER_OPTIONS = ["Document order", "Section number"]
 ORDER_NOTE = "Sections appear in the order they occur in the new document."
 _NUMBERED = re.compile(r"^\s*(section|article|chapter|part|\u00a7)?\s*\d", re.IGNORECASE)
 _FIRST_INT = re.compile(r"\d+")
-TAG_DOTS = {"ADDED": ":green[\u25cf]", "DELETED": ":red[\u25cf]", "MODIFIED": ":orange[\u25cf]"}
+TAG_DOTS = {"ADDED": ":green[\u25cf]", "DELETED": ":red[\u25cf]", "MODIFIED": ":orange[\u25cf]", "REVIEW": ":violet[\u25cf]"}
 CHEVRON_CLOSED, CHEVRON_OPEN, NO_CHEVRON = "\u203a\u2002", "\u2304\u2002", "\u2003"
 
 
@@ -124,7 +126,9 @@ def target_page(side_info: dict, other_side: dict) -> int | None:
 # --------------------------------------------------------------------------- outline helpers (pure)
 
 def bucket(item: dict) -> str:
-    """ADDED / DELETED / MODIFIED for change and table items."""
+    """ADDED / DELETED / MODIFIED for change and table items; REVIEW for standalone review items."""
+    if item.get("kind") == "review":
+        return "REVIEW"
     ctype = str(item.get("change_type") or "").upper()
     if "ADDED" in ctype:
         return "ADDED"
@@ -142,20 +146,27 @@ def _matches(item: dict, query: str) -> bool:
     return query in _fold(item.get("label")) or any(query in _fold(t) for t in item.get("section_path") or [])
 
 
-def _passes(item: dict, kind: str, ctype: str) -> bool:
-    if item.get("kind") not in ("change", "table"):  # review items are not shown in the UI
+def _is_flagged(item: dict) -> bool:
+    return bool(item.get("needs_review")) or item.get("kind") == "review"
+
+
+def _passes(item: dict, kind: str, ctype: str, flagged_only: bool = False) -> bool:
+    if item.get("kind") not in ("change", "table", "review"):
         return False
     if kind != "all" and item.get("kind") != kind:
+        return False
+    if flagged_only and not _is_flagged(item):
         return False
     return ctype == "all" or bucket(item) == ctype
 
 
-def _filter_node(node: dict, kind: str, ctype: str, query: str, inherited: bool = False) -> dict | None:
+def _filter_node(node: dict, kind: str, ctype: str, query: str, flagged: bool = False,
+                 inherited: bool = False) -> dict | None:
     """Filtered copy of a section; None when a search leaves nothing of it. A section whose own
     title matches the query stays with all its Type/Kind-matching items and descendants."""
     hit = inherited or (bool(query) and query in _fold(node.get("title")))
-    items = [i for i in node.get("items") or [] if _passes(i, kind, ctype) and (not query or hit or _matches(i, query))]
-    kids = (_filter_node(c, kind, ctype, query, hit) for c in node.get("children") or [])
+    items = [i for i in node.get("items") or [] if _passes(i, kind, ctype, flagged) and (not query or hit or _matches(i, query))]
+    kids = (_filter_node(c, kind, ctype, query, flagged, hit) for c in node.get("children") or [])
     children = [c for c in kids if c]
     if query and not hit and not items and not children:
         return None
@@ -163,15 +174,17 @@ def _filter_node(node: dict, kind: str, ctype: str, query: str, inherited: bool 
                 change_count=len(items) + sum(c["change_count"] for c in children))
 
 
-def filter_outline(outline: dict, kind: str = "all", ctype: str = "all", query: str = "") -> dict:
-    """Client-side Type/Kind/Search filter; counts are recomputed so they match what is shown.
+def filter_outline(outline: dict, kind: str = "all", ctype: str = "all", query: str = "",
+                   flagged_only: bool = False) -> dict:
+    """Client-side Type/Kind/Search/Needs-review filter; counts are recomputed so they match what is shown.
 
-    An item matches a query through its label or any title on its section path. Review items
-    are never part of the filtered tree (the API still returns them)."""
+    An item matches a query through its label or any title on its section path. Standalone review
+    items live in the tree and unplaced list; the compatibility ``review`` list is never shown."""
     query = _fold(query)
-    sections = [n for n in (_filter_node(n, kind, ctype, query) for n in outline.get("sections") or []) if n]
+    sections = [n for n in (_filter_node(n, kind, ctype, query, flagged_only) for n in outline.get("sections") or [])
+                if n]
     unplaced = [i for i in outline.get("unplaced") or []
-                if _passes(i, kind, ctype) and (not query or _matches(i, query))]
+                if _passes(i, kind, ctype, flagged_only) and (not query or _matches(i, query))]
     return {"sections": sections, "unplaced": unplaced}
 
 
@@ -235,6 +248,7 @@ def chip_counts(outline: dict) -> dict[str, int]:
         "Added": sum(1 for i in items if bucket(i) == "ADDED"),
         "Deleted": sum(1 for i in items if bucket(i) == "DELETED"),
         "Modified": sum(1 for i in items if bucket(i) == "MODIFIED"),
+        "Needs review": sum(1 for i in flatten(outline) if _is_flagged(i)),
     }
 
 
@@ -293,16 +307,18 @@ def _header(status: dict, job_id: str, outline: dict) -> None:
 
 
 def _chips(counts: dict[str, int]) -> None:
-    colors = {"Changes": "blue", "Tables": "violet", "Added": "green", "Deleted": "red", "Modified": "orange"}
+    colors = {"Changes": "blue", "Tables": "gray", "Added": "green", "Deleted": "red", "Modified": "orange",
+              "Needs review": "violet"}
     st.markdown(" ".join(f":{colors[k]}-badge[{k} {v}]" for k, v in counts.items()))
 
 
-def _filters() -> tuple[str, str, str]:
-    c1, c2, c3, _ = st.columns([1, 1, 2, 1])
+def _filters() -> tuple[str, str, str, bool]:
+    c1, c2, c3, c4 = st.columns([1, 1, 2, 1], vertical_alignment="bottom")
     ctype = c1.selectbox("Type", list(TYPE_OPTIONS), key="f_type")
     kind = c2.selectbox("Kind", list(KIND_OPTIONS), key="f_kind")
     query = c3.text_input("Search", key="f_search", placeholder="Search changes or sections")
-    return KIND_OPTIONS[kind], TYPE_OPTIONS[ctype], query
+    flagged = c4.checkbox("Needs review only", key="f_needs_review", value=False)
+    return KIND_OPTIONS[kind], TYPE_OPTIONS[ctype], query, flagged
 
 
 # --------------------------------------------------------------------------- tree
@@ -318,7 +334,8 @@ def _row(item: dict, selected: dict | None) -> None:
     page = _item_page(item)
     text = _plain(item.get("label") or item.get("record_id"))
     left, right = _line(f"{item['kind']}::{item['record_id']}")
-    left.button(f"{TAG_DOTS[bucket(item)]} {text}", key=f"pick::{item['kind']}::{item['record_id']}",
+    tag = " :violet[Review]" if _is_flagged(item) else ""
+    left.button(f"{TAG_DOTS[bucket(item)]}{tag} {text}", key=f"pick::{item['kind']}::{item['record_id']}",
                 on_click=_select, args=(item,), help=str(item.get("label") or item.get("record_id")),
                 type="primary" if _same(item, selected) else "secondary", **_BUTTON_FILL)
     if page is not None:
@@ -413,9 +430,28 @@ def _breadcrumb(item: dict) -> str:
     return f"{where}   {TAGS[bucket(item)]}"
 
 
+def _llm_opinion(opinion: Any) -> None:
+    """Compact, advisory LLM opinion box (variant A); nothing when the LLM did not look at it."""
+    if not isinstance(opinion, dict) or not opinion.get("outcome"):
+        return
+    outcome = str(opinion["outcome"]).replace("_", " ").capitalize()
+    with st.container(border=True, key="llm_opinion"):
+        st.caption(":material/auto_awesome: LLM opinion · advisory")
+        reason = _plain(opinion.get("reason") or "No reason given.")
+        st.markdown(f":violet-badge[{_plain(outcome)}] {reason}")
+        meta = [opinion.get("evaluator") or "evaluator not recorded"]
+        refs = [r for r in opinion.get("evidence_refs") or [] if isinstance(r, str)]
+        if refs:
+            meta.append("looked at " + ", ".join(refs[:6]) + (" …" if len(refs) > 6 else ""))
+        st.caption(_plain(" · ".join(meta)))
+
+
 def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
     kind, record_id, ck = item["kind"], item["record_id"], _key(client)
     st.markdown(_breadcrumb(item))
+    if _is_flagged(item):
+        st.markdown(f":violet[Needs review \u2014 {_plain(item.get('review_reason') or 'reason not recorded')}]")
+    _llm_opinion(item.get("llm_opinion"))
     st.caption(LEGEND)
     try:
         details = _details(client, ck, job_id, kind, record_id)
@@ -431,7 +467,7 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
     sides = (located or {}).get("sides") or {}
     old_side, new_side = sides.get("old") or {}, sides.get("new") or {}
     state = payload.get("result_state") or (payload.get("resolution") or {}).get("result_state")
-    uncertain = state == "uncertain"
+    uncertain = state == "uncertain" or _is_flagged(item)
     infos = {"old": old_side, "new": new_side}
     other_of = {"old": new_side, "new": old_side}
     targets: dict[str, int | None] = {}
@@ -499,7 +535,7 @@ def render(client, job_id: str, status: dict | None = None) -> None:
     st.markdown(TREE_CSS, unsafe_allow_html=True)
     _header(status or {}, job_id, outline)
     _chips(chip_counts(outline))
-    kind, ctype, query = _filters()
+    kind, ctype, query, flagged = _filters()
     left, right = st.columns([2, 3])
     with left:
         mode = _order_control()
@@ -508,7 +544,7 @@ def render(client, job_id: str, status: dict | None = None) -> None:
     if root and st.session_state.get("root_open") != (job_id, root):
         _open_set().add(root)  # the title root starts expanded, once per job
         st.session_state["root_open"] = (job_id, root)
-    filtered = filter_outline(shown, kind, ctype, query)
+    filtered = filter_outline(shown, kind, ctype, query, flagged)
     filtered["sections"] = order_sections(filtered["sections"], mode)
     flat = flatten(filtered)
 
