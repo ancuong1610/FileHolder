@@ -31,6 +31,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +45,7 @@ from document_compare.phase2.reader import result_reader as reader
 from document_compare.shared.paths import REPO_ROOT
 from document_compare.phase2.api.summary import build_summary
 from document_compare.phase2.viewer.locations import resolve_locations
+from document_compare.phase2.viewer.outline import build_outline
 from document_compare.phase2.viewer.page_render import render_page, style_for
 
 app = FastAPI(title="Document Comparison API", version="0.1.0")
@@ -162,6 +164,12 @@ def _run_pipeline(job_id: str) -> None:
     _persist(job_id, status)
 
 
+def _display_name(filename: str) -> str:
+    """Upload file name for display: base name only, control characters removed, 120 chars at most."""
+    name = Path(filename.replace("\\", "/")).name
+    return "".join(ch for ch in name if unicodedata.category(ch) != "Cc")[:120]
+
+
 def _store_pdf(target: Path, upload: UploadFile) -> None:
     size = 0
     first_bytes = b""
@@ -231,6 +239,8 @@ async def create_job(
         "state": "queued",
         "stages_completed": [],
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "old_name": _display_name(old_pdf.filename),
+        "new_name": _display_name(new_pdf.filename),
     }
     _persist(job_id, status)
     threading.Thread(target=_run_pipeline, args=(job_id,), daemon=True).start()
@@ -510,6 +520,17 @@ def view_locations(job_id: str, kind: str, record_id: str) -> dict:
     canonical = _reader_canonical(job_id, job_status)
     try:
         return resolve_locations(_job_dir(job_id) / "output", canonical, kind, record_id)
+    except reader.ReaderError as exc:
+        raise _reader_http(exc) from exc
+
+
+@app.get("/jobs/{job_id}/view/outline")
+def view_outline(job_id: str) -> dict:
+    _validate_read_job_id(job_id)
+    job_status = _read_status(job_id)
+    canonical = _reader_canonical(job_id, job_status)
+    try:
+        return build_outline(_job_dir(job_id) / "output", canonical)
     except reader.ReaderError as exc:
         raise _reader_http(exc) from exc
 

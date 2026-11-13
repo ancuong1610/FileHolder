@@ -10,6 +10,26 @@ import base64
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC")
 
 
+def item(kind, record_id, change_type, label, path, page_old=1, page_new=2, context_old=False, context_new=False):
+    return {"kind": kind, "record_id": record_id, "change_type": change_type, "label": label,
+            "page_old": page_old, "page_new": page_new, "context_old": context_old, "context_new": context_new,
+            "section_path": path}
+
+
+def default_outline() -> dict:
+    """Section A (1 change, child B with 1 change), empty section C, one flagged item."""
+    child = {"section_id": "S2", "title": "Section B", "side": "new", "level": 2, "change_count": 1,
+             "children": [], "items": [item("change", "CHANGE-000002", "ADDED", "added text", ["Section A", "Section B"], 1, 2, True, False)]}
+    top = {"section_id": "S1", "title": "Section A", "side": "new", "level": 1, "change_count": 2,
+           "children": [child], "items": [item("change", "CHANGE-000001", "MODIFIED", "supported snippet", ["Section A"])]}
+    empty = {"section_id": "S3", "title": "Section C", "side": "new", "level": 1, "change_count": 0,
+             "children": [], "items": []}
+    return {"documents": {"old": {"page_count": 3}, "new": {"page_count": 4}},
+            "sections": [top, empty], "unplaced": [],
+            "review": [item("review", "REVIEW-000001", None, "plausible unresolved counterpart", [], None, None)],
+            "total": 3}
+
+
 class StubClient:
     """Records calls; every response can be overridden through attributes."""
 
@@ -19,7 +39,8 @@ class StubClient:
         self._err = RealApiError
         self.calls: list[tuple] = []
         self.cache_key = uuid.uuid4().hex  # keeps st.cache_data entries apart between tests
-        self.status_value: Any = {"job_id": "job1", "state": "done", "stages_completed": [f"{i:02d}" for i in range(1, 16)]}
+        self.status_value: Any = {"job_id": "job1", "state": "done", "stages_completed": [f"{i:02d}" for i in range(1, 16)],
+                             "old_name": "old_policy.pdf", "new_name": "new_policy.pdf"}
         self.summary_value: Any = {
             "job_id": "job1", "state": "done", "complete": True,
             "counts": {"changes": 2, "table_changes": 0, "review_open": 1,
@@ -30,15 +51,7 @@ class StubClient:
             "limitations": ["review_open"],
             "ground_truth_notice": "Engine acceptance is not legal or semantic ground truth.",
         }
-        self.rows: list[dict] = [
-            {"kind": "change", "record_id": "CHANGE-000001", "change_type": "MODIFIED", "status": "accepted",
-             "result_state": "supported", "needs_review": False, "confirmed": True, "pages": [1],
-             "snippet": "supported snippet", "snippet_source": "new_text"},
-            {"kind": "change", "record_id": "CHANGE-000002", "change_type": "ADDED", "status": "review",
-             "result_state": "uncertain", "needs_review": True, "confirmed": False, "pages": [2],
-             "snippet": "uncertain snippet", "snippet_source": "new_text"},
-        ]
-        self.next_cursors: list[str | None] = []
+        self.outline_value: Any = default_outline()
         self.locations_value: Any = None
         self.png: Any = PNG
         self.chat_value: Any = {"job_id": "job1", "answer": "stub answer", "limitations": []}
@@ -65,16 +78,10 @@ class StubClient:
         self._maybe_raise("summary")
         return self.summary_value
 
-    def search(self, job_id, **filters):
-        self.calls.append(("search", job_id, dict(filters)))
-        self._maybe_raise("search")
-        cursor = filters.get("cursor")
-        if cursor:
-            rows = [dict(self.rows[-1], record_id=f"MORE-{cursor}")]
-            return {"returned": rows, "total_matches": len(self.rows) + 1, "next_cursor": None}
-        nxt = self.next_cursors[0] if self.next_cursors else None
-        return {"returned": list(self.rows), "total_matches": len(self.rows) + (1 if nxt else 0),
-                "next_cursor": nxt}
+    def outline(self, job_id):
+        self.calls.append(("outline", job_id))
+        self._maybe_raise("outline")
+        return self.outline_value
 
     def details(self, job_id, kind, record_id):
         self.calls.append(("details", job_id, kind, record_id))

@@ -87,6 +87,8 @@ def seed_demo_job(jobs_root: Path, fixture: str = "internal_policy_report") -> s
         "state": "done",
         "stages_completed": list(STAGES),
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "old_name": f"{fixture}_old.pdf",
+        "new_name": f"{fixture}_new.pdf",
     }
     (job_dir / "job_status.json").write_text(json.dumps(status, indent=2), encoding="utf-8")
     return job_id

@@ -1,11 +1,11 @@
 # View and chat endpoints
 
-Three routes added to the loopback API (`phase2/api/service.py`) for the
+Four routes added to the loopback API (`phase2/api/service.py`) for the
 Streamlit reviewer. Existing routes, artifact names and `CRR_` keys are
 unchanged. The routes only read saved results; the one outbound call is chat's
 model request.
 
-Owners: `phase2/viewer/locations.py` (locations), `phase2/viewer/page_render.py`
+Owners: `phase2/viewer/locations.py` (locations), `phase2/viewer/outline.py` (outline), `phase2/viewer/page_render.py`
 (page image), the route functions at the end of `phase2/api/service.py`.
 Check: `python -m unittest tests.phase2.test_view_api tests.phase2.test_viewer_locations tests.phase2.test_page_render`.
 
@@ -54,6 +54,59 @@ Returns where one finding sits on each side.
 - `review` records carry no element reference, so both sides are `unavailable`
   (text only) and `change_type` is `null`.
 
+## `GET /jobs/{job_id}/view/outline`
+
+Returns the section structure of the saved comparison with every finding placed
+in it. Same job rules as above (404 unknown job, 409 `not_ready`).
+
+```json
+{
+  "documents": {"old": {"page_count": 12}, "new": {"page_count": 13}},
+  "sections": [
+    {"section_id": "DOC-NEW-S0002", "title": "Section 4", "side": "new", "level": null,
+     "change_count": 2,
+     "children": [],
+     "items": [{"kind": "change", "record_id": "CHANGE-000001", "change_type": "MODIFIED",
+                "label": "first 90 characters of the change text...",
+                "page_old": 3, "page_new": 3, "context_old": false, "context_new": false,
+                "section_path": ["Section 4"]}]}
+  ],
+  "unplaced": [],
+  "review": [{"kind": "review", "record_id": "REVIEW-000001", "change_type": null,
+              "label": "unresolved residual counterpart", "page_old": null, "page_new": null,
+              "context_old": false, "context_new": false, "section_path": []}],
+  "total": 4
+}
+```
+
+- Sections come from `{old,new}_document_structured.json`
+  (`document.structure_evidence.sections` and `membership.by_element`). The tree
+  is the NEW document's sections; an OLD section whose casefolded,
+  whitespace-collapsed title equals a new one is merged into it, any other OLD
+  section becomes a node with `side: "old"` after the new ones. Nesting follows
+  `parent_section_id` only when `parent_known` is true, otherwise sections are
+  top-level. All sections are listed, including those with no findings.
+- `change_count` is the node's own items plus all descendants.
+- A change or table is placed by its NEW element's section (ADDED, MODIFIED and
+  other types) or its OLD element's section (DELETED), falling back to the other
+  side. A table is located through the element whose `represented_by_table_id`
+  equals its `logical_table_id`. Anything without a section (preamble, unknown
+  element, missing structured artifact) is in `unplaced`. Each change/table
+  appears exactly once in `sections` or `unplaced`.
+- `context_old` / `context_new` (boolean on every item): `true` when that side's
+  page is a context page, i.e. the finding has no element on that side (ADDED has
+  no old element, DELETED no new one) and `page_old` / `page_new` was filled in
+  instead of left `null`. The page is the heading page of the same section on
+  that side (sections matched by normalized title); if the section exists only on
+  the other side, the heading page of the nearest previous section (tree order)
+  that exists on the missing side; if there is none (or no sections at all), the
+  other side's page clamped to the missing document's page count. It stays `null`
+  when no page can be derived. Context pages carry no highlight.
+- `review` lists `review_queue` records (no geometry, no pages); `total` is the
+  count of all items including review.
+- A missing structured artifact is not an error (`409 invalid_artifact` only for
+  unparsable JSON). Sections are an evidence-based hypothesis, not legal structure.
+
 ## `GET /jobs/{job_id}/view/pages/{side}/{page}.png`
 
 Returns a PNG (`Cache-Control: no-store`) of one source-PDF page.
@@ -83,6 +136,12 @@ Body `{"question": "..."}`, 1-2000 characters after trimming. Returns
   chat. No new environment key exists.
 - A question sends bounded reader output to the configured model. Provider and
   model text is never echoed in errors.
+
+## Job status file names
+
+`POST /jobs` and the seeded demo job also store `old_name` and `new_name` in the
+job status (returned by `/jobs/{id}/status`): the upload's base name, control
+characters removed, at most 120 characters. Jobs created earlier lack the keys.
 
 ## Error codes
 

@@ -1,12 +1,13 @@
-"""Sidebar chat bound to the open job. History lives in session state only."""
+"""Comparison-agent chat bound to the open job. History lives in session state only."""
 from __future__ import annotations
 
 import streamlit as st
 
 from document_compare.phase2.ui.api_client import ApiError
 
-CHAT_NOTICE = "Questions send bounded result excerpts to the configured model."
-GROUND_TRUTH = "Answers are not legal or semantic ground truth; uncertain items are unresolved."
+HISTORY_HEIGHT = 420
+NOT_CONFIGURED = "Agent not configured on this machine."
+PLACEHOLDER = "Ask about this comparison (sends excerpts to the model)"
 
 
 def _ask(client, job_id: str, question: str, history: list) -> None:
@@ -23,21 +24,20 @@ def _ask(client, job_id: str, question: str, history: list) -> None:
 
 
 def render(client, job_id: str) -> None:
-    with st.sidebar:
-        st.subheader("Ask about this result")
-        st.caption(CHAT_NOTICE)
-        st.caption(GROUND_TRUTH)
-        history = st.session_state.setdefault("chat_history", [])
-        question = st.chat_input("Ask a question", key="chat_question")
-        if question and question.strip():
-            _ask(client, job_id, question.strip(), history)
+    """Call inside the sidebar's agent tab."""
+    history = st.session_state.setdefault("chat_history", [])
+    box = st.container(height=HISTORY_HEIGHT)  # scrolls internally; the input stays below it
+    question = st.chat_input(PLACEHOLDER, key="chat_question")
+    if question and question.strip():
+        _ask(client, job_id, question.strip(), history)
+    with box:
         for message in history:
             with st.chat_message(message["role"]):
                 st.text(message["content"])
                 if message.get("limitations"):
                     st.caption("Limitations: " + ", ".join(message["limitations"]))
-        error = st.session_state.get("chat_error")
-        if error and error["code"] == "chat_not_configured":
-            st.info("Chat is not configured on this server. The rest of the reviewer still works.")
-        elif error:
-            st.error(error["message"])
+    error = st.session_state.get("chat_error")
+    if error and error["code"] == "chat_not_configured":
+        st.caption(NOT_CONFIGURED)
+    elif error:
+        st.error(error["message"])

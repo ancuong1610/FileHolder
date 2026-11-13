@@ -144,9 +144,10 @@ python -m document_compare.phase2.workflow.local_reviewer --phase both --workspa
 ### Review in the browser (Phase 2 UI)
 
 A Streamlit page that is a client of the loopback HTTP API: upload an old and a
-new PDF, follow progress, open a finished job by ID, step through findings with
-the old and new pages side by side and the changed region outlined, and ask
-chat questions about the saved result. It only reads saved results.
+new PDF, follow progress, open a finished job by ID, browse the findings as a
+section tree (filter by type and kind), step through them with the old and new
+pages side by side and the changed region outlined, and ask the comparison agent
+about the saved result from a sidebar tab. It only reads saved results.
 
 ```bash
 python -m pip install -e ".[ui]"

@@ -55,6 +55,29 @@ class ViewApiTest(_Base):
         self.assertEqual(body["record_id"], "CHANGE-000001")
         self.assertEqual(set(body["sides"]), {"old", "new"})
 
+    def test_outline_ok(self):
+        r = self.client.get(f"/jobs/{self.job_id}/view/outline")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(set(body), {"documents", "sections", "unplaced", "review", "total"})
+        self.assertEqual(set(body["documents"]), {"old", "new"})
+        self.assertGreater(body["total"], 0)
+        self.assertTrue(body["sections"])
+        self.assertEqual(set(body["sections"][0]),
+                         {"section_id", "title", "side", "level", "change_count", "children", "items"})
+
+    def test_outline_unknown_job_404_and_running_409(self):
+        self.assertEqual(self.client.get("/jobs/000000000000/view/outline").status_code, 404)
+        self._set_state("running")
+        r = self.client.get(f"/jobs/{self.job_id}/view/outline")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["detail"]["error"], "not_ready")
+
+    def test_seeded_job_status_carries_file_names(self):
+        status = self.client.get(f"/jobs/{self.job_id}/status").json()
+        self.assertEqual(status["old_name"], "internal_policy_report_old.pdf")
+        self.assertEqual(status["new_name"], "internal_policy_report_new.pdf")
+
     def test_page_png_ok(self):
         r = self._page()
         self.assertEqual(r.status_code, 200, r.text)
@@ -156,6 +179,30 @@ class ViewApiTest(_Base):
         }
         after = set(service.app.openapi()["paths"])
         self.assertTrue(before <= after, before - after)
+
+
+class CreateJobNamesTest(unittest.TestCase):
+    def test_display_name_strips_paths_and_control_characters(self):
+        self.assertEqual(service._display_name("../x/Old\x07 \x1bpolicy\x7f.pdf"), "Old policy.pdf")
+        self.assertEqual(service._display_name("a\\b\\c.pdf"), "c.pdf")
+        self.assertEqual(len(service._display_name("n" * 300)), 120)
+
+    def test_create_job_stores_cleaned_upload_names(self):
+        with TemporaryDirectory() as tmp, patch.object(service, "JOBS_ROOT", Path(tmp)), \
+                patch.object(service, "_run_pipeline"):
+            client = TestClient(service.app)
+            long_name = "n" * 200 + ".pdf"
+            r = client.post("/jobs", files={
+                "old_pdf": ("C:\\docs\\Old policy.pdf", b"%PDF-1.4 old", "application/pdf"),
+                "new_pdf": (long_name, b"%PDF-1.4 new", "application/pdf"),
+            }, data={"session_id": "sess_1"})
+            self.assertIn(r.status_code, (200, 201, 202), r.text)
+            body = r.json()
+            self.assertEqual(body["old_name"], "Old policy.pdf")
+            self.assertEqual(body["new_name"], long_name[:120])
+            self.assertEqual(len(body["new_name"]), 120)
+            stored = client.get(f"/jobs/{body['job_id']}/status").json()
+            self.assertEqual((stored["old_name"], stored["new_name"]), (body["old_name"], body["new_name"]))
 
 
 class ChatApiTest(_Base):

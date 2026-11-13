@@ -125,6 +125,15 @@ def _page_of(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def record_side_ref(kind: str, record: dict[str, Any], side: str) -> str | None:
+    """The per-side reference of a record: its element ID (change) or logical table ID (table)."""
+    part = record.get(side) if isinstance(record, dict) else None
+    key = "logical_table_id" if kind == "table" else "element_id"
+    if kind == "review" or not _present(part, key):
+        return None
+    return part[key]
+
+
 def _present(side: Any, id_key: str) -> bool:
     return isinstance(side, dict) and isinstance(side.get(id_key), str) and bool(side[id_key])
 

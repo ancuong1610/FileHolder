@@ -1,27 +1,65 @@
-"""Findings list and old/new page viewer. Plain Streamlit widgets, API client only.
+"""Section tree and old/new page viewer. Plain Streamlit widgets, API client only.
 
-Result text is only ever shown through ``st.text`` or escaped plain markdown;
-nothing here uses ``unsafe_allow_html`` and nothing is logged.
+Result text is only ever shown through escaped plain markdown (``_plain``). The only
+``unsafe_allow_html`` use is one fixed, static style block for the tree buttons;
+no result text ever reaches it. Nothing here is logged.
 """
 from __future__ import annotations
 
 import inspect
 import re
+import struct
+import zlib
 from typing import Any
 
 import streamlit as st
 
 from document_compare.phase2.ui.api_client import ApiError
 
-PAGE_SIZE = 20
-KINDS = ["all", "change", "table", "review"]
-STATES = {"All": "all", "Accepted": "accepted", "Needs review": "review"}
-STATE_LABELS = {"supported": "Supported", "uncertain": "Uncertain", "non_semantic": "Non-semantic"}
-LEGEND = (
-    "Highlights: red = deleted (old), green = added (new), amber = modified or table cell. "
-    "Dashed outline = uncertain. Colour is never the only signal: type and state are shown above."
+TYPE_OPTIONS = {"All": "all", "Added": "ADDED", "Deleted": "DELETED", "Modified": "MODIFIED"}
+KIND_OPTIONS = {"All": "all", "Change": "change", "Table": "table"}
+TAGS = {"ADDED": ":green[ADDED]", "DELETED": ":red[DELETED]", "MODIFIED": ":orange[MODIFIED]"}
+LEGEND = "Red = deleted, green = added, amber = modified (dashed outline = uncertain match)."
+TREE_CSS = (
+    "<style>"
+    # one-line rows: the row is a keyed container holding [button | right-aligned pill]
+    "[class*='st-key-row'] [data-testid='stHorizontalBlock']"
+    "{flex-wrap:nowrap !important;gap:0.25rem !important;align-items:center !important;}"
+    "[class*='st-key-row'] [data-testid='stColumn']{min-width:0 !important;}"
+    "[class*='st-key-row'] [data-testid='stColumn']:first-child{flex:1 1 0 !important;width:auto !important;}"
+    "[class*='st-key-row'] [data-testid='stColumn']:last-child{flex:0 0 auto !important;width:auto !important;"
+    "text-align:right;}"
+    "[class*='st-key-row'] [data-testid='stMarkdownContainer']{margin:0 !important;}"
+    "[class*='st-key-row'] [data-testid='stMarkdownContainer'] p{margin:0 !important;font-size:0.8rem;"
+    "line-height:1.2;white-space:nowrap;}"
+    "[class*='st-key-pick'] button,[class*='st-key-tog'] button"
+    "{justify-content:flex-start !important;text-align:left !important;width:100%;min-height:1.6rem;"
+    "padding:2px 6px !important;overflow:hidden;border:none;background:transparent;font-size:0.9rem;}"
+    "[class*='st-key-pick'] button > div,[class*='st-key-tog'] button > div"
+    "{justify-content:flex-start !important;text-align:left !important;min-width:0;max-width:100%;}"
+    "[class*='st-key-pick'] button p,[class*='st-key-tog'] button p"
+    "{text-align:left !important;white-space:nowrap !important;overflow:hidden !important;"
+    "text-overflow:ellipsis !important;display:block;margin:0;font-size:0.9rem;}"
+    "[class*='st-key-pick'] button:hover,[class*='st-key-tog'] button:hover"
+    "{background:rgba(128,128,128,0.12) !important;}"
+    "[class*='st-key-ind']{margin-left:16px;padding-left:0;width:calc(100% - 16px) !important;"
+    "border-left:1px solid rgba(128,128,128,0.45);}"
+    "[class*='st-key-ind'],[class*='st-key-treebox']{gap:0.1rem !important;}"
+    "[class*='st-key-pick'] button[kind='primary']{background:rgba(59,130,246,0.18) !important;"
+    "border:1px solid rgb(59,130,246) !important;color:inherit !important;}"
+    "[class*='st-key-hdrline'] p{font-size:1.1rem;margin-bottom:0.1rem;}"
+    "</style>"
 )
+TREE_HEIGHT = 700
+UNPLACED_ID = "__unplaced__"
 _MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~$&:])")
+_DEFAULT_PAGE = (612, 792)
+ORDER_OPTIONS = ["Document order", "Section number"]
+ORDER_NOTE = "Sections appear in the order they occur in the new document."
+_NUMBERED = re.compile(r"^\s*(section|article|chapter|part|\u00a7)?\s*\d", re.IGNORECASE)
+_FIRST_INT = re.compile(r"\d+")
+TAG_DOTS = {"ADDED": ":green[\u25cf]", "DELETED": ":red[\u25cf]", "MODIFIED": ":orange[\u25cf]"}
+CHEVRON_CLOSED, CHEVRON_OPEN, NO_CHEVRON = "\u203a\u2002", "\u2304\u2002", "\u2003"
 
 
 def _plain(value: Any) -> str:
@@ -31,6 +69,11 @@ def _plain(value: Any) -> str:
 
 def _key(client) -> str:
     return str(getattr(client, "cache_key", "default"))
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def _outline(_client, cache_key: str, job_id: str) -> dict:
+    return _client.outline(job_id)
 
 
 @st.cache_data(show_spinner=False, max_entries=256)
@@ -44,8 +87,8 @@ def _locations(_client, cache_key: str, job_id: str, kind: str, record_id: str) 
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def _page_png(_client, cache_key: str, job_id: str, side: str, page: int, kind: str,
-              record_id: str, uncertain: bool) -> bytes | None:
+def _page_png(_client, cache_key: str, job_id: str, side: str, page: int, kind: str | None,
+              record_id: str | None, uncertain: bool) -> bytes | None:
     return _client.page_png(job_id, side, page, kind=kind, record_id=record_id, uncertain=uncertain)
 
 
@@ -78,175 +121,302 @@ def target_page(side_info: dict, other_side: dict) -> int | None:
     return None
 
 
-# --------------------------------------------------------------------------- header
+# --------------------------------------------------------------------------- outline helpers (pure)
 
-def _header(client, job_id: str) -> dict | None:
-    try:
-        summary = client.summary(job_id)
-    except ApiError as exc:
-        st.error(f"Could not load the result for job {job_id}: {exc.message}")
-        return None
-    counts = summary.get("counts") or {}
-    states = counts.get("result_state_counts") or {}
-    docs = summary.get("documents") or {}
-
-    def doc_line(name: str, doc: dict) -> str:
-        pages = doc.get("page_count")
-        return f"{name}: {doc.get('document_id') or 'unknown'}" + (f" ({pages} pages)" if pages else "")
-
-    st.caption(f"{doc_line('Old', docs.get('old') or {})}  |  {doc_line('New', docs.get('new') or {})}")
-    cols = st.columns(4)
-    cols[0].metric("Changes", counts.get("changes", 0))
-    cols[1].metric("Table changes", counts.get("table_changes", 0))
-    cols[2].metric("Uncertain", states.get("uncertain", counts.get("review_open", 0)))
-    cols[3].metric("Supported", states.get("supported", 0))
-    by_type = counts.get("change_type_counts") or {}
-    if by_type:
-        st.caption("By type: " + ", ".join(f"{k} {v}" for k, v in sorted(by_type.items()))
-                   + f"  |  Non-semantic: {states.get('non_semantic', 0)}")
-    limits = summary.get("limitations") or []
-    if limits:
-        st.caption("Limitations: " + ", ".join(str(x) for x in limits))
-    if summary.get("ground_truth_notice"):
-        st.caption(str(summary["ground_truth_notice"]))
-    return summary
+def bucket(item: dict) -> str:
+    """ADDED / DELETED / MODIFIED for change and table items."""
+    ctype = str(item.get("change_type") or "").upper()
+    if "ADDED" in ctype:
+        return "ADDED"
+    if "DELETED" in ctype or "REMOVED" in ctype:
+        return "DELETED"
+    return "MODIFIED"
 
 
-# --------------------------------------------------------------------------- findings list
-
-def _filters(summary: dict) -> dict:
-    types = sorted(((summary.get("counts") or {}).get("change_type_counts") or {}).keys())
-    c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
-    kind = c1.selectbox("Kind", KINDS, key="f_kind")
-    change_type = c2.selectbox("Change type", ["All", *types], key="f_change_type")
-    state = c3.selectbox("State", list(STATES), key="f_state")
-    query = c4.text_input("Search text", key="f_query")
-    return {"kind": kind, "change_type": "" if change_type == "All" else change_type,
-            "status": STATES[state], "query": query.strip()}
+def _fold(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
 
 
-def _fetch(client, job_id: str, filters: dict, cursor: str | None = None) -> dict:
-    return client.search(job_id, limit=PAGE_SIZE, cursor=cursor, **filters)
+def _matches(item: dict, query: str) -> bool:
+    """Query hits the item's label or any title on its section path."""
+    return query in _fold(item.get("label")) or any(query in _fold(t) for t in item.get("section_path") or [])
 
 
-def _load(client, job_id: str, filters: dict, more: bool = False) -> bool:
-    store = st.session_state.get("findings")
-    try:
-        data = _fetch(client, job_id, filters, store["next_cursor"] if more and store else None)
-    except ApiError as exc:
-        st.error(f"Could not load findings: {exc.message}")
+def _passes(item: dict, kind: str, ctype: str) -> bool:
+    if item.get("kind") not in ("change", "table"):  # review items are not shown in the UI
         return False
-    rows = list(data.get("returned") or [])
-    if more and store:
-        rows = store["rows"] + rows
-    st.session_state["findings"] = {
-        "key": (job_id, tuple(sorted(filters.items()))), "rows": rows,
-        "next_cursor": data.get("next_cursor"), "total": data.get("total_matches", len(rows)),
+    if kind != "all" and item.get("kind") != kind:
+        return False
+    return ctype == "all" or bucket(item) == ctype
+
+
+def _filter_node(node: dict, kind: str, ctype: str, query: str, inherited: bool = False) -> dict | None:
+    """Filtered copy of a section; None when a search leaves nothing of it. A section whose own
+    title matches the query stays with all its Type/Kind-matching items and descendants."""
+    hit = inherited or (bool(query) and query in _fold(node.get("title")))
+    items = [i for i in node.get("items") or [] if _passes(i, kind, ctype) and (not query or hit or _matches(i, query))]
+    kids = (_filter_node(c, kind, ctype, query, hit) for c in node.get("children") or [])
+    children = [c for c in kids if c]
+    if query and not hit and not items and not children:
+        return None
+    return dict(node, items=items, children=children,
+                change_count=len(items) + sum(c["change_count"] for c in children))
+
+
+def filter_outline(outline: dict, kind: str = "all", ctype: str = "all", query: str = "") -> dict:
+    """Client-side Type/Kind/Search filter; counts are recomputed so they match what is shown.
+
+    An item matches a query through its label or any title on its section path. Review items
+    are never part of the filtered tree (the API still returns them)."""
+    query = _fold(query)
+    sections = [n for n in (_filter_node(n, kind, ctype, query) for n in outline.get("sections") or []) if n]
+    unplaced = [i for i in outline.get("unplaced") or []
+                if _passes(i, kind, ctype) and (not query or _matches(i, query))]
+    return {"sections": sections, "unplaced": unplaced}
+
+
+def _section_number(node: dict) -> int | None:
+    found = _FIRST_INT.search(str(node.get("title") or ""))
+    return int(found.group()) if found else None
+
+
+def with_title_root(outline: dict) -> dict:
+    """Display inference for a flat outline: an unnumbered first section is the document title,
+    so it becomes the root and every other top-level section moves under it. Real hierarchy
+    (any node with children) is left alone. The API payload itself is never changed."""
+    sections = outline.get("sections") or []
+    if len(sections) < 2 or any(n.get("children") for n in sections):
+        return outline
+    first = sections[0]
+    if _NUMBERED.match(str(first.get("title") or "")):
+        return outline
+    rest = sections[1:]
+    root = dict(first, children=list(rest),
+                change_count=first.get("change_count", 0) + sum(n.get("change_count", 0) for n in rest))
+    return dict(outline, sections=[root])
+
+
+def order_sections(sections: list[dict], mode: str) -> list[dict]:
+    """Sibling order at every level. 'Section number' sorts by the first integer in the title
+    (natural: 2 < 10); siblings without a number keep their relative order, after numbered ones."""
+    out = [dict(n, children=order_sections(n.get("children") or [], mode)) for n in sections]
+    if mode == "Section number":
+        out.sort(key=lambda n: (_section_number(n) is None, _section_number(n) or 0))
+    return out
+
+
+def numbers_ascending(sections: list[dict]) -> bool:
+    """True when, among every group of siblings, the section numbers never go down."""
+    nums = [n for n in map(_section_number, sections) if n is not None]
+    return nums == sorted(nums) and all(numbers_ascending(n.get("children") or []) for n in sections)
+
+
+def _flatten_node(node: dict) -> list[dict]:
+    out = list(node.get("items") or [])
+    for child in node.get("children") or []:
+        out.extend(_flatten_node(child))
+    return out
+
+
+def flatten(outline: dict) -> list[dict]:
+    """Every shown item in tree order: sections (own items before children), then unplaced."""
+    out: list[dict] = []
+    for node in outline.get("sections") or []:
+        out.extend(_flatten_node(node))
+    out.extend(outline.get("unplaced") or [])
+    return out
+
+
+def chip_counts(outline: dict) -> dict[str, int]:
+    items = [i for i in flatten(outline) if i.get("kind") in ("change", "table")]
+    return {
+        "Changes": sum(1 for i in items if i["kind"] == "change"),
+        "Tables": sum(1 for i in items if i["kind"] == "table"),
+        "Added": sum(1 for i in items if bucket(i) == "ADDED"),
+        "Deleted": sum(1 for i in items if bucket(i) == "DELETED"),
+        "Modified": sum(1 for i in items if bucket(i) == "MODIFIED"),
     }
-    return True
 
 
-def _select(row: dict) -> None:
-    st.session_state["selected"] = {"kind": row["kind"], "record_id": row["record_id"]}
-    st.session_state["old_page"] = None
-    st.session_state["new_page"] = None
+def _item_page(item: dict) -> int | None:
+    order = ("page_old", "page_new") if bucket(item) == "DELETED" else ("page_new", "page_old")
+    for name in order:
+        page = item.get(name)
+        if isinstance(page, int) and not isinstance(page, bool):
+            return page
+    return None
 
 
-def _row_label(row: dict) -> str:
-    pages = row.get("pages") or []
-    where = "p." + ",".join(str(p) for p in pages) if pages else "no page"
-    state = STATE_LABELS.get(row.get("result_state"), str(row.get("result_state") or "unknown"))
-    kind_type = row.get("change_type") or row.get("kind")
-    snippet = str(row.get("snippet") or "")[:90]
-    return _plain(f"{kind_type} | {state} | {where} | {snippet}")
+def _png_size(data: bytes | None) -> tuple[int, int]:
+    if data and data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) >= 24:
+        width, height = struct.unpack(">II", data[16:24])
+        if 0 < width <= 8192 and 0 < height <= 8192:
+            return width, height
+    return _DEFAULT_PAGE
 
 
-def _findings(client, job_id: str, filters: dict) -> None:
-    key = (job_id, tuple(sorted(filters.items())))
-    store = st.session_state.get("findings")
-    if not store or store.get("key") != key:
-        if store:  # filters or job changed: a selection outside the new list must not linger
-            st.session_state.pop("selected", None)
-            st.session_state["old_page"] = None
-            st.session_state["new_page"] = None
-        if not _load(client, job_id, filters):
-            return
-        store = st.session_state["findings"]
-    rows = store["rows"]
-    st.caption(f"{len(rows)} of {store['total']} findings loaded")
-    selected = st.session_state.get("selected") or {}
-    ids = [(r["kind"], r["record_id"]) for r in rows]
-    index = ids.index((selected.get("kind"), selected.get("record_id"))) if (
-        selected.get("kind"), selected.get("record_id")) in ids else None
+def _placeholder_png(width: int, height: int) -> bytes:
+    """Flat light-grey PNG of the given size (stdlib only), used when a side has no page."""
+    def chunk(tag: bytes, body: bytes) -> bytes:
+        return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF)
 
-    nav1, nav2, _ = st.columns([1, 1, 4])
-    if nav1.button("Previous", key="prev_finding", disabled=not rows):
-        _select(rows[0 if index is None else max(index - 1, 0)])
-    if nav2.button("Next", key="next_finding", disabled=not rows):
-        if index is not None and index == len(rows) - 1 and store["next_cursor"]:
-            if _load(client, job_id, filters, more=True):
-                store = st.session_state["findings"]
-                rows = store["rows"]
-        _select(rows[0 if index is None else min(index + 1, len(rows) - 1)])
-        selected = st.session_state.get("selected") or {}
+    row = b"\x00" + b"\xf2" * width
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(row * height, 1)) + chunk(b"IEND", b""))
 
-    with st.container(height=280):
-        for row in rows:
-            is_sel = (row["kind"], row["record_id"]) == (
-                (st.session_state.get("selected") or {}).get("kind"),
-                (st.session_state.get("selected") or {}).get("record_id"))
-            label = ("Selected: " if is_sel else "") + _row_label(row)
-            st.button(label, key=f"pick::{row['kind']}::{row['record_id']}", on_click=_select,
-                      args=(row,), **_BUTTON_FILL)
-    if store["next_cursor"] and st.button("Load more", key="load_more"):
-        _load(client, job_id, filters, more=True)
-        st.rerun()
-    if not rows:
-        st.info("No findings match these filters.")
+
+# --------------------------------------------------------------------------- selection
+
+def _select(item: dict) -> None:
+    st.session_state["selected"] = {"kind": item["kind"], "record_id": item["record_id"]}
+
+
+def _same(item: dict, selected: dict | None) -> bool:
+    return bool(selected) and (item["kind"], item["record_id"]) == (selected.get("kind"), selected.get("record_id"))
+
+
+# --------------------------------------------------------------------------- header and filters
+
+def _header(status: dict, job_id: str, outline: dict) -> None:
+    docs = outline.get("documents") or {}
+
+    def line(label: str, name: str, side: str) -> str:
+        count = (docs.get(side) or {}).get("page_count")
+        pages = f" · {count} page{'s' if count != 1 else ''}" if isinstance(count, int) else ""
+        return f"{label}: **{_plain(name)}**{pages}"
+
+    old = str(status.get("old_name") or "old.pdf")
+    new = str(status.get("new_name") or "new.pdf")
+    with st.container(key="hdrline"):
+        st.markdown(f"{line('Old', old, 'old')}   |   {line('New', new, 'new')}")
+    st.caption(f"Job ID: {job_id}")
+
+
+def _chips(counts: dict[str, int]) -> None:
+    colors = {"Changes": "blue", "Tables": "violet", "Added": "green", "Deleted": "red", "Modified": "orange"}
+    st.markdown(" ".join(f":{colors[k]}-badge[{k} {v}]" for k, v in counts.items()))
+
+
+def _filters() -> tuple[str, str, str]:
+    c1, c2, c3, _ = st.columns([1, 1, 2, 1])
+    ctype = c1.selectbox("Type", list(TYPE_OPTIONS), key="f_type")
+    kind = c2.selectbox("Kind", list(KIND_OPTIONS), key="f_kind")
+    query = c3.text_input("Search", key="f_search", placeholder="Search changes or sections")
+    return KIND_OPTIONS[kind], TYPE_OPTIONS[ctype], query
+
+
+# --------------------------------------------------------------------------- tree
+
+def _line(row_key: str):
+    """One tree row: a keyed container holding [button | right-aligned pill]."""
+    box = st.container(key=f"row::{row_key}")
+    with box:
+        return st.columns([1, 0.001], gap="small", vertical_alignment="center")
+
+
+def _row(item: dict, selected: dict | None) -> None:
+    page = _item_page(item)
+    text = _plain(item.get("label") or item.get("record_id"))
+    left, right = _line(f"{item['kind']}::{item['record_id']}")
+    left.button(f"{TAG_DOTS[bucket(item)]} {text}", key=f"pick::{item['kind']}::{item['record_id']}",
+                on_click=_select, args=(item,), help=str(item.get("label") or item.get("record_id")),
+                type="primary" if _same(item, selected) else "secondary", **_BUTTON_FILL)
+    if page is not None:
+        right.markdown(f":gray[p.{page}]")
+
+
+def _open_set() -> set:
+    opened = st.session_state.get("tree_open")
+    if not isinstance(opened, set):
+        opened = st.session_state["tree_open"] = set()
+    return opened
+
+
+def _toggle(node_id: str) -> None:
+    opened = _open_set()
+    opened.symmetric_difference_update({node_id})
+
+
+def path_ids(filtered: dict, selected: dict | None) -> list[str]:
+    """Section ids from a root down to the section holding the selected item ([] when none)."""
+    def walk(node: dict, trail: list[str]) -> list[str] | None:
+        here = trail + [node["section_id"]]
+        if any(_same(i, selected) for i in node.get("items") or []):
+            return here
+        for child in node.get("children") or []:
+            found = walk(child, here)
+            if found:
+                return found
+        return None
+
+    for node in filtered.get("sections") or []:
+        found = walk(node, [])
+        if found:
+            return found
+    if any(_same(i, selected) for i in filtered.get("unplaced") or []):
+        return [UNPLACED_ID]
+    return []
+
+
+def _caret_row(node_id: str, title: str, count: int, expandable: bool, opened: bool) -> None:
+    """Confluence-style row: fixed-width chevron slot, one-line title, muted count pill at the right."""
+    caret = (CHEVRON_OPEN if opened else CHEVRON_CLOSED) if expandable else NO_CHEVRON
+    shown = _plain(title)
+    left, right = _line(f"tog::{node_id}")
+    left.button(f"{caret}{shown}" if count else f"{caret}:gray[{shown}]", key=f"tog::{node_id}", on_click=_toggle,
+                args=(node_id,), help=str(title), type="tertiary", disabled=not expandable, **_BUTTON_FILL)
+    right.markdown(f":gray-badge[{count}]" if count else ":gray[0]")
+
+
+def _tree_node(node: dict, selected: dict | None, opened: set) -> None:
+    items, children = node.get("items") or [], node.get("children") or []
+    expandable = bool(items or children)
+    is_open = node["section_id"] in opened
+    _caret_row(node["section_id"], node.get("title") or "(untitled)", node["change_count"], expandable, is_open)
+    if expandable and is_open:
+        with st.container(key=f"ind::{node['section_id']}"):
+            for item in items:
+                _row(item, selected)
+            for child in children:
+                _tree_node(child, selected, opened)
+
+
+def _order_control() -> str:
+    return st.radio("Order", ORDER_OPTIONS, key="tree_order", horizontal=True, label_visibility="collapsed")
+
+
+def _tree(filtered: dict, selected: dict | None, has_sections: bool, mode: str) -> None:
+    st.markdown("**Structure**")
+    if mode == ORDER_OPTIONS[0] and not numbers_ascending(filtered["sections"]):
+        st.caption(ORDER_NOTE)
+    opened = _open_set()
+    with st.container(height=TREE_HEIGHT):
+        with st.container(key="treebox"):
+            if not filtered["sections"] and not filtered["unplaced"]:
+                st.caption("No matching sections or changes." if has_sections
+                           else "No section structure was found for this job.")
+            for node in filtered["sections"]:
+                _tree_node(node, selected, opened)
+            if filtered["unplaced"]:
+                _caret_row(UNPLACED_ID, "Unplaced", len(filtered["unplaced"]), True, UNPLACED_ID in opened)
+                if UNPLACED_ID in opened:
+                    with st.container(key=f"ind::{UNPLACED_ID}"):
+                        for item in filtered["unplaced"]:
+                            _row(item, selected)
 
 
 # --------------------------------------------------------------------------- viewer
 
-def _texts(kind: str, payload: dict) -> tuple[str, str]:
-    if kind == "change":
-        return str((payload.get("old") or {}).get("text") or ""), str((payload.get("new") or {}).get("text") or "")
-    if kind == "table":
-        olds, news = [], []
-        for cell in payload.get("cell_changes") or []:
-            for side, bucket in (("old", olds), ("new", news)):
-                part = cell.get(side) or {}
-                if part.get("text"):
-                    row, col = part.get("row_index"), part.get("column_index")
-                    bucket.append(f"[r{(row or 0) + 1} c{(col or 0) + 1}] {part['text']}")
-        return "\n".join(olds), "\n".join(news)
-    return "", ""
+def _breadcrumb(item: dict) -> str:
+    path = item.get("section_path") or []
+    where = " › ".join(_plain(p) for p in path) if path else "Unplaced"
+    return f"{where}   {TAGS[bucket(item)]}"
 
 
-def _reasons(payload: dict) -> list[str]:
-    reasons = payload.get("review_reasons") or (payload.get("resolution") or {}).get("review_reasons") or []
-    return [str(r) for r in reasons]
-
-
-def _step_page(side: str, delta: int, count: Any) -> None:
-    """Button callback: runs before the rerun, so disabled flags are never stale."""
-    current = st.session_state.get(f"{side}_page") or st.session_state.get(f"{side}_target") or 1
-    page = max(1, current + delta)
-    if isinstance(count, int) and count >= 1:
-        page = min(page, count)
-    st.session_state[f"{side}_page"] = page
-
-
-def _page_controls(side: str, count: Any, current: int) -> None:
-    bounded = isinstance(count, int) and count >= 1
-    c1, c2, c3 = st.columns([1, 2, 1])
-    c1.button("−", key=f"{side}_prev", disabled=current <= 1, on_click=_step_page, args=(side, -1, count))
-    c3.button("+", key=f"{side}_next", disabled=not bounded or current >= count,
-              on_click=_step_page, args=(side, 1, count))
-    c2.caption(f"Page {current}" + (f" of {count}" if bounded else ""))
-
-
-def _viewer(client, job_id: str, sel: dict) -> None:
-    kind, record_id, ck = sel["kind"], sel["record_id"], _key(client)
+def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
+    kind, record_id, ck = item["kind"], item["record_id"], _key(client)
+    st.markdown(_breadcrumb(item))
+    st.caption(LEGEND)
     try:
         details = _details(client, ck, job_id, kind, record_id)
     except ApiError as exc:
@@ -260,73 +430,105 @@ def _viewer(client, job_id: str, sel: dict) -> None:
         located = {}
     sides = (located or {}).get("sides") or {}
     old_side, new_side = sides.get("old") or {}, sides.get("new") or {}
-    state = payload.get("result_state") or (payload.get("resolution") or {}).get("result_state") or "unknown"
+    state = payload.get("result_state") or (payload.get("resolution") or {}).get("result_state")
     uncertain = state == "uncertain"
-    ctype = payload.get("change_type") or (located or {}).get("change_type") or kind
+    infos = {"old": old_side, "new": new_side}
+    other_of = {"old": new_side, "new": old_side}
+    targets: dict[str, int | None] = {}
+    context: dict[str, bool] = {}
+    for name in ("old", "new"):
+        # a side with no element of this finding shows its section's page, never a highlight
+        context[name] = bool(item.get(f"context_{name}")) or infos[name].get("counterpart") == "none"
+        page = item.get(f"page_{name}")
+        if context[name] and isinstance(page, int) and not isinstance(page, bool):
+            targets[name] = page
+        else:
+            targets[name] = target_page(infos[name], other_of[name])
 
-    targets = {"old": target_page(old_side, new_side), "new": target_page(new_side, old_side)}
-    where = ", ".join(f"{s} p.{p}" for s, p in targets.items() if p) or "no page location"
-    st.markdown(f"**Type:** {_plain(ctype)}  |  **State:** {STATE_LABELS.get(state, _plain(state))}  |  "
-                f"**Pages:** {where}  |  **Record:** {_plain(record_id)}")
-    for reason in _reasons(payload):
-        st.markdown("- Reason: " + _plain(reason))
-    st.caption(LEGEND)
+    images: dict[str, bytes | None] = {}
+    source_missing = False
+    for side, page in targets.items():
+        images[side] = None
+        if page is None:
+            continue
+        try:
+            if context[side]:
+                images[side] = _page_png(client, ck, job_id, side, page, None, None, False)
+            else:
+                images[side] = _page_png(client, ck, job_id, side, page, kind, record_id, uncertain)
+        except ApiError as exc:
+            st.warning(f"Could not render the {side} page: {exc.message}")
+            continue
+        source_missing = source_missing or images[side] is None
 
-    if any(targets.values()):
-        images: dict[str, bytes | None] = {}
-        cols = st.columns(2)
-        for col, (side, info) in zip(cols, (("old", old_side), ("new", new_side))):
-            with col:
-                st.subheader("Old" if side == "old" else "New")
-                if info.get("counterpart") == "none":
-                    st.caption("No counterpart on this side")
-                if targets[side] is None:
-                    st.caption("No page to show for this side.")
-                    continue
-                st.session_state[f"{side}_target"] = targets[side]
-                page = st.session_state.get(f"{side}_page") or targets[side]
-                _page_controls(side, info.get("page_count"), page)
-                try:
-                    images[side] = _page_png(client, ck, job_id, side, page, kind, record_id, uncertain)
-                except ApiError as exc:
-                    st.warning(f"Could not render this page: {exc.message}")
-                    continue
-                if images[side] is not None:
-                    _show_image(images[side])
-        if any(v is None for v in images.values()):
-            st.info("The source PDF is not available for this job, so page images are replaced by text.")
-    else:
-        st.info("This finding has no page location, so only its text is shown.")
+    shown = [data for data in images.values() if data]
+    size = _png_size(shown[0]) if shown else _DEFAULT_PAGE
+    cols = st.columns(2)
+    for col, side in zip(cols, ("old", "new")):
+        with col:
+            page, data = targets[side], images[side]
+            name = side.capitalize()
+            if data:
+                _show_image(data)
+                st.caption(f"{name} \u00b7 page {page}" + (" \u00b7 section context" if context[side] else ""))
+            else:
+                _show_image(_placeholder_png(*size))
+                if page is None:
+                    st.caption(f"{name} \u00b7 no page location")
+                else:
+                    st.caption(f"{name} \u00b7 page {page} (image unavailable)")
+    if source_missing:
+        st.info("The source PDF is not available for this job, so page images cannot be shown.")
 
-    st.markdown("#### Text")
-    old_text, new_text = _texts(kind, payload)
-    left, right = st.columns(2)
+    ids = [(i["kind"], i["record_id"]) for i in flat]
+    index = ids.index((kind, record_id)) if (kind, record_id) in ids else 0
+    prev_col, next_col = st.columns(2, gap="small", width=260)
+    prev_col.button("Previous", key="prev_finding", disabled=index <= 0, on_click=_select,
+                    args=(flat[max(index - 1, 0)],), **_BUTTON_FILL)
+    next_col.button("Next", key="next_finding", disabled=index >= len(flat) - 1, on_click=_select,
+                    args=(flat[min(index + 1, len(flat) - 1)],), **_BUTTON_FILL)
+    st.caption(f"Change ID: {record_id}")
+
+
+def render(client, job_id: str, status: dict | None = None) -> None:
+    try:
+        outline = _outline(client, _key(client), job_id)
+    except ApiError as exc:
+        st.error(f"Could not load the result for job {job_id}: {exc.message}")
+        return
+    st.markdown(TREE_CSS, unsafe_allow_html=True)
+    _header(status or {}, job_id, outline)
+    _chips(chip_counts(outline))
+    kind, ctype, query = _filters()
+    left, right = st.columns([2, 3])
     with left:
-        st.markdown("**Old**")
-        st.text(old_text or "(no text on this side)")
+        mode = _order_control()
+    shown = with_title_root(outline)
+    root = shown["sections"][0]["section_id"] if shown is not outline else None
+    if root and st.session_state.get("root_open") != (job_id, root):
+        _open_set().add(root)  # the title root starts expanded, once per job
+        st.session_state["root_open"] = (job_id, root)
+    filtered = filter_outline(shown, kind, ctype, query)
+    filtered["sections"] = order_sections(filtered["sections"], mode)
+    flat = flatten(filtered)
+
+    selected = st.session_state.get("selected")
+    if flat and not any(_same(i, selected) for i in flat):
+        _select(flat[0])  # default and fallback: first item in tree order
+        selected = st.session_state["selected"]
+    elif not flat:
+        st.session_state.pop("selected", None)
+        selected = None
+    synced = (job_id, selected and selected.get("kind"), selected and selected.get("record_id"))
+    if selected and st.session_state.get("tree_synced") != synced:
+        _open_set().update(path_ids(filtered, selected))  # reveal the selected item
+        st.session_state["tree_synced"] = synced
+
+    with left:
+        _tree(filtered, selected, bool(outline.get("sections")), mode)
     with right:
-        st.markdown("**New**")
-        st.text(new_text or "(no text on this side)")
-    if kind == "review":
-        evidence = payload.get("evidence")
-        if evidence:
-            with st.expander("Evidence"):
-                st.json(evidence)
-
-
-def render(client, job_id: str) -> None:
-    summary = _header(client, job_id)
-    if summary is None:
-        return
-    if not summary.get("complete", True) and summary.get("state") != "done":
-        st.info("The result is not ready yet.")
-        return
-    st.markdown("### Findings")
-    filters = _filters(summary)
-    _findings(client, job_id, filters)
-    sel = st.session_state.get("selected")
-    if sel:
-        st.divider()
-        _viewer(client, job_id, sel)
-    else:
-        st.info("Select a finding to see the old and new pages.")
+        current = next((i for i in flat if _same(i, selected)), None)
+        if current is None:
+            st.info("No findings match these filters." if flatten(filter_outline(outline)) else "No findings in this result.")
+        else:
+            _viewer(client, job_id, current, flat)

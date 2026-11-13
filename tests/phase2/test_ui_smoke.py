@@ -9,7 +9,7 @@ except ImportError:  # pragma: no cover - streamlit is an optional extra
     raise unittest.SkipTest("streamlit is not installed")
 
 from document_compare.phase2.ui import review
-from tests.phase2.ui_stub import StubClient
+from tests.phase2.ui_stub import StubClient, default_outline
 
 
 def _script(stub):
@@ -37,10 +37,12 @@ class ShellTests(unittest.TestCase):
     def test_app_loads_without_job(self):
         at = make_app(StubClient()).run()
         self.assertFalse(at.exception)
-        self.assertIn("Open an existing job", texts(at.sidebar.subheader) + texts(at.sidebar.markdown))
+        self.assertEqual([t.label for t in at.sidebar.tabs], ["Compare", "Open job", "Comparison agent"])
         self.assertIn("Comparing sends both PDFs to the configured extraction provider.",
                       texts(at.sidebar.caption) + texts(at.sidebar.markdown))
         self.assertEqual(len(at.sidebar.file_uploader), 2)
+        self.assertIn("flex:1 1 0", "".join(str(m.value) for m in at.sidebar.markdown))  # tabs share the width
+        self.assertEqual(at.main.title[0].value, "Document compare")
 
     def test_upload_requires_both_files(self):
         stub = StubClient()
@@ -69,7 +71,7 @@ class ShellTests(unittest.TestCase):
         at = open_job(make_app(stub))
         self.assertFalse(at.exception)
         self.assertIn("7/15", texts(at.main.markdown) + texts(at.main.caption))
-        self.assertEqual(len(at.main.metric), 0)
+        self.assertNotIn("outline", [c[0] for c in stub.calls])
 
     def test_failed_job_shows_error_and_keeps_job_id(self):
         stub = StubClient(status_value={"job_id": "job1", "state": "failed", "stages_completed": ["01"],
@@ -89,12 +91,12 @@ class ShellTests(unittest.TestCase):
         self.assertIn("Could not reach the API", texts(at.main.error))
         self.assertEqual(at.session_state["job_id"], "job1")
 
-    def test_open_existing_job_shows_summary_counts(self):
-        at = open_job(make_app(StubClient()))
+    def test_outline_failure_is_a_visible_error(self):
+        stub = StubClient()
+        stub.raise_on["outline"] = stub.make_error(409, "invalid_artifact", "comparison result is not readable")
+        at = open_job(make_app(stub))
         self.assertFalse(at.exception)
-        metrics = {m.label: m.value for m in at.main.metric}
-        self.assertEqual(metrics.get("Changes"), "2")
-        self.assertEqual(metrics.get("Uncertain"), "1")
+        self.assertIn("comparison result is not readable", texts(at.main.error))
 
     def test_invalid_job_id_shows_visible_error(self):
         stub = StubClient()
@@ -104,20 +106,28 @@ class ShellTests(unittest.TestCase):
         self.assertFalse(at.exception)
         self.assertIn("Job ID must be 12 lowercase hex characters.", texts(at.main.error))
 
-    def test_select_job_clears_chat_error(self):
+    def test_select_job_clears_chat_state(self):
         at = open_job(make_app(StubClient()))
         at.session_state["chat_error"] = {"code": "chat_failed", "message": "old failure"}
+        at.session_state["chat_history"] = [{"role": "user", "content": "old question"}]
         at.run()
         self.assertIn("old failure", texts(at.sidebar.error))
         at.sidebar.text_input(key="open_job_id").set_value("job2")
         at.sidebar.button(key="open_job").click()
         at.run()
         self.assertNotIn("chat_error", at.session_state)
+        self.assertEqual(at.session_state["chat_history"], [])
         self.assertNotIn("old failure", texts(at.sidebar.error))
 
 
 def pick(at: AppTest, record_id: str, kind: str = "change") -> AppTest:
-    at.main.button(key=f"pick::{kind}::{record_id}").click()
+    key = f"pick::{kind}::{record_id}"
+    if not any(b.key == key for b in at.main.button):  # its section is collapsed: open the sections first
+        for tog in [k for k in toggle_keys(at) if k != "tog::S3"]:
+            if at.main.button(key=tog).label.startswith("\u203a"):
+                at.main.button(key=tog).click()
+                at.run()
+    at.main.button(key=key).click()
     return at.run()
 
 
@@ -130,7 +140,39 @@ def side(counterpart="present", location="polygon", page_count=3, primary_page=1
             "primary_page": primary_page, "regions": []}
 
 
-class ReviewTests(unittest.TestCase):
+def tree_keys(at: AppTest) -> list[str]:
+    return [b.key for b in at.main.button if (b.key or "").startswith("pick::")]
+
+
+def toggle_keys(at: AppTest) -> list[str]:
+    return [b.key for b in at.main.button if (b.key or "").startswith("tog::")]
+
+
+def toggle(at: AppTest, section_id: str) -> AppTest:
+    at.main.button(key=f"tog::{section_id}").click()
+    return at.run()
+
+
+def flat_outline(titles, children_of_first=None):
+    """Flat outline: one section per title, each with one ADDED change CHANGE-<n> (n = position + 1)."""
+    from tests.phase2.ui_stub import item
+
+    sections = []
+    for n, title in enumerate(titles, start=1):
+        change = item("change", f"CHANGE-{n:06d}", "ADDED", f"change in {title}", [title])
+        sections.append({"section_id": f"S{n}", "title": title, "side": "new", "level": None, "change_count": 1,
+                         "children": [], "items": [change]})
+    if children_of_first:
+        sections[0]["children"] = [sections.pop(1)]
+    return {"documents": {"old": {"page_count": 3}, "new": {"page_count": 4}},
+            "sections": sections, "unplaced": [], "review": [], "total": len(titles)}
+
+
+def structure_text(at: AppTest) -> str:
+    return texts(at.main.markdown) + texts(at.main.caption)
+
+
+class OutlineHelperTests(unittest.TestCase):
     def test_target_page_rules(self):
         self.assertEqual(review.target_page(side(primary_page=2), side(primary_page=7)), 2)
         # no counterpart: other side's page, clamped to this side's page count
@@ -140,130 +182,294 @@ class ReviewTests(unittest.TestCase):
         self.assertIsNone(review.target_page(side("none", "unavailable", None, None), side(primary_page=2)))
         self.assertIsNone(review.target_page(side("none", "unavailable", 3, None), side("none", "unavailable", 3, None)))
 
-    def test_findings_list_shows_uncertain_by_default(self):
+    def test_filter_recomputes_counts_and_never_lists_review(self):
+        outline = default_outline()
+        added = review.filter_outline(outline, "all", "ADDED")
+        self.assertEqual([n["change_count"] for n in added["sections"]], [1, 0])
+        self.assertNotIn("review", added)
+        self.assertEqual([i["record_id"] for i in review.flatten(added)], ["CHANGE-000002"])
+        tables = review.filter_outline(outline, "table", "all")
+        self.assertEqual(review.flatten(tables), [])
+        everything = review.filter_outline(outline)
+        self.assertEqual([i["record_id"] for i in review.flatten(everything)], ["CHANGE-000001", "CHANGE-000002"])
+
+    def test_search_matches_label_or_section_titles(self):
+        outline = default_outline()
+        by_label = review.filter_outline(outline, query="  SUPPORTED ")
+        self.assertEqual([i["record_id"] for i in review.flatten(by_label)], ["CHANGE-000001"])
+        self.assertEqual([n["title"] for n in by_label["sections"]], ["Section A"])  # C dropped, B dropped
+        self.assertEqual(by_label["sections"][0]["children"], [])
+        by_title = review.filter_outline(outline, query="section b")
+        self.assertEqual([i["record_id"] for i in review.flatten(by_title)], ["CHANGE-000002"])
+        by_parent = review.filter_outline(outline, query="section a")  # parent title keeps everything below
+        self.assertEqual([i["record_id"] for i in review.flatten(by_parent)], ["CHANGE-000001", "CHANGE-000002"])
+        titled_empty = review.filter_outline(outline, query="section c")  # matching section stays, count 0
+        self.assertEqual([(n["title"], n["change_count"]) for n in titled_empty["sections"]], [("Section C", 0)])
+        combined = review.filter_outline(outline, ctype="ADDED", query="section a")
+        self.assertEqual([i["record_id"] for i in review.flatten(combined)], ["CHANGE-000002"])
+        self.assertEqual(review.flatten(review.filter_outline(outline, query="zzz")), [])
+
+    def test_png_helpers(self):
+        data = review._placeholder_png(30, 20)
+        self.assertEqual(review._png_size(data), (30, 20))
+        self.assertEqual(review._png_size(b"nope"), (612, 792))
+
+
+class ReviewTests(unittest.TestCase):
+    def test_layout_header_chips_and_removed_elements(self):
         stub = StubClient()
         at = open_job(make_app(stub))
         self.assertFalse(at.exception)
-        shown = "\n".join(b.label for b in at.main.button)
-        self.assertIn("supported snippet", shown)
-        self.assertIn("uncertain snippet", shown)
-        self.assertIn("Uncertain", shown)
-        first_search = [c for c in stub.calls if c[0] == "search"][0]
-        self.assertEqual(first_search[2].get("kind"), "all")
-        self.assertIn(first_search[2].get("status"), (None, "all"))
+        main_text = texts(at.main.markdown) + texts(at.main.caption)
+        self.assertIn("old\\_policy\\.pdf", main_text)
+        self.assertIn("3 pages", main_text)
+        self.assertIn("new\\_policy\\.pdf", main_text)
+        self.assertIn("4 pages", main_text)
+        self.assertIn("Job ID: job1", main_text)
+        for chip in (":blue-badge[Changes 2]", ":violet-badge[Tables 0]", ":green-badge[Added 1]",
+                     ":red-badge[Deleted 0]", ":orange-badge[Modified 1]"):
+            self.assertIn(chip, main_text)
+        for gone in ("Limitations", "not legal or semantic ground truth", "Uncertain", "Supported"):
+            self.assertNotIn(gone, main_text)
+        self.assertEqual({s.label for s in at.main.selectbox}, {"Type", "Kind"})  # no State filter
+        self.assertEqual([t.label for t in at.main.text_input], ["Search"])
+        self.assertEqual(at.main.text_input[0].placeholder, "Search changes or sections")
+        self.assertEqual(len(at.main.metric), 0)
+        self.assertEqual(len(at.main.text), 0)  # no old/new text dump
+        self.assertIn("Change ID: CHANGE-000001", main_text)
 
-    def test_select_finding_requests_both_pages_with_highlight(self):
+    def test_tree_structure_and_default_selection(self):
         stub = StubClient()
+        at = open_job(make_app(stub))
+        self.assertEqual(at.session_state["selected"], {"kind": "change", "record_id": "CHANGE-000001"})
+        self.assertEqual(len(at.main.expander), 0)  # a tree, not boxed expanders
+        main_text = texts(at.main.markdown) + texts(at.main.caption)
+        self.assertNotIn("Flagged for review", main_text)
+        self.assertNotIn("Flagged for review", "".join(b.label for b in at.main.button))
+        # Section A is on the selected path (open); B is collapsed; C has nothing below (no caret, disabled)
+        self.assertEqual(toggle_keys(at), ["tog::S1", "tog::S2", "tog::S3"])
+        labels = {b.key: b.label for b in at.main.button}
+        self.assertTrue(labels["tog::S1"].startswith("\u2304\u2002Section A"))
+        self.assertTrue(labels["tog::S2"].startswith("\u203a\u2002Section B"))
+        self.assertNotIn("\u203a", labels["tog::S3"])
+        self.assertNotIn("\u2304", labels["tog::S3"])
+        self.assertTrue(at.main.button(key="tog::S3").disabled)
+        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001"])  # B's item hidden while collapsed
+        self.assertTrue(labels["pick::change::CHANGE-000001"].startswith(":orange[\u25cf]"))
+        self.assertIn("supported snippet", labels["pick::change::CHANGE-000001"])
+        self.assertIn(":gray[p.2]", texts(at.main.markdown))
+        self.assertIn(":gray-badge[2]", texts(at.main.markdown))
+        types = {b.key: b.proto.type for b in at.main.button if (b.key or "").startswith(("pick::", "tog::"))}
+        self.assertEqual(types["pick::change::CHANGE-000001"], "primary")
+        self.assertEqual(types["tog::S1"], "tertiary")
+        self.assertIn("Section A", texts(at.main.markdown))
+        self.assertIn("Red = deleted", texts(at.main.caption))
+
+    def test_tree_toggle_expands_and_collapses(self):
+        at = open_job(make_app(StubClient()))
+        at = toggle(at, "S2")
+        self.assertFalse(at.exception)
+        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001", "pick::change::CHANGE-000002"])
+        self.assertTrue(at.main.button(key="tog::S2").label.startswith("\u2304"))
+        at = toggle(at, "S1")  # collapse the parent hides everything below
+        self.assertEqual(tree_keys(at), [])
+        self.assertTrue(at.main.button(key="tog::S1").label.startswith("\u203a"))
+        at = toggle(at, "S1")
+        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001", "pick::change::CHANGE-000002"])
+        self.assertEqual(at.session_state["selected"]["record_id"], "CHANGE-000001")  # toggling keeps selection
+
+    def test_selecting_via_next_reveals_its_section(self):
+        at = open_job(make_app(StubClient()))
+        self.assertNotIn("pick::change::CHANGE-000002", tree_keys(at))
+        at.main.button(key="next_finding").click()
+        at.run()
+        self.assertIn("pick::change::CHANGE-000002", tree_keys(at))
+        self.assertTrue(at.main.button(key="tog::S2").label.startswith("\u2304"))
+
+    def test_search_filters_the_tree(self):
+        at = open_job(make_app(StubClient()))
+        at.main.text_input(key="f_search").set_value("section b")  # matches a section title
+        at.run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["selected"]["record_id"], "CHANGE-000002")
+        self.assertEqual(toggle_keys(at), ["tog::S1", "tog::S2"])
+        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000002"])
+        at.main.text_input(key="f_search").set_value("SUPPORTED")  # label, case-insensitive
+        at.run()
+        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001"])
+        at.main.text_input(key="f_search").set_value("nothing matches this")
+        at.run()
+        self.assertFalse(at.exception)
+        self.assertEqual(tree_keys(at), [])
+        self.assertIn("No findings match", texts(at.main.info))
+        self.assertIn("No matching sections or changes.", texts(at.main.caption))
+        self.assertEqual(len(at.main.get("image")), 0)
+        at.main.text_input(key="f_search").set_value("")
+        at.run()
+        self.assertEqual(at.session_state["selected"]["record_id"], "CHANGE-000001")  # back to the default first
+        self.assertEqual(len(at.main.get("image")), 2)
+
+    def test_added_item_shows_old_section_context_page_without_highlight(self):
+        stub = StubClient(locations_value={
+            "kind": "change", "record_id": "CHANGE-000002", "change_type": "ADDED",
+            "sides": {"old": side("none", "unavailable", 3, None), "new": side(primary_page=2, page_count=4)}})
         at = pick(open_job(make_app(stub)), "CHANGE-000002")
+        self.assertFalse(at.exception)
+        calls = [c for c in page_calls(stub) if c[2] == "old"]
+        self.assertEqual([c[3:] for c in calls], [(1, None, None, False)])  # outline's context page, no polygons
+        new_calls = [c for c in page_calls(stub) if c[2] == "new"]
+        self.assertEqual(new_calls[-1][3:], (2, "change", "CHANGE-000002", True))  # highlighted, dashed
+        self.assertEqual(at.session_state["selected"], {"kind": "change", "record_id": "CHANGE-000002"})
+        self.assertIn("Section A \u203a Section B", texts(at.main.markdown))
+        self.assertIn(":green[ADDED]", texts(at.main.markdown))
+        self.assertEqual(len(at.main.get("image")), 2)
+        captions = texts(at.main.caption)
+        self.assertIn("Old \u00b7 page 1 \u00b7 section context", captions)
+        self.assertIn("New \u00b7 page 2", captions)
+        self.assertNotIn("section context\n", captions.split("New")[-1])
+        self.assertNotIn("No counterpart", captions + texts(at.main.markdown))
+        self.assertIn("Change ID: CHANGE-000002", captions)
+        types = {b.key: b.proto.type for b in at.main.button if (b.key or "").startswith("pick::")}
+        self.assertEqual(types["pick::change::CHANGE-000002"], "primary")
+
+    def test_modified_item_requests_both_pages_with_highlight(self):
+        stub = StubClient()
+        at = open_job(make_app(stub))
         self.assertFalse(at.exception)
         calls = page_calls(stub)
         self.assertEqual({c[2] for c in calls}, {"old", "new"})
         for call in calls:
-            self.assertEqual(call[4:], ("change", "CHANGE-000002", True))
-        self.assertEqual(at.session_state["selected"], {"kind": "change", "record_id": "CHANGE-000002"})
-        shown = texts(at.main.markdown) + texts(at.main.caption)
-        self.assertIn("Uncertain", shown)
-        self.assertIn("low similarity", shown)
+            self.assertEqual(call[4:], ("change", "CHANGE-000001", False))
         self.assertEqual(len(at.main.get("image")), 2)
+        self.assertNotIn("section context", texts(at.main.caption))
 
-    def test_next_previous_move_selection(self):
-        at = pick(open_job(make_app(StubClient())), "CHANGE-000001")
-        at.main.button(key="next_finding").click()
-        at.run()
-        self.assertEqual(at.session_state["selected"]["record_id"], "CHANGE-000002")
+    def test_next_previous_walk_tree_order(self):
+        at = open_job(make_app(StubClient()))
+        self.assertTrue(at.main.button(key="prev_finding").disabled)
+        order = ["CHANGE-000002"]  # review items are not part of the walk
+        for expected in order:
+            at.main.button(key="next_finding").click()
+            at.run()
+            self.assertEqual(at.session_state["selected"]["record_id"], expected)
+        self.assertTrue(at.main.button(key="next_finding").disabled)
         at.main.button(key="prev_finding").click()
         at.run()
         self.assertEqual(at.session_state["selected"]["record_id"], "CHANGE-000001")
         self.assertFalse(at.exception)
 
-    def test_filter_change_clears_selection(self):
-        class FilteringStub(StubClient):
-            def search(self, job_id, **filters):
-                out = super().search(job_id, **filters)
-                if filters.get("status") == "accepted":
-                    out["returned"] = [r for r in out["returned"] if r["status"] == "accepted"]
-                return out
-
-        stub = FilteringStub()
-        at = pick(open_job(make_app(stub)), "CHANGE-000002")
-        self.assertEqual(at.session_state["selected"]["record_id"], "CHANGE-000002")
-        at.main.selectbox(key="f_state").select("Accepted")
-        at.run()
-        self.assertFalse(at.exception)
-        self.assertFalse(at.session_state["selected"] if "selected" in at.session_state else None)
-        self.assertIsNone(at.session_state["old_page"])
-        self.assertIsNone(at.session_state["new_page"])
-        self.assertEqual(len(at.main.get("image")), 0)
-        self.assertIn("Select a finding", texts(at.main.info))
-        self.assertEqual([b.key for b in at.main.button if (b.key or "").startswith("pick::")],
-                         ["pick::change::CHANGE-000001"])
-        # Next/Previous now work on the filtered list.
-        at.main.button(key="next_finding").click()
-        at.run()
-        self.assertEqual(at.session_state["selected"]["record_id"], "CHANGE-000001")
-
-    def test_only_one_row_reads_selected(self):
-        at = pick(open_job(make_app(StubClient())), "CHANGE-000001")
-        at = pick(at, "CHANGE-000002")
-        self.assertFalse(at.exception)
-        selected = [b for b in at.main.button if b.label.startswith("Selected:")]
-        self.assertEqual([b.key for b in selected], ["pick::change::CHANGE-000002"])
-
-    def test_load_more_uses_next_cursor(self):
-        stub = StubClient(next_cursors=["cur1"])
-        at = open_job(make_app(stub))
-        at.main.button(key="load_more").click()
-        at.run()
-        self.assertFalse(at.exception)
-        cursors = [c[2].get("cursor") for c in stub.calls if c[0] == "search"]
-        self.assertEqual(cursors[-1], "cur1")
-        self.assertIn("MORE-cur1", "\n".join(b.key or "" for b in at.main.button))
-        self.assertEqual(len([b for b in at.main.button if b.key == "load_more"]), 0)
-
-    def test_page_controls_are_bounded(self):
+    def test_filters_apply_client_side_and_reselect_first(self):
         stub = StubClient()
         at = pick(open_job(make_app(stub)), "CHANGE-000001")
-        self.assertTrue(at.main.button(key="old_prev").disabled)  # page 1 of 3
-        at.main.button(key="old_next").click()
+        outline_calls = len([c for c in stub.calls if c[0] == "outline"])
+        at.main.selectbox(key="f_type").select("Added")
         at.run()
-        self.assertEqual(at.session_state["old_page"], 2)
-        at.main.button(key="old_next").click()
+        self.assertFalse(at.exception)
+        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000002"])
+        self.assertEqual(at.session_state["selected"]["record_id"], "CHANGE-000002")
+        self.assertIn(":gray-badge[1]", texts(at.main.markdown))
+        self.assertEqual(len([c for c in stub.calls if c[0] == "outline"]), outline_calls)  # cached, no refetch
+        at.main.selectbox(key="f_kind").select("Table")
         at.run()
-        self.assertEqual(at.session_state["old_page"], 3)
-        self.assertTrue(at.main.button(key="old_next").disabled)
-        self.assertIn(3, [c[3] for c in page_calls(stub) if c[2] == "old"])
+        self.assertEqual(tree_keys(at), [])
+        self.assertNotIn("selected", at.session_state)
+        self.assertIn("No findings match", texts(at.main.info))
+        self.assertEqual(len(at.main.get("image")), 0)
 
-    def test_no_counterpart_note_shown(self):
+    def test_deleted_item_shows_new_section_context_without_placeholder_text(self):
         stub = StubClient(locations_value={
             "kind": "change", "record_id": "CHANGE-000001", "change_type": "DELETED",
             "sides": {"old": side(primary_page=2), "new": side("none", "unavailable", 4, None)}})
         at = pick(open_job(make_app(stub)), "CHANGE-000001")
         self.assertFalse(at.exception)
-        self.assertIn("No counterpart on this side", texts(at.main.caption) + texts(at.main.markdown))
-        new_calls = [c for c in page_calls(stub) if c[2] == "new"]
-        self.assertEqual(new_calls[0][3], 2)
+        self.assertNotIn("No counterpart", texts(at.main.caption))
+        self.assertEqual(len(at.main.get("image")), 2)
+        self.assertIn("New \u00b7 page 2 \u00b7 section context", texts(at.main.caption))
+        new_call = [c for c in page_calls(stub) if c[2] == "new"][-1]
+        self.assertEqual(new_call[4:6], (None, None))
 
-    def test_source_unavailable_falls_back_to_text(self):
+    def test_unrenderable_context_side_keeps_placeholder(self):
+        stub = StubClient(png=None)
+        at = pick(open_job(make_app(stub)), "CHANGE-000001")
+        self.assertIn("source PDF", texts(at.main.info))
+        self.assertEqual(len(at.main.get("image")), 2)
+
+    def test_source_unavailable_shows_notice(self):
         stub = StubClient(png=None)
         at = pick(open_job(make_app(stub)), "CHANGE-000001")
         self.assertFalse(at.exception)
-        self.assertIn("source PDF", texts(at.main.info) + texts(at.main.warning))
-        shown = texts(at.main.text)
-        self.assertIn("old text here", shown)
-        self.assertIn("new text here", shown)
-        self.assertEqual(len(at.main.get("image")), 0)
+        self.assertIn("source PDF", texts(at.main.info))
+        self.assertEqual(len(at.main.text), 0)
 
-    def test_review_record_shows_text_only(self):
-        stub = StubClient(locations_value={
-            "kind": "review", "record_id": "REVIEW-000001", "change_type": None,
-            "sides": {"old": side("none", "unavailable", 3, None), "new": side("none", "unavailable", 4, None)}})
-        stub.rows = [{"kind": "review", "record_id": "REVIEW-000001", "change_type": None, "status": "review",
-                      "result_state": "uncertain", "needs_review": True, "confirmed": False, "pages": [],
-                      "snippet": "review snippet", "snippet_source": "x"}]
-        at = pick(open_job(make_app(stub)), "REVIEW-000001", kind="review")
+    def test_missing_names_fall_back(self):
+        stub = StubClient(status_value={"job_id": "job1", "state": "done", "stages_completed": []})
+        at = open_job(make_app(stub))
+        self.assertIn("old\\.pdf", texts(at.main.markdown))
+        self.assertIn("new\\.pdf", texts(at.main.markdown))
+
+    def test_flat_outline_with_unnumbered_title_gets_a_title_root(self):
+        outline = flat_outline(["Policy Title", "Section 4 Scope", "Section 5 Rules"])
+        at = open_job(make_app(StubClient(outline_value=outline)))
         self.assertFalse(at.exception)
-        self.assertEqual(page_calls(stub), [])
-        self.assertIn("needs a human", texts(at.main.markdown) + texts(at.main.caption))
+        # root S1 is open; the others are its children (one indent level deeper), collapsed
+        self.assertEqual(toggle_keys(at), ["tog::S1", "tog::S2", "tog::S3"])
+        self.assertTrue(at.main.button(key="tog::S1").label.startswith("\u2304"))
+        self.assertTrue(at.main.button(key="tog::S2").label.startswith("\u203a"))
+        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001"])  # the root's own item stays its own
+        self.assertIn(":gray-badge[3]", texts(at.main.markdown))  # root counts everything
+        self.assertEqual(outline["sections"][0]["children"], [])  # the API payload is untouched
+        self.assertEqual(len(outline["sections"]), 3)
+
+    def test_real_hierarchy_gets_no_title_root(self):
+        outline = flat_outline(["Policy Title", "Section 4 Scope", "Section 5 Rules"], children_of_first=True)
+        at = open_job(make_app(StubClient(outline_value=outline)))
+        self.assertFalse(at.exception)
+        self.assertEqual(toggle_keys(at), ["tog::S1", "tog::S2", "tog::S3"])  # S3 stays a top-level sibling
+        self.assertTrue(at.main.button(key="tog::S3").label.startswith("\u203a"))
+        self.assertNotIn(":gray-badge[3]", texts(at.main.markdown))  # nothing was re-parented
+        numbered = flat_outline(["Section 1 First", "Section 2 Second"])
+        at = open_job(make_app(StubClient(outline_value=numbered)))
+        self.assertEqual(toggle_keys(at), ["tog::S1", "tog::S2"])
+        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001"])
+        self.assertFalse(any(b.key == "tog::S2" and b.label.startswith("\u2304") for b in at.main.button))  # no root
+
+    def test_section_number_order_reorders_tree_and_walk(self):
+        outline = flat_outline(["Section 12 Last", "Section 1 First", "Section 2 Second"])
+        at = open_job(make_app(StubClient(outline_value=outline)))
+        self.assertEqual([o for o in at.main.radio(key="tree_order").options], ["Document order", "Section number"])
+        self.assertEqual(at.main.radio(key="tree_order").value, "Document order")
+        self.assertEqual(toggle_keys(at), ["tog::S1", "tog::S2", "tog::S3"])
+        at.main.radio(key="tree_order").set_value("Section number")
+        at.run()
+        self.assertFalse(at.exception)
+        self.assertEqual(toggle_keys(at), ["tog::S2", "tog::S3", "tog::S1"])  # 1, 2, 12
+        self.assertEqual(at.session_state["selected"]["record_id"], "CHANGE-000001")  # selection is kept
+        self.assertTrue(at.main.button(key="next_finding").disabled)  # Section 12 is now last
+        for expected in ("CHANGE-000003", "CHANGE-000002"):  # Previous walks 12 -> 2 -> 1 in displayed order
+            at.main.button(key="prev_finding").click()
+            at.run()
+            self.assertEqual(at.session_state["selected"]["record_id"], expected)
+        self.assertTrue(at.main.button(key="prev_finding").disabled)
+
+    def test_order_caption_only_when_document_order_is_not_ascending(self):
+        out_of_order = flat_outline(["Section 12 Last", "Section 1 First"])
+        at = open_job(make_app(StubClient(outline_value=out_of_order)))
+        self.assertIn(review.ORDER_NOTE, structure_text(at))
+        at.main.radio(key="tree_order").set_value("Section number")
+        at.run()
+        self.assertNotIn(review.ORDER_NOTE, structure_text(at))
+        ascending = flat_outline(["Section 1 First", "Section 2 Second"])
+        at = open_job(make_app(StubClient(outline_value=ascending)))
+        self.assertNotIn(review.ORDER_NOTE, structure_text(at))
+        titled = flat_outline(["Policy Title", "Section 4 A", "Section 12 B", "Section 1 C"])  # under the root
+        at = open_job(make_app(StubClient(outline_value=titled)))
+        self.assertIn(review.ORDER_NOTE, structure_text(at))
+
+    def test_empty_outline(self):
+        stub = StubClient(outline_value={"documents": {"old": {"page_count": None}, "new": {"page_count": None}},
+                                         "sections": [], "unplaced": [], "review": [], "total": 0})
+        at = open_job(make_app(stub))
+        self.assertFalse(at.exception)
+        self.assertIn("No findings in this result.", texts(at.main.info))
 
 
 class ChatTests(unittest.TestCase):
@@ -272,13 +478,14 @@ class ChatTests(unittest.TestCase):
         at.sidebar.chat_input[0].set_value(question).run()
         return at
 
-    def test_chat_not_configured_notice(self):
+    def test_chat_not_configured_shows_one_caption(self):
         stub = StubClient()
         stub.raise_on["chat"] = stub.make_error(503, "chat_not_configured", "Chat is not configured on this server.")
         at = self.ask(stub)
         self.assertFalse(at.exception)
-        self.assertIn("not configured", texts(at.sidebar.info) + texts(at.sidebar.warning))
-        self.assertEqual(len(at.main.metric), 4)  # rest of the UI still works
+        self.assertIn("Agent not configured on this machine.", texts(at.sidebar.caption))
+        self.assertEqual(len(at.sidebar.warning) + len(at.sidebar.info) + len(at.sidebar.error), 0)
+        self.assertTrue(tree_keys(at))  # rest of the UI still works
 
     def test_chat_appends_question_and_answer(self):
         stub = StubClient()
@@ -289,10 +496,8 @@ class ChatTests(unittest.TestCase):
                          [("user", "what changed?"), ("assistant", "stub answer")])
         self.assertIn(("chat", "job1", "what changed?"), stub.calls)
         self.assertIn("stub answer", texts(at.sidebar.text))
-        self.assertIn("Questions send bounded result excerpts to the configured model.",
-                      texts(at.sidebar.caption) + texts(at.sidebar.markdown))
-        self.assertIn("not legal or semantic ground truth",
-                      texts(at.sidebar.caption) + texts(at.sidebar.markdown))
+        shown = texts(at.sidebar.caption) + texts(at.sidebar.markdown)
+        self.assertNotIn("not legal or semantic ground truth", shown)
 
     def test_chat_error_is_shown_not_raised(self):
         stub = StubClient()

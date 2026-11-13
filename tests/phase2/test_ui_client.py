@@ -96,6 +96,8 @@ class ApiClientTests(unittest.TestCase):
         c.details("0123456789ab", "change", "CHANGE-000001")
         c.locations("0123456789ab", "change", "CHANGE-000001")
         c.chat("0123456789ab", "why?")
+        self.assertEqual(c.outline("0123456789ab"), {"ok": True})
+        self.assertEqual(seen[5], ("/jobs/0123456789ab/view/outline", {}))
         self.assertEqual(seen[0], ("/jobs/0123456789ab/read/summary", {}))
         self.assertEqual(seen[1], ("/jobs/0123456789ab/read/search", {"kind": "all", "change_type": "ADDED", "limit": "10"}))
         self.assertEqual(seen[2], ("/jobs/0123456789ab/read/details", {"kind": "change", "record_id": "CHANGE-000001"}))
@@ -139,7 +141,7 @@ class ApiClientTests(unittest.TestCase):
                     call(bad)
                 self.assertEqual((ctx.exception.status, ctx.exception.code, ctx.exception.message),
                                  (None, "invalid_arguments", "Job ID must be 12 lowercase hex characters."))
-            for call in (lambda: c.details(bad, "change", "C1"), lambda: c.locations(bad, "change", "C1"),
+            for call in (lambda: c.details(bad, "change", "C1"), lambda: c.locations(bad, "change", "C1"), lambda: c.outline(bad),
                          lambda: c.page_png(bad, "old", 1), lambda: c.chat(bad, "q")):
                 with self.assertRaises(ApiError):
                     call()

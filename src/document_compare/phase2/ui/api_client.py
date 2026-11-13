@@ -124,6 +124,9 @@ class ApiClient:
     def locations(self, job_id: str, kind: str, record_id: str) -> dict:
         return self._json("GET", f"/jobs/{_job(job_id)}/view/locations", params={"kind": kind, "record_id": record_id})
 
+    def outline(self, job_id: str) -> dict:
+        return self._json("GET", f"/jobs/{_job(job_id)}/view/outline")
+
     def page_png(self, job_id: str, side: str, page: int, kind: str | None = None,
                  record_id: str | None = None, uncertain: bool = False) -> bytes | None:
         params: dict[str, Any] = {}
