@@ -20,12 +20,14 @@ src/document_compare/
     contracts/            # validation, review identity, result-state, outcomes
     reporting/            # report model + original/inline PDF, HTML, diff spans
     evaluation/           # optional benchmarks/diagnostics + Gate B shadow (off runtime)
-  phase2/                 # API, workflow, MCP, reader, agent
+  phase2/                 # API, workflow, MCP, reader, agent, viewer, UI
     api/                  # HTTP service + operational summary
     workflow/             # local submit/poll/start/stop orchestration
     mcp/                  # workflow surface + three-tool reader surface
     reader/               # read-only result projection
     agent/                # planner/controller, tools, gateway, prompts, mock
+    viewer/               # finding locations, page-image rendering, synthetic demo PDFs
+    ui/                   # Streamlit reviewer; HTTP client of the API only
   shared/                 # generic path and JSON I/O helpers only
 tests/                    # phase1/, phase2/, integration/, support/, fixtures/
 docs/                     # architecture, review-guide, contracts/, operations/, releases/
@@ -40,7 +42,7 @@ artifacts; Phase 1 must never import Phase 2; `shared` imports neither phase.
 
 ```mermaid
 graph TD
-  P2["phase2/ (api, workflow, mcp, reader, agent)"]
+  P2["phase2/ (api, workflow, mcp, reader, agent, viewer, ui)"]
   P1["phase1/ (stages, pipeline, contracts, reporting, ...)"]
   SH["shared/ (paths, json_io)"]
   P2 -->|"public pipeline call or saved artifacts"| P1
@@ -159,6 +161,17 @@ Legacy `structure_evidence` versions `1.1.x` remain readable.
    review fields readable.
 5. The agent (`phase2/agent/`) plans only over those three reader tools; it does
    not download the full report and re-implement search.
+6. The viewer (`phase2/viewer/`) maps a saved finding to pages and normalized
+   polygons (`locations.py`) and renders a source-PDF page with the region
+   outlined (`page_render.py`). The API exposes it read-only as
+   `/jobs/{id}/view/locations` and `/jobs/{id}/view/pages/{side}/{page}.png`
+   ([contract](contracts/view-endpoints.md)); it never writes into a job.
+7. The Streamlit UI (`phase2/ui/`) talks to the API over HTTP only (reader
+   routes, view routes and `POST /jobs/{id}/chat`). It does not import the
+   engine or read workspaces from disk. Chat reuses the agent and the three
+   reader tools through the internal hub client, and only when `TIA_API_KEY`
+   and `LLM_MODEL` are set. `phase2/viewer/synthetic.py` builds offline demo
+   PDFs and a seeded job for UI checks.
 
 ### Selecting phases and saved workspaces
 

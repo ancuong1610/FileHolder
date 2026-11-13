@@ -217,3 +217,39 @@ The private EBA PDFs/artifacts are not bundled here. Synthetic regressions prove
 the failure mechanism, **not** acceptance on that pair. Record the actual command,
 workspace, stage outcome and human inspection when running it in the company
 environment. Never send `.env`, private PDFs, raw DI or result text outside it.
+
+## 7. Offline check of the browser UI (Phase 2)
+
+Seed a synthetic job: the offline demo artifacts plus two generated PDFs whose
+text sits inside the saved polygons. No provider, model or network call.
+
+```bash
+python -m document_compare.phase2.viewer.synthetic --jobs-root workspace/jobs
+```
+
+It writes a new `workspace/jobs/<job_id>/` (never an existing one), prints the
+demo logs, and prints the job ID as the last line. Then, in two terminals:
+
+```bash
+python -m pip install -e ".[ui]"
+python -m uvicorn document_compare.phase2.api.service:app --host 127.0.0.1 --port 8321
+python -m streamlit run src/document_compare/phase2/ui/app.py --server.address 127.0.0.1 --browser.gatherUsageStats false
+```
+
+Open the printed local URL, enter the job ID under "Open existing job", select a
+modified and a deleted finding, and check that the outlined region on the old
+and new page sits on the changed text. Chat shows "not configured" unless
+`TIA_API_KEY` and `LLM_MODEL` are set; do not set them for this offline check.
+
+Automated checks (no browser, no network):
+
+```bash
+python -m unittest tests.phase2.test_viewer_synthetic tests.phase2.test_viewer_locations tests.phase2.test_page_render tests.phase2.test_view_api
+python -m unittest tests.phase2.test_ui_client tests.phase2.test_ui_smoke
+```
+
+`test_ui_smoke` is skipped when Streamlit is not installed. These tests prove
+the contracts and regressions on synthetic data. A manual check on a seeded job
+was done on 2026-11-11; highlight accuracy on real PDFs (rotation, crop boxes)
+and live chat are not verified and need the work machine with approved documents.
+Real uploads still run real Stage 1 extraction.

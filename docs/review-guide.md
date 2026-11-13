@@ -30,6 +30,11 @@ this order before touching code: `docs/architecture.md` → the owning folder
 | Benchmark / diagnostics metrics | `phase1/evaluation/evaluate.py`, `phase1/evaluation/matching_diagnostics.py` | `python -m unittest tests.phase1.test_evaluation_metrics tests.phase1.test_matching_diagnostics` |
 | Job API / status / summary wrong | `phase2/api/service.py`, `phase2/api/summary.py` | `python -m unittest tests.phase2.test_service` |
 | Agent search/details incomplete or wrong | `phase2/reader/result_reader.py`, `phase2/mcp/reader_server.py`, `phase2/agent/tools.py` | `python -m unittest tests.phase2.test_reader tests.phase2.test_agent_reader` |
+| Finding highlighted on the wrong page/region, or location degrades wrongly | `phase2/viewer/locations.py` | `python -m unittest tests.phase2.test_viewer_locations` |
+| Page image, highlight, rotation or scale wrong | `phase2/viewer/page_render.py` | `python -m unittest tests.phase2.test_page_render` |
+| Page/location/chat route or its error code wrong | `phase2/api/service.py` (view and chat routes) | `python -m unittest tests.phase2.test_view_api` |
+| Synthetic PDFs or seeded demo job wrong | `phase2/viewer/synthetic.py` | `python -m unittest tests.phase2.test_viewer_synthetic` |
+| Streamlit page, findings list, page viewer or chat panel wrong | `phase2/ui/app.py`, `phase2/ui/review.py`, `phase2/ui/chat.py`, `phase2/ui/api_client.py` | `python -m unittest tests.phase2.test_ui_client tests.phase2.test_ui_smoke` |
 | Reader result state or legacy status/kind filter wrong | `phase2/reader/result_reader.py`, `phase2/api/summary.py`, `phase1/contracts/result_state.py` | `python -m unittest tests.phase1.test_automatic_reports tests.phase2.test_reader` |
 | Workflow MCP / subprocess launch broken | `phase2/mcp/workflow_server.py`, `phase2/workflow/local_reviewer.py` | `python -m unittest tests.phase2.test_mcp tests.phase2.test_local_flow` |
 | Phase selection / saved workspace reuse wrong | `phase2/workflow/local_reviewer.py`, `phase2/workflow/saved_workspace.py` | `python -m unittest tests.phase2.test_local_flow tests.phase2.test_saved_workspace` |
@@ -40,6 +45,8 @@ this order before touching code: `docs/architecture.md` → the owning folder
 ## Boundaries not to break
 
 - Phase 1 never imports Phase 2; `shared` imports neither phase.
+- `phase2/ui` talks to the API over HTTP only; `phase2/viewer` and the view
+  routes never write into a job's `output/`.
 - Keep the `CRR_` runtime env-key prefix and artifact/schema names as-is.
 - Do not re-add `run_local.py`, a `compat/` package, or the old `crr_compare` /
   `agent_poc` namespaces.

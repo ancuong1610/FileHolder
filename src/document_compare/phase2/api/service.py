@@ -24,6 +24,7 @@ the interactive workspace.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -33,14 +34,17 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
+from pydantic import BaseModel
 
 from document_compare.phase2.reader import result_reader as reader
 from document_compare.shared.paths import REPO_ROOT
 from document_compare.phase2.api.summary import build_summary
+from document_compare.phase2.viewer.locations import resolve_locations
+from document_compare.phase2.viewer.page_render import render_page, style_for
 
 app = FastAPI(title="Document Comparison API", version="0.1.0")
 
@@ -489,3 +493,113 @@ def read_details(
         )
     except reader.ReaderError as exc:
         raise _reader_http(exc) from exc
+
+
+# ---------------------------------------------------------------------------
+# View endpoints: finding locations and rendered page images (read-only).
+# ---------------------------------------------------------------------------
+
+def _coded(status: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status, detail={"error": code, "message": message})
+
+
+@app.get("/jobs/{job_id}/view/locations")
+def view_locations(job_id: str, kind: str, record_id: str) -> dict:
+    _validate_read_job_id(job_id)
+    job_status = _read_status(job_id)
+    canonical = _reader_canonical(job_id, job_status)
+    try:
+        return resolve_locations(_job_dir(job_id) / "output", canonical, kind, record_id)
+    except reader.ReaderError as exc:
+        raise _reader_http(exc) from exc
+
+
+@app.get("/jobs/{job_id}/view/pages/{side}/{page}.png")
+def view_page_png(
+    job_id: str,
+    side: Literal["old", "new"],
+    page: int,
+    kind: str | None = None,
+    record_id: str | None = None,
+    uncertain: bool = False,
+    scale: float = 1.5,
+) -> Response:
+    _validate_read_job_id(job_id)
+    job_status = _read_status(job_id)
+    canonical = _reader_canonical(job_id, job_status)
+    if (kind is None) != (record_id is None):
+        raise _reader_http(reader.ReaderError("invalid_arguments", "kind and record_id must be given together"))
+    polygons: list[list[float]] = []
+    style = "modified"
+    if kind is not None and record_id is not None:
+        try:
+            located = resolve_locations(_job_dir(job_id) / "output", canonical, kind, record_id)
+        except reader.ReaderError as exc:
+            raise _reader_http(exc) from exc
+        style = style_for(str(located.get("change_type") or ""), side)
+        regions = ((located.get("sides") or {}).get(side) or {}).get("regions") or []
+        polygons = [r["polygon"] for r in regions if r.get("page_number") == page]
+    pdf_path = _job_dir(job_id) / "input" / "document" / f"{side}.pdf"
+    if not pdf_path.is_file():
+        raise _coded(404, "source_pdf_unavailable", "The source PDF for this side is not available.")
+    try:
+        png = render_page(pdf_path, page, polygons, style=style, uncertain=uncertain, scale=scale)
+    except ValueError as exc:
+        raise _coded(422, "invalid_arguments", "page or scale is outside the allowed range.") from exc
+    except (RuntimeError, OSError) as exc:  # pymupdf.FileDataError and friends: stored PDF is unreadable
+        raise _coded(422, "invalid_artifact", "The source PDF could not be read.") from exc
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+# ---------------------------------------------------------------------------
+# Chat endpoint: the existing agent over the three bounded reader tools.
+# ---------------------------------------------------------------------------
+
+class ChatRequest(BaseModel):
+    question: str
+
+
+MAX_QUESTION_CHARS = 2000
+
+
+def _chat_client() -> Any | None:
+    """TiaTextClient when TIA_API_KEY and LLM_MODEL are both set, else None."""
+    api_key = os.getenv("TIA_API_KEY", "").strip()
+    if not api_key or not os.getenv("LLM_MODEL", "").strip():
+        return None
+    from document_compare.phase2.agent.tia_client import TiaTextClient
+
+    return TiaTextClient(api_key)
+
+
+@app.post("/jobs/{job_id}/chat")
+def chat(job_id: str, body: ChatRequest) -> dict:
+    _validate_read_job_id(job_id)
+    job_status = _read_status(job_id)
+    _reader_canonical(job_id, job_status)
+    question = body.question.strip()
+    if not 1 <= len(question) <= MAX_QUESTION_CHARS:
+        raise _reader_http(
+            reader.ReaderError("invalid_arguments", f"question must be 1-{MAX_QUESTION_CHARS} characters")
+        )
+    client = _chat_client()
+    if client is None:
+        raise _coded(503, "chat_not_configured", "Chat is not configured on this server.")
+
+    from document_compare.phase2.agent.controller import TiaComparisonAgent
+    from document_compare.phase2.workflow import saved_workspace
+
+    try:
+        gateway = saved_workspace.SavedWorkspaceGateway(_job_dir(job_id))
+    except ValueError as exc:
+        raise _reader_http(reader.ReaderError("invalid_artifact", "saved result is not readable")) from exc
+    if gateway.job_id != job_id:
+        raise _reader_http(reader.ReaderError("invalid_artifact", "job status does not match this job"))
+    try:
+        answer = TiaComparisonAgent(client, gateway, max_steps=10, result_limit=8).ask(question, job_id)
+        limitations = gateway.summarize(job_id).get("limitations") or []
+    except reader.ReaderError as exc:
+        raise _reader_http(exc) from exc
+    except Exception as exc:  # planner/SDK failure: never echo model or provider text
+        raise _coded(502, "chat_failed", "The assistant could not produce an answer.") from exc
+    return {"job_id": job_id, "answer": answer, "limitations": limitations}

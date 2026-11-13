@@ -16,3 +16,6 @@ include = ["document_compare*"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
+
+[project.optional-dependencies]
+ui = ["streamlit>=1.37,<2"]

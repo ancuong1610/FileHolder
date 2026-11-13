@@ -1,0 +1,8 @@
+[browser]
+gatherUsageStats = false
+
+[server]
+address = "127.0.0.1"
+headless = true
+# Matches MAX_UPLOAD_BYTES in phase2/api/service.py (50 MB).
+maxUploadSize = 50

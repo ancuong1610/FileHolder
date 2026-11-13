@@ -141,6 +141,44 @@ artifacts and later use `--phase phase2`; do not rerun the full comparison.
 python -m document_compare.phase2.workflow.local_reviewer --phase both --workspace FRESH_JOB_ROOT
 ```
 
+### Review in the browser (Phase 2 UI)
+
+A Streamlit page that is a client of the loopback HTTP API: upload an old and a
+new PDF, follow progress, open a finished job by ID, step through findings with
+the old and new pages side by side and the changed region outlined, and ask
+chat questions about the saved result. It only reads saved results.
+
+```bash
+python -m pip install -e ".[ui]"
+python -m uvicorn document_compare.phase2.api.service:app --host 127.0.0.1 --port 8321
+python -m streamlit run src/document_compare/phase2/ui/app.py --server.address 127.0.0.1 --browser.gatherUsageStats false
+```
+
+Run the last two commands in separate terminals. Loopback binding and disabled
+telemetry are set explicitly on the command line so they do not depend on the
+working directory; the checked-in `.streamlit/config.toml` still provides the
+50 MB upload cap. The UI reaches the API at `CRR_API_BASE` (default
+`http://127.0.0.1:8321`).
+
+- Uploading two real PDFs runs real Stage 1 extraction through the configured
+  provider; use it only when that is approved.
+- Chat works only through the internal hub client and is available when
+  `TIA_API_KEY` and `LLM_MODEL` are set. Otherwise the panel says chat is not
+  configured and the rest of the page keeps working. A chat question sends
+  bounded reader output to the configured model.
+- Review-queue items have no page location; they are shown as text only. When a
+  job's source PDFs are missing, pages are replaced by the old/new text.
+- Offline check without credentials: seed a synthetic job with
+  `python -m document_compare.phase2.viewer.synthetic --jobs-root workspace/jobs`
+  and open the job ID it prints last. See
+  [phase testing](docs/operations/phase-testing.md).
+- Status: verified offline only. A manual browser check on a seeded synthetic
+  job (2026-11-11) showed highlights on the changed text for a modified and a
+  deleted finding. Highlight accuracy on real PDFs (rotation, crop boxes) and
+  live chat are not verified.
+
+Endpoints behind it: [view endpoints](docs/contracts/view-endpoints.md).
+
 ### Advanced local interfaces
 
 These commands are for API/MCP transport development and diagnostics, rather
