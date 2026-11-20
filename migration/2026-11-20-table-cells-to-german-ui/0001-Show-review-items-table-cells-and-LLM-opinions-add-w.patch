@@ -1,0 +1,1708 @@
+From 736a9b9a44faafa30b333ebbf86b3b4aefb9522c Mon Sep 17 00:00:00 2001
+From: Quoc Cuong An <ancuong1610@gmail.com>
+Date: Fri, 13 Nov 2026 16:38:06 +0100
+Subject: [PATCH 1/3] Show review items, table cells and LLM opinions; add
+ workspace import
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- viewer/import_workspace.py: one command turns a saved workspace
+  (output/ + source PDFs) into a UI job; workspace is only read
+- review items: needs_review tag + plain reason on flagged changes;
+  linked review records mark their changes; standalone records (moved
+  blocks) become tree items highlighted purple dashed from evidence IDs;
+  Needs review chip and filter
+- tables: only changed cells filled, whole table outlined; placed in the
+  previous section; 'Table · p.N · N cells changed' label
+- compact advisory LLM opinion box (outcome, reason, evaluator, element
+  IDs; uncalibrated confidence deliberately not shown)
+- migration guide updated
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/contracts/view-endpoints.md              |  62 +++++-
+ docs/operations/compare-frontend-migration.md |  37 +++-
+ src/document_compare/phase2/api/service.py    |  10 +-
+ src/document_compare/phase2/ui/README.md      |   9 +-
+ src/document_compare/phase2/ui/review.py      |  84 +++++--
+ src/document_compare/phase2/viewer/README.md  |  10 +
+ .../phase2/viewer/import_workspace.py         | 121 ++++++++++
+ .../phase2/viewer/locations.py                | 144 ++++++++++--
+ src/document_compare/phase2/viewer/outline.py | 206 ++++++++++++++----
+ .../phase2/viewer/page_render.py              |  16 +-
+ tests/phase2/test_page_render.py              |  26 ++-
+ tests/phase2/test_ui_smoke.py                 |  80 ++++++-
+ tests/phase2/test_view_api.py                 |  20 ++
+ tests/phase2/test_viewer_import_workspace.py  | 101 +++++++++
+ tests/phase2/test_viewer_locations.py         |  58 ++++-
+ tests/phase2/test_viewer_outline.py           | 142 +++++++++++-
+ 16 files changed, 998 insertions(+), 128 deletions(-)
+ create mode 100644 src/document_compare/phase2/viewer/import_workspace.py
+ create mode 100644 tests/phase2/test_viewer_import_workspace.py
+
+diff --git a/docs/contracts/view-endpoints.md b/docs/contracts/view-endpoints.md
+index 5eb1f78..41b69b4 100644
+--- a/docs/contracts/view-endpoints.md
++++ b/docs/contracts/view-endpoints.md
+@@ -47,12 +47,22 @@ Returns where one finding sits on each side.
+   `unavailable`. A location is never guessed: an element ID missing from the
+   document JSON, a missing document file or an unusable polygon degrades to
+   `page_only` or `unavailable`.
+-- `table` findings return the changed cells' polygons. A cell without a polygon
+-  falls back to the regions of elements whose `represented_by_table_id` equals
+-  the cell's `source_table_id`, limited to the cell's `primary_page`; if none,
+-  `page_only`.
+-- `review` records carry no element reference, so both sides are `unavailable`
+-  (text only) and `change_type` is `null`.
++- Every region carries an additive `role`: `element` (change and review
++  elements), `table` (the whole table: bounding regions of the table element,
++  found by `represented_by_table_id` or the side's `source_table_ids`) or `cell`.
++- `table` findings return one `table` region per table-element region plus one
++  `cell` region per changed cell (`classification` not `UNCHANGED`, side has a cell
++  with a polygon; inches normalized like any polygon). If nothing resolves but a
++  changed cell names a page, the side is `page_only`.
++- `review` records resolve their regions from `evidence.old_element_ids` /
++  `new_element_ids`. When the evidence names no element at all, the elements of the
++  linked changes are used (a change is linked when named in `evidence.change_ids` or
++  when its `source_candidate_id` equals the record's). `location` is
++  `polygon`/`page_only`, and `unavailable` only when nothing resolves.
++  `change_type` is `null`.
++- Top level also carries `needs_review` (the record's `resolution.status` is
++  `review`, a review record, or a review record is linked to the change) and
++  `review_reason` (plain words, `null` when none is recorded).
+ 
+ ## `GET /jobs/{job_id}/view/outline`
+ 
+@@ -69,12 +79,15 @@ in it. Same job rules as above (404 unknown job, 409 `not_ready`).
+      "items": [{"kind": "change", "record_id": "CHANGE-000001", "change_type": "MODIFIED",
+                 "label": "first 90 characters of the change text...",
+                 "page_old": 3, "page_new": 3, "context_old": false, "context_new": false,
+-                "section_path": ["Section 4"]}]}
++                "section_path": ["Section 4"],
++                "needs_review": false, "review_reason": null, "review_ids": []}]}
+   ],
+   "unplaced": [],
+   "review": [{"kind": "review", "record_id": "REVIEW-000001", "change_type": null,
+               "label": "unresolved residual counterpart", "page_old": null, "page_new": null,
+-              "context_old": false, "context_new": false, "section_path": []}],
++              "context_old": false, "context_new": false, "section_path": [],
++              "needs_review": true, "review_reason": "Block of content moved",
++              "review_ids": ["REVIEW-000001"], "linked_to": []}],
+   "total": 4
+ }
+ ```
+@@ -102,8 +115,32 @@ in it. Same job rules as above (404 unknown job, 409 `not_ready`).
+   that exists on the missing side; if there is none (or no sections at all), the
+   other side's page clamped to the missing document's page count. It stays `null`
+   when no page can be derived. Context pages carry no highlight.
+-- `review` lists `review_queue` records (no geometry, no pages); `total` is the
+-  count of all items including review.
++- LLM opinion. Every item has `llm_opinion`: `null`, or
++  `{"outcome", "reason", "evaluator", "evidence_refs"}` copied from the record's
++  `resolution.packet_decision` (Stage 13, advisory; a linked review record's
++  decision is copied onto its change). The model's `confidence` is deliberately
++  not passed on because it is not calibrated. Stage 14 `resolution.status` stays
++  the final decision.
++- Review linking. Every item has `needs_review` (its `resolution.status` is
++  `review`, or a review record is linked to it), `review_reason` and `review_ids`.
++  Reasons: `unresolved_residual_counterpart` / `plausible_unresolved_counterpart`
++  "Possible match on the other side not confirmed"; `movement_block_review` /
++  `contiguous_structural_block_relative_order_relocation` "Block of content
++  moved"; `ambiguous_modified_pair` / `short_text_similarity_pair` "Short or
++  ambiguous change — LLM could not decide"; otherwise the case type in words.
++  A review record is linked to a change when `evidence.change_ids` names it or its
++  `source_candidate_id` equals the change's; a linked record marks those items and
++  is not an item itself. Every other review record is an item with `kind: "review"`,
++  `change_type: "REVIEW"`, placed in the section of its first new (else old)
++  element, pages from its first element on each side, label from the evidence text
++  preview or the reason; without an element it is `unplaced`.
++- Table items are labelled `Table · p.<page> · <n> cells changed`
++  (n = cells not `UNCHANGED`; omitted when 0). A table outside any section goes to
++  the nearest previous section in reading order on that side (also found through
++  `source_table_ids`); with no previous section it is `unplaced`.
++- `review` (kept for compatibility) lists ALL `review_queue` records, each with
++  `linked_to` (change IDs it is linked to). `total` counts the items in `sections`
++  and `unplaced` (standalone review items included, linked ones not twice).
+ - A missing structured artifact is not an error (`409 invalid_artifact` only for
+   unparsable JSON). Sections are an evidence-based hypothesis, not legal structure.
+ 
+@@ -116,11 +153,12 @@ Returns a PNG (`Cache-Control: no-store`) of one source-PDF page.
+ | `side` | `old` or `new`. |
+ | `page` | Page number from 1; must exist in the PDF. |
+ | `kind`, `record_id` | Optional, only together (else 422 `invalid_arguments`). Outlines the finding's regions that lie on this page. |
+-| `uncertain` | Optional boolean, default `false`. Draws the outline dashed. |
++| `uncertain` | Optional boolean, default `false`. Draws the outline dashed; also forced on when the record `needs_review`. |
+ | `scale` | Optional, default 1.5, allowed 0.5-3.0. |
+ 
+ Highlight colour follows the finding type: deleted red, added green, anything
+-else amber. Type and state are shown as text by the UI; colour is not the only
++else amber; review records are purple. `table` regions are thin outlines without
++tint, `cell` and `element` regions are tinted and outlined. Type and state are shown as text by the UI; colour is not the only
+ signal. Page rotation is handled by PyMuPDF; accuracy on real PDFs with rotation
+ or crop boxes is not verified.
+ 
+diff --git a/docs/operations/compare-frontend-migration.md b/docs/operations/compare-frontend-migration.md
+index eacd94a..99d4140 100644
+--- a/docs/operations/compare-frontend-migration.md
++++ b/docs/operations/compare-frontend-migration.md
+@@ -19,7 +19,7 @@ current backend.
+ New, self-contained (copy as-is):
+ 
+ - `src/document_compare/phase2/viewer/` — `locations.py` (finding → page +
+-  normalized polygons), `outline.py` (section tree with change counts and
++  normalized polygons), `import_workspace.py` (saved workspace → job, one command), `outline.py` (section tree with change counts and
+   section-context pages), `page_render.py` (PyMuPDF page PNG + highlight),
+   `synthetic.py` (offline demo job seeder), `README.md`.
+ - `src/document_compare/phase2/ui/` — Streamlit app: `app.py` (sidebar tabs
+@@ -28,7 +28,7 @@ New, self-contained (copy as-is):
+   HTTP client of the API), `README.md`.
+ - `.streamlit/config.toml` — loopback bind, headless, no telemetry, 50 MB upload.
+ - Tests: `tests/phase2/test_viewer_synthetic.py`, `test_viewer_locations.py`,
+-  `test_viewer_outline.py`, `test_page_render.py`, `test_view_api.py`,
++  `test_viewer_outline.py`, `test_viewer_import_workspace.py`, `test_page_render.py`, `test_view_api.py`,
+   `test_ui_client.py`, `test_ui_smoke.py`, `ui_stub.py`.
+ - Docs: `docs/contracts/view-endpoints.md`, this file.
+ 
+@@ -107,7 +107,7 @@ reader), `{old,new}_document.json` (polygons), `{old,new}_document_structured.js
+    python -m unittest discover -s tests
+    ```
+ 
+-   Off-site baseline: phase2 278 OK; full suite 966 with 7 failures that are
++   Off-site baseline: phase2 304 OK; full suite 992 with 7 failures that are
+    environment-only (no git, missing hub SDK, checksums of the copy). On the work
+    laptop those 7 should pass; any new failure is a migration defect.
+ 7. Manual check, loopback only:
+@@ -129,6 +129,17 @@ reader), `{old,new}_document.json` (polygons), `{old,new}_document_structured.js
+      highlight); ADDED mirrored in green; both pages the same size;
+    - Previous / Next side by side under the pages.
+ 
++## Opening a real saved workspace (no rerun, no provider call)
++
++```bash
++python -m document_compare.phase2.viewer.import_workspace --workspace workspace/EBA_STEP2 --old "input/OLD.pdf" --new "input/NEW.pdf"
++```
++
++Run without arguments to be asked for the paths. It copies the workspace's
++`output/` and the two PDFs (same OLD/NEW orientation as that run) into a new
++`workspace/jobs/<id>/`, prints the ID, and never modifies the workspace. Open the
++ID in the UI's "Open job" tab. Delete the job folder when done.
++
+ ## Not verified off-site — do these on the work laptop
+ 
+ - Highlight placement on **real** PDFs (rotated pages, crop boxes, scanned
+@@ -147,10 +158,24 @@ reader), `{old,new}_document.json` (polygons), `{old,new}_document_structured.js
+ 
+ ## Deliberate UI decisions (from user review, 2026-11-13)
+ 
+-- Uncertain / supported counts, the State filter, the limitations text and the
+-  "Flagged for review" group are hidden in the UI. The API and reader still
+-  return them; nothing was removed from contracts.
++- Uncertain / supported counts, the State filter and the limitations text are
++  hidden in the UI. The API and reader still return them; nothing was removed
++  from contracts.
++- Review items ARE shown (user decision, later the same day): items whose
++  `resolution.status` is `review` get a purple "Review" tag and a plain reason;
++  review-queue records linked to a change mark that change; standalone records
++  (e.g. moved blocks) are their own tree items, highlighted purple dashed from
++  their evidence element IDs. "Needs review N" chip and "Needs review only"
++  filter. `/view/locations` now returns polygons for review records (it used to
++  return `unavailable`).
++- Tables highlight only changed cells (`cell_changes`), with a thin outline of
++  the whole table; labelled "Table · p.N · N cells changed".
++- LLM opinion (advisory) box: shown only for items with
++  `resolution.packet_decision` — outcome, reason, evaluator, element IDs. The
++  confidence number is deliberately not shown (not calibrated). Check it with a
++  real Stage 13 run; off-site only the mock evaluator was seen.
+ - The text/details block under the pages is removed; only the change ID remains.
++- Agent activity log under the chat: discussed, deferred.
+ 
+ ## Boundaries
+ 
+diff --git a/src/document_compare/phase2/api/service.py b/src/document_compare/phase2/api/service.py
+index 8c9b3c1..5f5f7fa 100644
+--- a/src/document_compare/phase2/api/service.py
++++ b/src/document_compare/phase2/api/service.py
+@@ -551,20 +551,24 @@ def view_page_png(
+     if (kind is None) != (record_id is None):
+         raise _reader_http(reader.ReaderError("invalid_arguments", "kind and record_id must be given together"))
+     polygons: list[list[float]] = []
++    roles: list[str] = []
+     style = "modified"
+     if kind is not None and record_id is not None:
+         try:
+             located = resolve_locations(_job_dir(job_id) / "output", canonical, kind, record_id)
+         except reader.ReaderError as exc:
+             raise _reader_http(exc) from exc
+-        style = style_for(str(located.get("change_type") or ""), side)
++        style = "review" if kind == "review" else style_for(str(located.get("change_type") or ""), side)
++        uncertain = uncertain or bool(located.get("needs_review"))
+         regions = ((located.get("sides") or {}).get(side) or {}).get("regions") or []
+-        polygons = [r["polygon"] for r in regions if r.get("page_number") == page]
++        on_page = [r for r in regions if r.get("page_number") == page]
++        polygons = [r["polygon"] for r in on_page]
++        roles = [r.get("role") or "element" for r in on_page]
+     pdf_path = _job_dir(job_id) / "input" / "document" / f"{side}.pdf"
+     if not pdf_path.is_file():
+         raise _coded(404, "source_pdf_unavailable", "The source PDF for this side is not available.")
+     try:
+-        png = render_page(pdf_path, page, polygons, style=style, uncertain=uncertain, scale=scale)
++        png = render_page(pdf_path, page, polygons, style=style, uncertain=uncertain, scale=scale, roles=roles)
+     except ValueError as exc:
+         raise _coded(422, "invalid_arguments", "page or scale is outside the allowed range.") from exc
+     except (RuntimeError, OSError) as exc:  # pymupdf.FileDataError and friends: stored PDF is unreadable
+diff --git a/src/document_compare/phase2/ui/README.md b/src/document_compare/phase2/ui/README.md
+index bff94a7..392a7ba 100644
+--- a/src/document_compare/phase2/ui/README.md
++++ b/src/document_compare/phase2/ui/README.md
+@@ -20,9 +20,12 @@ as the title root with every other top-level section as its child; the root star
+ An "Order" radio above the tree switches sibling order between "Document order" (default;
+ a caption notes when section numbers are not ascending) and "Section number" (natural sort
+ by the first integer in the title, unnumbered siblings after, relative order kept).
+-Filters are Type, Kind and a case-insensitive Search over item labels and section titles;
+-they apply client-side, chips show unfiltered totals, and Previous/Next follow the
+-filtered set. Review-queue items are returned by the API but not shown in the UI.
++Filters are Type (including Review), Kind, a case-insensitive Search over item labels and
++section titles, and a "Needs review only" checkbox; they apply client-side, chips show
++unfiltered totals (including "Needs review N"), and Previous/Next follow the filtered set.
++Items flagged for review show a purple "Review" tag after the type dot and a
++`Needs review - <reason>` line under the breadcrumb; review records that match no change
++are tree items of their own (purple dot). Their page highlights are purple and dashed.
+ Opening a job or selecting an item expands the path to the selected item; other sections
+ stay collapsed. When a finding exists on one side only, the other side shows the page of
+ the same section ("section context", no highlight) from the outline's `context_old` /
+diff --git a/src/document_compare/phase2/ui/review.py b/src/document_compare/phase2/ui/review.py
+index 2aa9d4c..901fe4f 100644
+--- a/src/document_compare/phase2/ui/review.py
++++ b/src/document_compare/phase2/ui/review.py
+@@ -16,10 +16,12 @@ import streamlit as st
+ 
+ from document_compare.phase2.ui.api_client import ApiError
+ 
+-TYPE_OPTIONS = {"All": "all", "Added": "ADDED", "Deleted": "DELETED", "Modified": "MODIFIED"}
++TYPE_OPTIONS = {"All": "all", "Added": "ADDED", "Deleted": "DELETED", "Modified": "MODIFIED", "Review": "REVIEW"}
+ KIND_OPTIONS = {"All": "all", "Change": "change", "Table": "table"}
+-TAGS = {"ADDED": ":green[ADDED]", "DELETED": ":red[DELETED]", "MODIFIED": ":orange[MODIFIED]"}
+-LEGEND = "Red = deleted, green = added, amber = modified (dashed outline = uncertain match)."
++TAGS = {"ADDED": ":green[ADDED]", "DELETED": ":red[DELETED]", "MODIFIED": ":orange[MODIFIED]",
++        "REVIEW": ":violet[REVIEW]"}
++LEGEND = ("Red = deleted, green = added, amber = modified, purple dashed = needs review "
++          "(dashed outline = uncertain match).")
+ TREE_CSS = (
+     "<style>"
+     # one-line rows: the row is a keyed container holding [button | right-aligned pill]
+@@ -58,7 +60,7 @@ ORDER_OPTIONS = ["Document order", "Section number"]
+ ORDER_NOTE = "Sections appear in the order they occur in the new document."
+ _NUMBERED = re.compile(r"^\s*(section|article|chapter|part|\u00a7)?\s*\d", re.IGNORECASE)
+ _FIRST_INT = re.compile(r"\d+")
+-TAG_DOTS = {"ADDED": ":green[\u25cf]", "DELETED": ":red[\u25cf]", "MODIFIED": ":orange[\u25cf]"}
++TAG_DOTS = {"ADDED": ":green[\u25cf]", "DELETED": ":red[\u25cf]", "MODIFIED": ":orange[\u25cf]", "REVIEW": ":violet[\u25cf]"}
+ CHEVRON_CLOSED, CHEVRON_OPEN, NO_CHEVRON = "\u203a\u2002", "\u2304\u2002", "\u2003"
+ 
+ 
+@@ -124,7 +126,9 @@ def target_page(side_info: dict, other_side: dict) -> int | None:
+ # --------------------------------------------------------------------------- outline helpers (pure)
+ 
+ def bucket(item: dict) -> str:
+-    """ADDED / DELETED / MODIFIED for change and table items."""
++    """ADDED / DELETED / MODIFIED for change and table items; REVIEW for standalone review items."""
++    if item.get("kind") == "review":
++        return "REVIEW"
+     ctype = str(item.get("change_type") or "").upper()
+     if "ADDED" in ctype:
+         return "ADDED"
+@@ -142,20 +146,27 @@ def _matches(item: dict, query: str) -> bool:
+     return query in _fold(item.get("label")) or any(query in _fold(t) for t in item.get("section_path") or [])
+ 
+ 
+-def _passes(item: dict, kind: str, ctype: str) -> bool:
+-    if item.get("kind") not in ("change", "table"):  # review items are not shown in the UI
++def _is_flagged(item: dict) -> bool:
++    return bool(item.get("needs_review")) or item.get("kind") == "review"
++
++
++def _passes(item: dict, kind: str, ctype: str, flagged_only: bool = False) -> bool:
++    if item.get("kind") not in ("change", "table", "review"):
+         return False
+     if kind != "all" and item.get("kind") != kind:
+         return False
++    if flagged_only and not _is_flagged(item):
++        return False
+     return ctype == "all" or bucket(item) == ctype
+ 
+ 
+-def _filter_node(node: dict, kind: str, ctype: str, query: str, inherited: bool = False) -> dict | None:
++def _filter_node(node: dict, kind: str, ctype: str, query: str, flagged: bool = False,
++                 inherited: bool = False) -> dict | None:
+     """Filtered copy of a section; None when a search leaves nothing of it. A section whose own
+     title matches the query stays with all its Type/Kind-matching items and descendants."""
+     hit = inherited or (bool(query) and query in _fold(node.get("title")))
+-    items = [i for i in node.get("items") or [] if _passes(i, kind, ctype) and (not query or hit or _matches(i, query))]
+-    kids = (_filter_node(c, kind, ctype, query, hit) for c in node.get("children") or [])
++    items = [i for i in node.get("items") or [] if _passes(i, kind, ctype, flagged) and (not query or hit or _matches(i, query))]
++    kids = (_filter_node(c, kind, ctype, query, flagged, hit) for c in node.get("children") or [])
+     children = [c for c in kids if c]
+     if query and not hit and not items and not children:
+         return None
+@@ -163,15 +174,17 @@ def _filter_node(node: dict, kind: str, ctype: str, query: str, inherited: bool
+                 change_count=len(items) + sum(c["change_count"] for c in children))
+ 
+ 
+-def filter_outline(outline: dict, kind: str = "all", ctype: str = "all", query: str = "") -> dict:
+-    """Client-side Type/Kind/Search filter; counts are recomputed so they match what is shown.
++def filter_outline(outline: dict, kind: str = "all", ctype: str = "all", query: str = "",
++                   flagged_only: bool = False) -> dict:
++    """Client-side Type/Kind/Search/Needs-review filter; counts are recomputed so they match what is shown.
+ 
+-    An item matches a query through its label or any title on its section path. Review items
+-    are never part of the filtered tree (the API still returns them)."""
++    An item matches a query through its label or any title on its section path. Standalone review
++    items live in the tree and unplaced list; the compatibility ``review`` list is never shown."""
+     query = _fold(query)
+-    sections = [n for n in (_filter_node(n, kind, ctype, query) for n in outline.get("sections") or []) if n]
++    sections = [n for n in (_filter_node(n, kind, ctype, query, flagged_only) for n in outline.get("sections") or [])
++                if n]
+     unplaced = [i for i in outline.get("unplaced") or []
+-                if _passes(i, kind, ctype) and (not query or _matches(i, query))]
++                if _passes(i, kind, ctype, flagged_only) and (not query or _matches(i, query))]
+     return {"sections": sections, "unplaced": unplaced}
+ 
+ 
+@@ -235,6 +248,7 @@ def chip_counts(outline: dict) -> dict[str, int]:
+         "Added": sum(1 for i in items if bucket(i) == "ADDED"),
+         "Deleted": sum(1 for i in items if bucket(i) == "DELETED"),
+         "Modified": sum(1 for i in items if bucket(i) == "MODIFIED"),
++        "Needs review": sum(1 for i in flatten(outline) if _is_flagged(i)),
+     }
+ 
+ 
+@@ -293,16 +307,18 @@ def _header(status: dict, job_id: str, outline: dict) -> None:
+ 
+ 
+ def _chips(counts: dict[str, int]) -> None:
+-    colors = {"Changes": "blue", "Tables": "violet", "Added": "green", "Deleted": "red", "Modified": "orange"}
++    colors = {"Changes": "blue", "Tables": "gray", "Added": "green", "Deleted": "red", "Modified": "orange",
++              "Needs review": "violet"}
+     st.markdown(" ".join(f":{colors[k]}-badge[{k} {v}]" for k, v in counts.items()))
+ 
+ 
+-def _filters() -> tuple[str, str, str]:
+-    c1, c2, c3, _ = st.columns([1, 1, 2, 1])
++def _filters() -> tuple[str, str, str, bool]:
++    c1, c2, c3, c4 = st.columns([1, 1, 2, 1], vertical_alignment="bottom")
+     ctype = c1.selectbox("Type", list(TYPE_OPTIONS), key="f_type")
+     kind = c2.selectbox("Kind", list(KIND_OPTIONS), key="f_kind")
+     query = c3.text_input("Search", key="f_search", placeholder="Search changes or sections")
+-    return KIND_OPTIONS[kind], TYPE_OPTIONS[ctype], query
++    flagged = c4.checkbox("Needs review only", key="f_needs_review", value=False)
++    return KIND_OPTIONS[kind], TYPE_OPTIONS[ctype], query, flagged
+ 
+ 
+ # --------------------------------------------------------------------------- tree
+@@ -318,7 +334,8 @@ def _row(item: dict, selected: dict | None) -> None:
+     page = _item_page(item)
+     text = _plain(item.get("label") or item.get("record_id"))
+     left, right = _line(f"{item['kind']}::{item['record_id']}")
+-    left.button(f"{TAG_DOTS[bucket(item)]} {text}", key=f"pick::{item['kind']}::{item['record_id']}",
++    tag = " :violet[Review]" if _is_flagged(item) else ""
++    left.button(f"{TAG_DOTS[bucket(item)]}{tag} {text}", key=f"pick::{item['kind']}::{item['record_id']}",
+                 on_click=_select, args=(item,), help=str(item.get("label") or item.get("record_id")),
+                 type="primary" if _same(item, selected) else "secondary", **_BUTTON_FILL)
+     if page is not None:
+@@ -413,9 +430,28 @@ def _breadcrumb(item: dict) -> str:
+     return f"{where}   {TAGS[bucket(item)]}"
+ 
+ 
++def _llm_opinion(opinion: Any) -> None:
++    """Compact, advisory LLM opinion box (variant A); nothing when the LLM did not look at it."""
++    if not isinstance(opinion, dict) or not opinion.get("outcome"):
++        return
++    outcome = str(opinion["outcome"]).replace("_", " ").capitalize()
++    with st.container(border=True, key="llm_opinion"):
++        st.caption(":material/auto_awesome: LLM opinion · advisory")
++        reason = _plain(opinion.get("reason") or "No reason given.")
++        st.markdown(f":violet-badge[{_plain(outcome)}] {reason}")
++        meta = [opinion.get("evaluator") or "evaluator not recorded"]
++        refs = [r for r in opinion.get("evidence_refs") or [] if isinstance(r, str)]
++        if refs:
++            meta.append("looked at " + ", ".join(refs[:6]) + (" …" if len(refs) > 6 else ""))
++        st.caption(_plain(" · ".join(meta)))
++
++
+ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
+     kind, record_id, ck = item["kind"], item["record_id"], _key(client)
+     st.markdown(_breadcrumb(item))
++    if _is_flagged(item):
++        st.markdown(f":violet[Needs review \u2014 {_plain(item.get('review_reason') or 'reason not recorded')}]")
++    _llm_opinion(item.get("llm_opinion"))
+     st.caption(LEGEND)
+     try:
+         details = _details(client, ck, job_id, kind, record_id)
+@@ -431,7 +467,7 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
+     sides = (located or {}).get("sides") or {}
+     old_side, new_side = sides.get("old") or {}, sides.get("new") or {}
+     state = payload.get("result_state") or (payload.get("resolution") or {}).get("result_state")
+-    uncertain = state == "uncertain"
++    uncertain = state == "uncertain" or _is_flagged(item)
+     infos = {"old": old_side, "new": new_side}
+     other_of = {"old": new_side, "new": old_side}
+     targets: dict[str, int | None] = {}
+@@ -499,7 +535,7 @@ def render(client, job_id: str, status: dict | None = None) -> None:
+     st.markdown(TREE_CSS, unsafe_allow_html=True)
+     _header(status or {}, job_id, outline)
+     _chips(chip_counts(outline))
+-    kind, ctype, query = _filters()
++    kind, ctype, query, flagged = _filters()
+     left, right = st.columns([2, 3])
+     with left:
+         mode = _order_control()
+@@ -508,7 +544,7 @@ def render(client, job_id: str, status: dict | None = None) -> None:
+     if root and st.session_state.get("root_open") != (job_id, root):
+         _open_set().add(root)  # the title root starts expanded, once per job
+         st.session_state["root_open"] = (job_id, root)
+-    filtered = filter_outline(shown, kind, ctype, query)
++    filtered = filter_outline(shown, kind, ctype, query, flagged)
+     filtered["sections"] = order_sections(filtered["sections"], mode)
+     flat = flatten(filtered)
+ 
+diff --git a/src/document_compare/phase2/viewer/README.md b/src/document_compare/phase2/viewer/README.md
+index f47efb0..95445b5 100644
+--- a/src/document_compare/phase2/viewer/README.md
++++ b/src/document_compare/phase2/viewer/README.md
+@@ -14,3 +14,13 @@ network call. Phase 1 never imports this package.
+ 
+ Check: `python -m unittest tests.phase2.test_viewer_synthetic`.
+ Manual seed: `python -m document_compare.phase2.viewer.synthetic --jobs-root PATH`.
++
++Open a real saved workspace in the UI (copies its `output/` and the two source
++PDFs into a new job; the workspace is only read; asks for missing paths):
++`python -m document_compare.phase2.viewer.import_workspace --workspace workspace/EBA_STEP2 --old "input/OLD.pdf" --new "input/NEW.pdf"`.
++Check: `python -m unittest tests.phase2.test_viewer_import_workspace`.
++
++Locations and outline (`locations.py`, `outline.py`): review records are linked to
++changes through `evidence.change_ids` or `source_candidate_id`; regions carry a `role`
++(`element`, `table`, `cell`); `page_render.render_page` takes optional aligned `roles`
++(`table` = outline only). Contract: `docs/contracts/view-endpoints.md`.
+diff --git a/src/document_compare/phase2/viewer/import_workspace.py b/src/document_compare/phase2/viewer/import_workspace.py
+new file mode 100644
+index 0000000..53e7198
+--- /dev/null
++++ b/src/document_compare/phase2/viewer/import_workspace.py
+@@ -0,0 +1,121 @@
++"""Turn an existing comparison workspace into a job the browser UI can open.
++
++One command, no provider or network calls. The workspace is only read:
++its ``output/`` folder and the two source PDFs are copied into a new
++``workspace/jobs/<job_id>/`` folder and the job ID is printed.
++
++    python -m document_compare.phase2.viewer.import_workspace
++    python -m document_compare.phase2.viewer.import_workspace --workspace workspace/EBA_STEP2 \
++        --old "input/old version.pdf" --new "input/new version.pdf"
++
++Missing arguments are asked for interactively. When ``--old``/``--new`` are
++omitted, ``<workspace>/input/document/{old,new}.pdf`` is used if present.
++"""
++from __future__ import annotations
++
++import argparse
++import json
++import secrets
++import shutil
++import sys
++from datetime import datetime, timezone
++from pathlib import Path
++
++from document_compare.shared.paths import REPO_ROOT
++
++REQUIRED = (
++    "comparison_result.json",
++    "old_document.json",
++    "new_document.json",
++    "old_document_structured.json",
++    "new_document_structured.json",
++)
++
++
++class ImportError_(ValueError):
++    """A workspace or PDF that cannot be imported; the message says why."""
++
++
++def _clean(raw: str) -> Path:
++    return Path(raw.strip().strip('"').strip("'")).expanduser()
++
++
++def import_workspace(workspace: Path, old_pdf: Path, new_pdf: Path, jobs_root: Path) -> str:
++    """Copy ``workspace/output`` and both PDFs into a new done job; return its ID."""
++    workspace, old_pdf, new_pdf = Path(workspace), Path(old_pdf), Path(new_pdf)
++    output = workspace / "output"
++    if not output.is_dir():
++        raise ImportError_(f"No output folder in {workspace} (run Phase 1 for it first).")
++    missing = [name for name in REQUIRED if not (output / name).is_file()]
++    if missing:
++        raise ImportError_(f"{output} is missing: {', '.join(missing)}")
++    for label, pdf in (("old", old_pdf), ("new", new_pdf)):
++        if not pdf.is_file() or pdf.suffix.casefold() != ".pdf":
++            raise ImportError_(f"{label} PDF not found or not a .pdf: {pdf}")
++    if old_pdf.resolve() == new_pdf.resolve():
++        raise ImportError_("old and new PDF are the same file")
++
++    jobs_root = Path(jobs_root)
++    jobs_root.mkdir(parents=True, exist_ok=True)
++    while True:
++        job_id = secrets.token_hex(6)
++        job_dir = jobs_root / job_id
++        if not job_dir.exists():
++            break
++    try:
++        shutil.copytree(output, job_dir / "output")
++        document_dir = job_dir / "input" / "document"
++        document_dir.mkdir(parents=True)
++        shutil.copy2(old_pdf, document_dir / "old.pdf")
++        shutil.copy2(new_pdf, document_dir / "new.pdf")
++        status = {
++            "job_id": job_id,
++            "session_id": job_id,
++            "state": "done",
++            "stages_completed": [],
++            "created_at": datetime.now(timezone.utc).isoformat(),
++            "old_name": old_pdf.name,
++            "new_name": new_pdf.name,
++            "imported_from": workspace.name,
++        }
++        (job_dir / "job_status.json").write_text(json.dumps(status, indent=2) + "\n", encoding="utf-8")
++    except BaseException:
++        shutil.rmtree(job_dir, ignore_errors=True)
++        raise
++    return job_id
++
++
++def _ask(prompt: str, default: Path | None = None) -> Path:
++    suffix = f" [{default}]" if default else ""
++    answer = input(f"{prompt}{suffix}: ").strip()
++    if not answer and default:
++        return default
++    if not answer:
++        raise ImportError_(f"{prompt} is required")
++    return _clean(answer)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Make a browser-UI job from an existing workspace (copies, read-only).")
++    parser.add_argument("--workspace", help="workspace folder that has output/comparison_result.json")
++    parser.add_argument("--old", help="OLD source PDF used for that run")
++    parser.add_argument("--new", help="NEW source PDF used for that run")
++    parser.add_argument("--jobs-root", default=str(REPO_ROOT / "workspace" / "jobs"))
++    args = parser.parse_args(argv)
++    try:
++        workspace = _clean(args.workspace) if args.workspace else _ask("Workspace folder (e.g. workspace/EBA_STEP2)")
++        default_old = workspace / "input" / "document" / "old.pdf"
++        default_new = workspace / "input" / "document" / "new.pdf"
++        old_pdf = _clean(args.old) if args.old else _ask("OLD PDF", default_old if default_old.is_file() else None)
++        new_pdf = _clean(args.new) if args.new else _ask("NEW PDF", default_new if default_new.is_file() else None)
++        job_id = import_workspace(workspace, old_pdf, new_pdf, Path(args.jobs_root))
++    except (ImportError_, OSError) as exc:
++        print(f"Not imported: {exc}", file=sys.stderr)
++        return 1
++    print(f"Created job {job_id} from {workspace.name}. Open it in the UI (Open job tab):")
++    print(job_id)
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/src/document_compare/phase2/viewer/locations.py b/src/document_compare/phase2/viewer/locations.py
+index 4d85079..dd93e96 100644
+--- a/src/document_compare/phase2/viewer/locations.py
++++ b/src/document_compare/phase2/viewer/locations.py
+@@ -134,6 +134,63 @@ def record_side_ref(kind: str, record: dict[str, Any], side: str) -> str | None:
+     return part[key]
+ 
+ 
++_REASONS = {
++    "unresolved_residual_counterpart": "Possible match on the other side not confirmed",
++    "plausible_unresolved_counterpart": "Possible match on the other side not confirmed",
++    "movement_block_review": "Block of content moved",
++    "contiguous_structural_block_relative_order_relocation": "Block of content moved",
++    "ambiguous_modified_pair": "Short or ambiguous change \u2014 LLM could not decide",
++    "short_text_similarity_pair": "Short or ambiguous change \u2014 LLM could not decide",
++}
++
++
++def _humanize(text: Any) -> str:
++    plain = str(text).replace("_", " ").strip()
++    return plain[:1].upper() + plain[1:]
++
++
++def review_reason(record: dict[str, Any]) -> str | None:
++    """Plain-words reason a record needs review (None when the record names none)."""
++    resolution = record.get("resolution") if isinstance(record.get("resolution"), dict) else {}
++    cases = [c for c in (record.get("case_type"), resolution.get("case_type")) if isinstance(c, str) and c]
++    reasons = [r for key in (resolution, record) for r in (key.get("review_reasons") or []) if isinstance(r, str) and r]
++    for name in cases + reasons:
++        if name in _REASONS:
++            return _REASONS[name]
++    named = (cases + reasons)[:1]
++    return _humanize(named[0]) if named else None
++
++
++def needs_review_status(record: dict[str, Any]) -> bool:
++    resolution = record.get("resolution")
++    return isinstance(resolution, dict) and resolution.get("status") == "review"
++
++
++def linked_change_ids(review: dict[str, Any], changes: list[Any]) -> list[str]:
++    """Existing change IDs a review record is about: named in its evidence, or sharing its candidate ID."""
++    existing = {c["change_id"]: c for c in changes if isinstance(c, dict) and isinstance(c.get("change_id"), str)}
++    evidence = review.get("evidence") if isinstance(review.get("evidence"), dict) else {}
++    named = [i for i in evidence.get("change_ids") or [] if isinstance(i, str)] + [review.get("change_id")]
++    out = [i for i in named if isinstance(i, str) and i in existing]
++    candidate = review.get("source_candidate_id")
++    if isinstance(candidate, str) and candidate:
++        out += [cid for cid, c in existing.items() if c.get("source_candidate_id") == candidate]
++    return list(dict.fromkeys(out))
++
++
++def reviews_by_change(canonical: Any) -> dict[str, list[dict[str, Any]]]:
++    """Review records grouped under the change IDs they are linked to."""
++    canonical = canonical if isinstance(canonical, dict) else {}
++    changes = canonical.get("changes") if isinstance(canonical.get("changes"), list) else []
++    reviews = canonical.get("review_queue") if isinstance(canonical.get("review_queue"), list) else []
++    out: dict[str, list[dict[str, Any]]] = {}
++    for review in reviews:
++        if isinstance(review, dict) and isinstance(review.get("review_id"), str):
++            for cid in linked_change_ids(review, changes):
++                out.setdefault(cid, []).append(review)
++    return out
++
++
+ def _present(side: Any, id_key: str) -> bool:
+     return isinstance(side, dict) and isinstance(side.get(id_key), str) and bool(side[id_key])
+ 
+@@ -146,7 +203,7 @@ def _change_side(side: Any, doc: _Doc) -> dict[str, Any]:
+     element = doc.elements.get(side["element_id"])
+     if element is None:
+         return _side("present", "unavailable", doc)
+-    regions = _dedupe(doc.element_regions(element))
++    regions = [dict(r, role="element") for r in _dedupe(doc.element_regions(element))]
+     page = _page_of(element.get("primary_page"))
+     if page is None:
+         page = _page_of(side.get("primary_page"))
+@@ -159,18 +216,53 @@ def _change_side(side: Any, doc: _Doc) -> dict[str, Any]:
+     return _side("present", "unavailable", doc)
+ 
+ 
+-def _cell_regions(cell: dict[str, Any], doc: _Doc) -> tuple[list[dict[str, Any]], int | None]:
+-    page = _page_of(cell.get("primary_page"))
+-    direct = doc.region(page, cell.get("primary_polygon"))
+-    if direct is not None:
+-        return [direct], page
+-    table_id = cell.get("source_table_id")
+-    found: list[dict[str, Any]] = []
+-    if isinstance(table_id, str) and table_id and page is not None:
+-        for element in doc.element_list:
+-            if element.get("represented_by_table_id") == table_id:
+-                found.extend(r for r in doc.element_regions(element) if r["page_number"] == page)
+-    return _dedupe(found), page
++def _elements_side(ids: list[str], doc: _Doc) -> dict[str, Any]:
++    """One side of a review record: the union of the regions of the named elements."""
++    if not ids:
++        return _side("none", "unavailable", doc)
++    if not doc.ok:
++        return _side("present", "unavailable", doc)
++    regions: list[dict[str, Any]] = []
++    pages: list[int] = []
++    for eid in ids:
++        element = doc.elements.get(eid)
++        if element is None:
++            continue
++        found = doc.element_regions(element)
++        regions.extend(dict(r, role="element") for r in found)
++        page = _page_of(element.get("primary_page"))
++        if page is not None and page in doc.pages:
++            pages.append(page)
++    regions = _dedupe(regions)
++    if regions:
++        return _side("present", "polygon", doc, regions[0]["page_number"], regions)
++    if pages:
++        return _side("present", "page_only", doc, pages[0])
++    return _side("present", "unavailable", doc)
++
++
++def _review_ids(record: dict[str, Any], canonical: dict[str, Any]) -> dict[str, list[str]]:
++    evidence = record.get("evidence") if isinstance(record.get("evidence"), dict) else {}
++    ids = {s: [i for i in evidence.get(f"{s}_element_ids") or [] if isinstance(i, str)] for s in SIDES}
++    if any(ids.values()):
++        return ids
++    changes = canonical.get("changes") if isinstance(canonical.get("changes"), list) else []
++    wanted = set(linked_change_ids(record, changes))
++    for change in changes:
++        if isinstance(change, dict) and change.get("change_id") in wanted:
++            for side in SIDES:
++                if _present(change.get(side), "element_id"):
++                    ids[side].append(change[side]["element_id"])
++    return ids
++
++
++def _table_elements(part: dict[str, Any], doc: _Doc) -> list[dict[str, Any]]:
++    """Document elements of one side's logical table (by represented_by_table_id, else source table IDs)."""
++    wanted = {part.get("logical_table_id")} | {i for i in part.get("source_table_ids") or [] if isinstance(i, str)}
++    found = [e for e in doc.element_list if e.get("represented_by_table_id") in wanted]
++    if not found:
++        found = [doc.elements[i] for i in part.get("source_table_ids") or [] if i in doc.elements]
++    return found
+ 
+ 
+ def _table_side(record: dict[str, Any], side: str, doc: _Doc) -> dict[str, Any]:
+@@ -180,17 +272,22 @@ def _table_side(record: dict[str, Any], side: str, doc: _Doc) -> dict[str, Any]:
+         return _side("present", "unavailable", doc)
+     cells = [c for c in record.get("cell_changes") or [] if isinstance(c, dict)]
+     changed = [c for c in cells if c.get("classification") != "UNCHANGED"]
+-    regions: list[dict[str, Any]] = []
++    table_regions: list[dict[str, Any]] = []
++    for element in _table_elements(record[side], doc):
++        table_regions.extend(dict(r, role="table") for r in doc.element_regions(element))
++    cell_regions: list[dict[str, Any]] = []
+     pages: list[int] = []
+     for change in changed or cells:
+         cell = change.get(side)
+         if not isinstance(cell, dict):
+             continue
+-        found, page = _cell_regions(cell, doc)
+-        regions.extend(found)
++        page = _page_of(cell.get("primary_page"))
++        direct = doc.region(page, cell.get("primary_polygon"))
++        if direct is not None and change in changed:
++            cell_regions.append(dict(direct, role="cell"))
+         if page is not None and page in doc.pages:
+             pages.append(page)
+-    regions = _dedupe(regions)
++    regions = _dedupe(table_regions) + _dedupe(cell_regions)
+     if regions:
+         return _side("present", "polygon", doc, regions[0]["page_number"], regions)
+     if pages:
+@@ -221,6 +318,17 @@ def resolve_locations(output_dir: Path, canonical: dict, kind: str, record_id: s
+         sides = {s: _table_side(record, s, docs[s]) for s in SIDES}
+     else:
+         result["change_type"] = None
+-        sides = {s: _side("present", "unavailable", docs[s]) for s in SIDES}
++        ids = _review_ids(record, canonical)
++        sides = {s: _elements_side(ids[s], docs[s]) for s in SIDES}
+     result["sides"] = sides
++    linked = []
++    if kind == "change":
++        linked = reviews_by_change(canonical).get(record_id, [])
++    elif kind == "review":
++        linked = [record]
++    result["needs_review"] = kind == "review" or needs_review_status(record) or bool(linked)
++    reason = review_reason(record) if kind == "review" or needs_review_status(record) else None
++    for review in linked:
++        reason = reason or review_reason(review)
++    result["review_reason"] = reason if result["needs_review"] else None
+     return result
+diff --git a/src/document_compare/phase2/viewer/outline.py b/src/document_compare/phase2/viewer/outline.py
+index b2856e6..d0ca07a 100644
+--- a/src/document_compare/phase2/viewer/outline.py
++++ b/src/document_compare/phase2/viewer/outline.py
+@@ -14,7 +14,9 @@ from pathlib import Path
+ from typing import Any
+ 
+ from document_compare.phase2.reader.result_reader import ID_FIELDS, ReaderError
+-from document_compare.phase2.viewer.locations import SIDES, _CONTAINERS, _load_document, record_side_ref
++from document_compare.phase2.viewer.locations import (
++    SIDES, _CONTAINERS, _load_document, linked_change_ids, needs_review_status, record_side_ref, review_reason,
++)
+ 
+ LABEL_LIMIT = 90
+ _MAX_DOC_BYTES = 256 * 1024 * 1024
+@@ -26,6 +28,8 @@ def _norm(title: Any) -> str:
+ 
+ 
+ def _collapse(text: Any) -> str:
++    if isinstance(text, (list, tuple)):
++        text = " · ".join(_collapse(part) for part in text if _collapse(part))
+     return re.sub(r"\s+", " ", str(text or "")).strip()
+ 
+ 
+@@ -101,6 +105,30 @@ class _Side:
+             return (heading, heading) if heading is not None else None
+         return min(pages), max(pages)
+ 
++    def table_element_for(self, part: Any) -> str | None:
++        """Element of a table record's side: by logical table ID, else by its source table IDs."""
++        if not isinstance(part, dict):
++            return None
++        found = self.table_element.get(part.get("logical_table_id"))
++        for sid in part.get("source_table_ids") or []:
++            if found is None and sid in self.elements:
++                found = sid
++        return found
++
++    def previous_section(self, element_id: str | None) -> str | None:
++        """Section whose heading is the last one at or before the element in reading order."""
++        element = self.elements.get(element_id or "")
++        order = _int(element.get("reading_order")) if element else None
++        if order is None:
++            return None
++        best: tuple[int, str] | None = None
++        for section in self.sections:
++            heading = self.elements.get(section.get("heading_element_id"))
++            h_order = _int(heading.get("reading_order")) if heading else None
++            if h_order is not None and h_order <= order and (best is None or h_order >= best[0]):
++                best = (h_order, section["section_id"])
++        return best[1] if best else None
++
+     def element_for(self, kind: str, ref: str | None) -> str | None:
+         if ref is None:
+             return None
+@@ -188,20 +216,6 @@ def _table_pages(record: dict[str, Any], side: str) -> int | None:
+     return None
+ 
+ 
+-def _table_text(record: dict[str, Any], sides: tuple[str, ...]) -> str:
+-    cells = [c for c in record.get("cell_changes") or [] if isinstance(c, dict)]
+-    for change in [c for c in cells if c.get("classification") != "UNCHANGED"] + cells:
+-        for side in sides:
+-            part = change.get(side)
+-            if isinstance(part, dict) and _collapse(part.get("text")):
+-                return part["text"]
+-    for side in sides:
+-        header = (record.get(side) or {}).get("header_signature") if isinstance(record.get(side), dict) else None
+-        if isinstance(header, list) and header:
+-            return " | ".join(str(h) for h in header)
+-    return ""
+-
+-
+ def _item(kind: str, record: dict[str, Any], sides: dict[str, _Side]) -> dict[str, Any]:
+     ctype = record.get("change_type") if isinstance(record.get("change_type"), str) else None
+     item: dict[str, Any] = {
+@@ -226,25 +240,47 @@ def _item(kind: str, record: dict[str, Any], sides: dict[str, _Side]) -> dict[st
+             item[f"page_{side}"] = page
+     elif kind == "table":
+         pref = ("old", "new") if ctype and "DELETED" in ctype else ("new", "old")
+-        item["label"] = _label("Table: " + (_table_text(record, pref) or str(record.get(ID_FIELDS[kind]))))
+         for side in SIDES:
+             item[f"page_{side}"] = _table_pages(record, side)
++        page = next((item[f"page_{side}"] for side in pref if item[f"page_{side}"] is not None), None)
++        cells = [c for c in record.get("cell_changes") or [] if isinstance(c, dict)
++                 and c.get("classification") != "UNCHANGED"]
++        label = "Table" + (f" \u00b7 p.{page}" if page is not None else "")
++        if cells:
++            label += f" \u00b7 {len(cells)} cell{'s' if len(cells) != 1 else ''} changed"
++        item["label"] = label
+     else:
++        evidence = record.get("evidence") if isinstance(record.get("evidence"), dict) else {}
++        text = next((evidence.get(k) for k in ("new_text_preview", "old_text_preview") if _collapse(evidence.get(k))), "")
+         case = record.get("case_type") or record.get("source_kind") or "review item"
+-        item["label"] = _label(str(case).replace("_", " "))
++        item["label"] = _label(text or review_reason(record) or str(case).replace("_", " "))
++        item["change_type"] = None
++    resolved = needs_review_status(record) or kind == "review"
++    item["needs_review"] = resolved
++    item["review_reason"] = review_reason(record) if resolved else None
++    item["review_ids"] = [record[ID_FIELDS["review"]]] if kind == "review" else []
++    item["llm_opinion"] = llm_opinion(record)
+     return item
+ 
+ 
+-def _order(kind: str, record: dict[str, Any], sides: dict[str, _Side], pref: tuple[str, ...], index: int) -> tuple[int, int]:
+-    for side in pref:
+-        ref = record_side_ref(kind, record, side)
+-        element = sides[side].elements.get(sides[side].element_for(kind, ref) or "")
+-        order = _int(element.get("reading_order")) if element else None
+-        if order is None and kind == "change" and isinstance(record.get(side), dict):
+-            order = _int(record[side].get("reading_order"))
+-        if order is not None:
+-            return (order, index)
+-    return (_BIG, index)
++def llm_opinion(record: dict[str, Any]) -> dict[str, Any] | None:
++    """The advisory LLM decision stored on a record (Stage 13), or None.
++
++    Read from ``resolution.packet_decision``. Only outcome, reason, evaluator and the
++    element IDs it looked at are passed on; the model's confidence number is left out
++    on purpose because it is not calibrated.
++    """
++    resolution = record.get("resolution") if isinstance(record.get("resolution"), dict) else {}
++    decision = resolution.get("packet_decision")
++    if not isinstance(decision, dict) or not isinstance(decision.get("outcome"), str):
++        return None
++    refs = decision.get("evidence_refs")
++    return {
++        "outcome": decision["outcome"],
++        "reason": _collapse(decision.get("reason")) or None,
++        "evaluator": decision.get("evaluator") if isinstance(decision.get("evaluator"), str) else None,
++        "evidence_refs": [r for r in refs if isinstance(r, str)] if isinstance(refs, list) else [],
++    }
+ 
+ 
+ def _preorder(nodes: list[_Node]) -> list[_Node]:
+@@ -301,6 +337,57 @@ def _fill_context_pages(roots: list[_Node], placed: list[tuple[_Node, dict[str,
+         fill(item, None)
+ 
+ 
++def _review_element(record: dict[str, Any], side: str) -> str | None:
++    evidence = record.get("evidence") if isinstance(record.get("evidence"), dict) else {}
++    ids = [i for i in evidence.get(f"{side}_element_ids") or [] if isinstance(i, str)]
++    return ids[0] if ids else None
++
++
++def _place(kind: str, record: dict[str, Any], sides: dict[str, _Side], index: dict[tuple[str, str], _Node],
++           pref: tuple[str, ...]) -> _Node | None:
++    """Section node of a record: its own section on the preferred side, else (tables) the nearest
++    previous section in reading order."""
++    for fallback in ((False, True) if kind == "table" else (False,)):
++        for side in pref:
++            if kind == "review":
++                eid = _review_element(record, side)
++            elif kind == "table":
++                eid = sides[side].table_element_for(record.get(side))
++            else:
++                eid = sides[side].element_for(kind, record_side_ref(kind, record, side))
++            if not eid:
++                continue
++            sid = sides[side].previous_section(eid) if fallback else sides[side].by_element.get(eid)
++            node = index.get((side, sid)) if sid else None
++            if node is not None:
++                return node
++    return None
++
++
++def _order_of(kind: str, record: dict[str, Any], sides: dict[str, _Side], pref: tuple[str, ...],
++              position: int) -> tuple[int, int]:
++    for side in pref:
++        if kind == "review":
++            eid = _review_element(record, side)
++        elif kind == "table":
++            eid = sides[side].table_element_for(record.get(side))
++        else:
++            eid = sides[side].element_for(kind, record_side_ref(kind, record, side))
++        element = sides[side].elements.get(eid or "")
++        order = _int(element.get("reading_order")) if element else None
++        if order is None and kind == "change" and isinstance(record.get(side), dict):
++            order = _int(record[side].get("reading_order"))
++        if order is not None:
++            return (order, position)
++    return (_BIG, position)
++
++
++def _review_pages(item: dict[str, Any], record: dict[str, Any], sides: dict[str, _Side]) -> None:
++    for side in SIDES:
++        element = sides[side].elements.get(_review_element(record, side) or "")
++        item[f"page_{side}"] = _int(element.get("primary_page")) if element else None
++
++
+ def build_outline(output_dir: Path, canonical: dict) -> dict:
+     """Section tree (NEW document first, OLD-only sections appended) with findings placed in it."""
+     sides = {side: _Side(_load_structured(output_dir, side)) for side in SIDES}
+@@ -309,34 +396,59 @@ def build_outline(output_dir: Path, canonical: dict) -> dict:
+     placed_items: list[tuple[_Node, dict[str, Any]]] = []
+     review: list[dict[str, Any]] = []
+     canonical = canonical if isinstance(canonical, dict) else {}
++    by_id: dict[str, dict[str, Any]] = {}
++
++    def put(kind: str, record: dict[str, Any], item: dict[str, Any], position: int) -> None:
++        ctype = record.get("change_type") if isinstance(record.get("change_type"), str) else ""
++        pref = ("old", "new") if "DELETED" in ctype else ("new", "old")
++        node = _place(kind, record, sides, index, pref)
++        if node is None:
++            unplaced.append(item)
++        else:
++            item["section_path"] = list(node.path)
++            node.items.append((_order_of(kind, record, sides, pref, position), item))
++            placed_items.append((node, item))
+ 
+     for kind in ("change", "table"):
+         rows = canonical.get(_CONTAINERS[kind])
+         for position, record in enumerate(rows if isinstance(rows, list) else []):
+             if not isinstance(record, dict) or not isinstance(record.get(ID_FIELDS[kind]), str):
+                 continue
+-            ctype = record.get("change_type") if isinstance(record.get("change_type"), str) else ""
+-            pref = ("old", "new") if "DELETED" in ctype else ("new", "old")
+-            node = None
+-            for side in pref:
+-                sid = sides[side].section_of(kind, record_side_ref(kind, record, side))
+-                node = index.get((side, sid)) if sid else None
+-                if node is not None:
+-                    break
+             item = _item(kind, record, sides)
+-            if node is None:
+-                unplaced.append(item)
+-            else:
+-                item["section_path"] = list(node.path)
+-                node.items.append((_order(kind, record, sides, pref, position), item))
+-                placed_items.append((node, item))
++            by_id[record[ID_FIELDS[kind]]] = item
++            put(kind, record, item, position)
+ 
++    changes = canonical.get("changes") if isinstance(canonical.get("changes"), list) else []
+     rows = canonical.get(_CONTAINERS["review"])
+-    for record in rows if isinstance(rows, list) else []:
+-        if isinstance(record, dict) and isinstance(record.get(ID_FIELDS["review"]), str):
+-            entry = _item("review", record, sides)
+-            entry["context_old"] = entry["context_new"] = False
+-            review.append(entry)
++    for position, record in enumerate(rows if isinstance(rows, list) else []):
++        if not isinstance(record, dict) or not isinstance(record.get(ID_FIELDS["review"]), str):
++            continue
++        rid = record[ID_FIELDS["review"]]
++        linked = [cid for cid in linked_change_ids(record, changes) if cid in by_id]
++        entry = _item("review", record, sides)
++        entry["context_old"] = entry["context_new"] = False
++        entry["linked_to"] = list(linked)
++        review.append(entry)
++        if linked:
++            for cid in linked:
++                target = by_id[cid]
++                target["needs_review"] = True
++                if rid not in target["review_ids"]:
++                    target["review_ids"].append(rid)
++                target["review_reason"] = target["review_reason"] or entry["review_reason"]
++                target["llm_opinion"] = target.get("llm_opinion") or entry.get("llm_opinion")
++            continue
++        item = dict(entry, review_ids=list(entry["review_ids"]))
++        item.pop("linked_to")
++        item["change_type"] = "REVIEW"
++        _review_pages(item, record, sides)
++        put("review", record, item, position)
++
++    for item in [i for _, i in placed_items] + unplaced:
++        if item["needs_review"] and not item["review_reason"]:
++            item["review_reason"] = "Needs review"
++    for entry in review:
++        entry["review_reason"] = entry["review_reason"] or "Needs review"
+ 
+     documents = {}
+     for side in SIDES:
+@@ -350,4 +462,4 @@ def build_outline(output_dir: Path, canonical: dict) -> dict:
+     sections = [n.as_dict() for n in roots]
+     placed = sum(n["change_count"] for n in sections)
+     return {"documents": documents, "sections": sections, "unplaced": unplaced, "review": review,
+-            "total": placed + len(unplaced) + len(review)}
++            "total": placed + len(unplaced)}
+diff --git a/src/document_compare/phase2/viewer/page_render.py b/src/document_compare/phase2/viewer/page_render.py
+index 9f0b481..9726a7a 100644
+--- a/src/document_compare/phase2/viewer/page_render.py
++++ b/src/document_compare/phase2/viewer/page_render.py
+@@ -6,10 +6,12 @@ from pathlib import Path
+ 
+ import pymupdf
+ 
+-STYLES = {"deleted": (220, 38, 38), "added": (22, 163, 74), "modified": (217, 119, 6)}
++STYLES = {"deleted": (220, 38, 38), "added": (22, 163, 74), "modified": (217, 119, 6),
++          "review": (124, 58, 237)}
+ FILL_OPACITY = 0.25
+ MIN_SCALE, MAX_SCALE = 0.5, 3.0
+ MAX_PIXELS = 40_000_000
++ROLES = ("element", "cell", "table")
+ 
+ 
+ def style_for(change_type: str, side: str) -> str:
+@@ -43,6 +45,7 @@ def render_page(
+     style: str = "modified",
+     uncertain: bool = False,
+     scale: float = 1.5,
++    roles: list[str] | None = None,
+ ) -> bytes:
+     """Return PNG bytes of one page with normalized polygons highlighted.
+ 
+@@ -55,6 +58,10 @@ def render_page(
+             or not MIN_SCALE <= scale <= MAX_SCALE:
+         raise ValueError("scale must be between 0.5 and 3.0")
+     checked = [_validate_polygon(p) for p in polygons]
++    if roles is None:
++        roles = ["element"] * len(checked)
++    if len(roles) != len(checked) or any(r not in ROLES for r in roles):
++        raise ValueError("roles must align with polygons and be table, cell or element")
+     color = tuple(c / 255 for c in STYLES[style])
+     document = pymupdf.open(str(pdf_path))
+     try:
+@@ -67,16 +74,17 @@ def render_page(
+         width, height = page.cropbox.width, page.cropbox.height
+         if width * scale * height * scale > MAX_PIXELS:
+             raise ValueError("rendered page would exceed the pixel limit")
+-        for polygon in checked:
++        for polygon, role in zip(checked, roles):
+             points = [
+                 pymupdf.Point(polygon[i] * width, polygon[i + 1] * height)
+                 for i in range(0, 8, 2)
+             ]
+             shape = page.new_shape()
+             shape.draw_polyline(points + [points[0]])
++            outline_only = role == "table"  # whole-table frame: no tint, thin line
+             shape.finish(
+-                color=color, fill=color, fill_opacity=FILL_OPACITY, stroke_opacity=1.0,
+-                width=1.5, dashes="[4 3] 0" if uncertain else None, closePath=True,
++                color=color, fill=None if outline_only else color, fill_opacity=FILL_OPACITY, stroke_opacity=1.0,
++                width=1 if outline_only else 1.5, dashes="[4 3] 0" if uncertain else None, closePath=True,
+             )
+             shape.commit()
+         return page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False).tobytes("png")
+diff --git a/tests/phase2/test_page_render.py b/tests/phase2/test_page_render.py
+index 44c0bb0..f06061b 100644
+--- a/tests/phase2/test_page_render.py
++++ b/tests/phase2/test_page_render.py
+@@ -72,7 +72,8 @@ class PageRenderTests(unittest.TestCase):
+         self.assertEqual(style_for("ADDED", "new"), "added")
+         self.assertEqual(style_for("MODIFIED", "new"), "modified")
+         self.assertEqual(style_for("MOVED", "old"), "modified")
+-        self.assertEqual(set(STYLES), {"deleted", "added", "modified"})
++        self.assertEqual(set(STYLES), {"deleted", "added", "modified", "review"})
++        self.assertEqual(STYLES["review"], (124, 58, 237))
+ 
+     def test_pixel_inside_polygon_is_tinted_and_outside_is_not(self):
+         base = _png_pixmap(render_page(self.pdf, 1, []))
+@@ -88,6 +89,29 @@ class PageRenderTests(unittest.TestCase):
+         self.assertGreater(g, r)
+         self.assertEqual(hit.pixel(*outside), base.pixel(*outside))
+ 
++    def test_table_role_draws_outline_without_fill(self):
++        s = 1.5 * 72
++        base = _png_pixmap(render_page(self.pdf, 1, []))
++        table = _png_pixmap(render_page(self.pdf, 1, [POLY], roles=["table"]))
++        cell = _png_pixmap(render_page(self.pdf, 1, [POLY], roles=["cell"]))
++        inside = (int(3.0 * s), int(2.97 * s) - 1)
++        self.assertEqual(table.pixel(*inside), base.pixel(*inside))  # no tint inside a table frame
++        self.assertNotEqual(cell.pixel(*inside), base.pixel(*inside))
++        edge = (int(1.0 * s), int(2.5 * s))  # left edge of the box carries the outline
++        self.assertNotEqual(table.pixel(*edge), base.pixel(*edge))
++        self.assertEqual(_png_pixmap(render_page(self.pdf, 1, [POLY])).samples, cell.samples)  # default = element
++
++    def test_review_style_is_purple_and_roles_are_validated(self):
++        s = 1.5 * 72
++        inside = (int(3.0 * s), int(2.97 * s) - 1)
++        r, g, b = _png_pixmap(render_page(self.pdf, 1, [POLY], style="review")).pixel(*inside)[:3]
++        self.assertGreater(b, g)  # tint of (124, 58, 237) at 0.25 on white
++        self.assertGreater(r, g)
++        with self.assertRaises(ValueError):
++            render_page(self.pdf, 1, [POLY], roles=["bogus"])
++        with self.assertRaises(ValueError):
++            render_page(self.pdf, 1, [POLY], roles=[])
++
+     def test_image_size_follows_scale(self):
+         for scale in (0.5, 1.5, 3.0):
+             pix = _png_pixmap(render_page(self.pdf, 1, [POLY], scale=scale))
+diff --git a/tests/phase2/test_ui_smoke.py b/tests/phase2/test_ui_smoke.py
+index 0716919..6719bc0 100644
+--- a/tests/phase2/test_ui_smoke.py
++++ b/tests/phase2/test_ui_smoke.py
+@@ -9,7 +9,7 @@ except ImportError:  # pragma: no cover - streamlit is an optional extra
+     raise unittest.SkipTest("streamlit is not installed")
+ 
+ from document_compare.phase2.ui import review
+-from tests.phase2.ui_stub import StubClient, default_outline
++from tests.phase2.ui_stub import StubClient, default_outline, item
+ 
+ 
+ def _script(stub):
+@@ -226,7 +226,7 @@ class ReviewTests(unittest.TestCase):
+         self.assertIn("new\\_policy\\.pdf", main_text)
+         self.assertIn("4 pages", main_text)
+         self.assertIn("Job ID: job1", main_text)
+-        for chip in (":blue-badge[Changes 2]", ":violet-badge[Tables 0]", ":green-badge[Added 1]",
++        for chip in (":blue-badge[Changes 2]", ":gray-badge[Tables 0]", ":green-badge[Added 1]",
+                      ":red-badge[Deleted 0]", ":orange-badge[Modified 1]"):
+             self.assertIn(chip, main_text)
+         for gone in ("Limitations", "not legal or semantic ground truth", "Uncertain", "Supported"):
+@@ -472,6 +472,82 @@ class ReviewTests(unittest.TestCase):
+         self.assertIn("No findings in this result.", texts(at.main.info))
+ 
+ 
++def review_outline() -> dict:
++    """Default outline, plus: CHANGE-000001 flagged, and a standalone review item in Section A."""
++    outline = default_outline()
++    top = outline["sections"][0]
++    flagged = top["items"][0]
++    flagged.update(needs_review=True, review_reason="Possible match on the other side not confirmed",
++                   review_ids=["REVIEW-000001"])
++    plain = [i for n in (top, top["children"][0]) for i in n["items"] if i is not flagged]
++    for i in plain:
++        i.update(needs_review=False, review_reason=None, review_ids=[])
++    standalone = item("review", "REVIEW-000002", "REVIEW", "Moved block text", ["Section A"], 1, 3)
++    standalone.update(needs_review=True, review_reason="Block of content moved", review_ids=["REVIEW-000002"])
++    top["items"].append(standalone)
++    top["change_count"] += 1
++    return outline
++
++
++class NeedsReviewTests(unittest.TestCase):
++    def test_chip_pill_and_header_reason(self):
++        stub = StubClient(outline_value=review_outline())
++        at = open_job(make_app(stub))
++        self.assertFalse(at.exception)
++        main_text = texts(at.main.markdown) + texts(at.main.caption)
++        self.assertIn(":violet-badge[Needs review 2]", main_text)
++        self.assertIn("purple dashed = needs review", main_text)
++        labels = {b.key: b.label for b in at.main.button}
++        self.assertIn(":violet[Review]", labels["pick::change::CHANGE-000001"])
++        self.assertTrue(labels["pick::change::CHANGE-000001"].startswith(":orange["))  # type dot stays first
++        self.assertTrue(labels["pick::review::REVIEW-000002"].startswith(":violet[\u25cf] :violet[Review]"))
++        self.assertIn("Needs review \u2014 Possible match on the other side not confirmed", main_text)
++
++    def test_llm_opinion_panel_only_on_items_the_llm_saw(self):
++        outline = review_outline()
++        flagged = next(i for i in review.flatten(outline) if i["record_id"] == "CHANGE-000001")
++        flagged["llm_opinion"] = {"outcome": "UNCERTAIN", "reason": "Ambiguous pair.",
++                                  "evaluator": "mock-evaluator-v1", "evidence_refs": ["OLD-P1", "NEW-P1"]}
++        at = open_job(make_app(StubClient(outline_value=outline)))
++        self.assertFalse(at.exception)
++        self.assertEqual(at.session_state["selected"]["record_id"], "CHANGE-000001")
++        shown = texts(at.main.markdown) + texts(at.main.caption)
++        self.assertIn("LLM opinion · advisory", shown)
++        self.assertIn(":violet-badge[Uncertain] Ambiguous pair\\.", shown)
++        self.assertIn("mock-evaluator-v1 · looked at OLD-P1, NEW-P1", shown.replace("\\", ""))
++        self.assertNotIn("0.3", shown)
++        at.session_state["selected"] = {"kind": "review", "record_id": "REVIEW-000002"}
++        at.run()
++        self.assertNotIn("LLM opinion · advisory", texts(at.main.markdown) + texts(at.main.caption))
++
++    def test_needs_review_only_filter_and_review_type(self):
++        stub = StubClient(outline_value=review_outline())
++        at = open_job(make_app(stub))
++        self.assertEqual(at.main.checkbox(key="f_needs_review").label, "Needs review only")
++        self.assertFalse(at.main.checkbox(key="f_needs_review").value)
++        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001", "pick::review::REVIEW-000002"])
++        at.main.checkbox(key="f_needs_review").check()
++        at.run()
++        self.assertFalse(at.exception)
++        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001", "pick::review::REVIEW-000002"])
++        self.assertNotIn("pick::change::CHANGE-000002", [b.key for b in at.main.button])
++        at.main.selectbox(key="f_type").select("Review")  # combines: only standalone review items
++        at.run()
++        self.assertEqual(tree_keys(at), ["pick::review::REVIEW-000002"])
++        self.assertEqual(at.session_state["selected"], {"kind": "review", "record_id": "REVIEW-000002"})
++        self.assertIn("Needs review \u2014 Block of content moved", texts(at.main.markdown))
++        self.assertEqual(len(at.main.get("image")), 2)
++        calls = [c for c in stub.calls if c[0] == "page_png" and c[4] == "review"]
++        self.assertTrue(calls and all(c[6] for c in calls))  # review highlights are drawn dashed
++
++    def test_only_flagged_filter_hides_unflagged_items(self):
++        outline = review_outline()
++        flagged = review.filter_outline(outline, flagged_only=True)
++        self.assertEqual([i["record_id"] for i in review.flatten(flagged)], ["CHANGE-000001", "REVIEW-000002"])
++        self.assertEqual(review.chip_counts(outline)["Needs review"], 2)
++        self.assertEqual(review.chip_counts(outline)["Changes"], 2)  # review items are not changes
++
++
+ class ChatTests(unittest.TestCase):
+     def ask(self, stub, question="what changed?"):
+         at = open_job(make_app(stub))
+diff --git a/tests/phase2/test_view_api.py b/tests/phase2/test_view_api.py
+index 683f720..ac3542c 100644
+--- a/tests/phase2/test_view_api.py
++++ b/tests/phase2/test_view_api.py
+@@ -66,6 +66,26 @@ class ViewApiTest(_Base):
+         self.assertEqual(set(body["sections"][0]),
+                          {"section_id", "title", "side", "level", "change_count", "children", "items"})
+ 
++    def test_locations_carry_review_flags(self):
++        body = self.client.get(f"/jobs/{self.job_id}/view/locations", params=REC).json()
++        self.assertIn("needs_review", body)
++        self.assertIn("review_reason", body)
++        r = self.client.get(f"/jobs/{self.job_id}/view/locations", params={"kind": "review", "record_id": "REVIEW-000002"})
++        self.assertEqual(r.status_code, 200, r.text)
++        self.assertTrue(r.json()["needs_review"])
++        self.assertTrue(r.json()["review_reason"])
++
++    def test_page_png_for_review_record(self):
++        located = self.client.get(f"/jobs/{self.job_id}/view/locations",
++                                  params={"kind": "review", "record_id": "REVIEW-000002"}).json()
++        regions = located["sides"]["new"]["regions"]
++        self.assertTrue(regions)
++        page = regions[0]["page_number"]
++        marked = self._page(page=page, kind="review", record_id="REVIEW-000002")
++        self.assertEqual(marked.status_code, 200, marked.text)
++        self.assertTrue(marked.content.startswith(PNG))
++        self.assertNotEqual(marked.content, self._page(page=page).content)
++
+     def test_outline_unknown_job_404_and_running_409(self):
+         self.assertEqual(self.client.get("/jobs/000000000000/view/outline").status_code, 404)
+         self._set_state("running")
+diff --git a/tests/phase2/test_viewer_import_workspace.py b/tests/phase2/test_viewer_import_workspace.py
+new file mode 100644
+index 0000000..2ffd4cf
+--- /dev/null
++++ b/tests/phase2/test_viewer_import_workspace.py
+@@ -0,0 +1,101 @@
++import io
++import json
++import tempfile
++import unittest
++from contextlib import redirect_stderr, redirect_stdout
++from pathlib import Path
++from unittest import mock
++
++from document_compare.phase2.viewer import import_workspace as iw
++
++
++def _workspace(root: Path, missing: str | None = None) -> Path:
++    ws = root / "EBA_TEST"
++    (ws / "output").mkdir(parents=True)
++    for name in iw.REQUIRED:
++        if name != missing:
++            (ws / "output" / name).write_text("{}", encoding="utf-8")
++    (ws / "output" / "extra.json").write_text("{}", encoding="utf-8")
++    return ws
++
++
++def _pdf(path: Path) -> Path:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_bytes(b"%PDF-1.4 test")
++    return path
++
++
++class ImportWorkspaceTests(unittest.TestCase):
++    def setUp(self):
++        self._tmp = tempfile.TemporaryDirectory()
++        self.addCleanup(self._tmp.cleanup)
++        self.root = Path(self._tmp.name)
++        self.jobs = self.root / "jobs"
++
++    def test_creates_done_job_with_copies_and_names(self):
++        ws = _workspace(self.root)
++        old, new = _pdf(self.root / "input" / "Old Rule.pdf"), _pdf(self.root / "input" / "New Rule.pdf")
++        job_id = iw.import_workspace(ws, old, new, self.jobs)
++        job = self.jobs / job_id
++        self.assertRegex(job_id, r"^[0-9a-f]{12}$")
++        self.assertTrue((job / "output" / "comparison_result.json").is_file())
++        self.assertTrue((job / "output" / "extra.json").is_file())
++        self.assertEqual((job / "input" / "document" / "old.pdf").read_bytes(), old.read_bytes())
++        status = json.loads((job / "job_status.json").read_text("utf-8"))
++        self.assertEqual((status["job_id"], status["state"], status["old_name"], status["new_name"]),
++                         (job_id, "done", "Old Rule.pdf", "New Rule.pdf"))
++        self.assertTrue((ws / "output" / "comparison_result.json").is_file())  # source untouched
++
++    def test_missing_artifact_is_reported_and_nothing_created(self):
++        ws = _workspace(self.root, missing="new_document_structured.json")
++        old, new = _pdf(self.root / "a.pdf"), _pdf(self.root / "b.pdf")
++        with self.assertRaisesRegex(iw.ImportError_, "new_document_structured.json"):
++            iw.import_workspace(ws, old, new, self.jobs)
++        self.assertFalse(self.jobs.exists() and any(self.jobs.iterdir()))
++
++    def test_bad_pdf_paths(self):
++        ws = _workspace(self.root)
++        old = _pdf(self.root / "a.pdf")
++        with self.assertRaisesRegex(iw.ImportError_, "new PDF"):
++            iw.import_workspace(ws, old, self.root / "nope.pdf", self.jobs)
++        with self.assertRaisesRegex(iw.ImportError_, "same file"):
++            iw.import_workspace(ws, old, old, self.jobs)
++
++    def test_no_output_folder(self):
++        (self.root / "empty").mkdir()
++        with self.assertRaisesRegex(iw.ImportError_, "No output folder"):
++            iw.import_workspace(self.root / "empty", self.root / "a.pdf", self.root / "b.pdf", self.jobs)
++
++    def test_cli_args_and_quoted_paths(self):
++        ws = _workspace(self.root)
++        old, new = _pdf(self.root / "o.pdf"), _pdf(self.root / "n.pdf")
++        out = io.StringIO()
++        with redirect_stdout(out):
++            code = iw.main(["--workspace", f'"{ws}"', "--old", str(old), "--new", str(new),
++                            "--jobs-root", str(self.jobs)])
++        self.assertEqual(code, 0)
++        job_id = out.getvalue().strip().splitlines()[-1]
++        self.assertTrue((self.jobs / job_id / "job_status.json").is_file())
++
++    def test_cli_prompts_and_uses_workspace_pdf_defaults(self):
++        ws = _workspace(self.root)
++        _pdf(ws / "input" / "document" / "old.pdf")
++        _pdf(ws / "input" / "document" / "new.pdf")
++        out = io.StringIO()
++        with mock.patch("builtins.input", side_effect=[str(ws), "", ""]), redirect_stdout(out):
++            code = iw.main(["--jobs-root", str(self.jobs)])
++        self.assertEqual(code, 0)
++        status = json.loads((self.jobs / out.getvalue().strip().splitlines()[-1] / "job_status.json").read_text("utf-8"))
++        self.assertEqual(status["old_name"], "old.pdf")
++
++    def test_cli_error_exit_code(self):
++        err = io.StringIO()
++        with redirect_stderr(err):
++            code = iw.main(["--workspace", str(self.root / "missing"), "--old", "a.pdf", "--new", "b.pdf",
++                            "--jobs-root", str(self.jobs)])
++        self.assertEqual(code, 1)
++        self.assertIn("Not imported", err.getvalue())
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/phase2/test_viewer_locations.py b/tests/phase2/test_viewer_locations.py
+index 7cdadd9..a99aa22 100644
+--- a/tests/phase2/test_viewer_locations.py
++++ b/tests/phase2/test_viewer_locations.py
+@@ -84,12 +84,48 @@ class SeededLocationTests(unittest.TestCase):
+             result = resolve_locations(self.out, canonical, "change", "CHANGE-000003")
+             self.assertEqual(result["sides"]["old"]["counterpart"], "none")
+ 
+-    def test_review_record_is_unavailable(self) -> None:
++    def test_review_record_without_any_element_is_unavailable(self) -> None:
+         canonical = {"review_queue": [{"review_id": "REVIEW-1"}]}
+         result = resolve_locations(self.out, canonical, "review", "REVIEW-1")
+         for side in ("old", "new"):
+             self.assertEqual(result["sides"][side]["location"], "unavailable")
+             self.assertEqual(result["sides"][side]["regions"], [])
++        self.assertTrue(result["needs_review"])
++
++    def test_review_record_resolves_regions_from_evidence(self) -> None:
++        change = self.canonical["changes"][0]
++        evidence = {"old_element_ids": [change["old"]["element_id"]], "new_element_ids": [change["new"]["element_id"]]}
++        canonical = {"changes": [], "review_queue": [{
++            "review_id": "REVIEW-1", "case_type": "movement_block_review", "evidence": evidence,
++            "resolution": {"status": "review", "review_reasons": []}}]}
++        result = resolve_locations(self.out, canonical, "review", "REVIEW-1")
++        for side in ("old", "new"):
++            info = result["sides"][side]
++            self.assertEqual(info["location"], "polygon")
++            self.assertTrue(info["regions"] and all(r["role"] == "element" for r in info["regions"]))
++        self.assertEqual((result["needs_review"], result["review_reason"]), (True, "Block of content moved"))
++
++    def test_review_record_with_empty_evidence_follows_linked_change(self) -> None:
++        for link in ({"change_ids": ["CHANGE-000001"]}, {"source_candidate_id": "CAND-1"}):
++            canonical = copy.deepcopy(self.canonical)
++            canonical["changes"][0]["source_candidate_id"] = "CAND-1"
++            review = {"review_id": "REVIEW-1", "case_type": "ambiguous_modified_pair", "evidence": {},
++                      "source_candidate_id": link.get("source_candidate_id")}
++            if "change_ids" in link:
++                review["evidence"] = dict(link)
++            canonical["review_queue"] = [review]
++            result = resolve_locations(self.out, canonical, "review", "REVIEW-1")
++            self.assertEqual(result["sides"]["new"]["location"], "polygon", link)
++            self.assertEqual(result["sides"]["old"]["primary_page"], 3)
++            # the change itself is flagged because the review record points at it
++            changed = resolve_locations(self.out, canonical, "change", "CHANGE-000001")
++            self.assertTrue(changed["needs_review"])
++            self.assertEqual(changed["review_reason"], "Short or ambiguous change \u2014 LLM could not decide")
++
++    def test_unflagged_change_has_no_review_fields_set(self) -> None:
++        result = resolve_locations(self.out, self.canonical, "change", "CHANGE-000003")
++        self.assertIn("needs_review", result)
++        self.assertIn("review_reason", result)
+ 
+     def test_unknown_record_is_not_found(self) -> None:
+         with self.assertRaises(ReaderError) as ctx:
+@@ -227,7 +263,7 @@ class TableLocationTests(unittest.TestCase):
+         result = resolve_locations(self.out, self.canonical, "table", self.table_id)
+         info = result["sides"]["old"]
+         self.assertEqual(info["location"], "polygon")
+-        self.assertEqual([r["page_number"] for r in info["regions"]], [3])
++        self.assertEqual([(r["page_number"], r["role"]) for r in info["regions"]], [(3, "table"), (2, "table")])
+         self.assertEqual(result["sides"]["new"]["location"], "page_only")
+ 
+     def test_cell_polygon_is_used_when_present(self) -> None:
+@@ -237,6 +273,24 @@ class TableLocationTests(unittest.TestCase):
+         self.assertEqual(info["location"], "polygon")
+         self.assertEqual(info["regions"][0]["polygon"], [0.1, 0.1, 0.5, 0.1, 0.5, 0.2, 0.1, 0.2])
+ 
++    def test_table_region_plus_cell_regions_only_for_changed_cells(self) -> None:
++        table = self.canonical["table_changes"][0]
++        table["cell_changes"] = [
++            {"classification": "UNCHANGED", "old": {"primary_page": 3, "primary_polygon": [1, 1, 2, 1, 2, 2, 1, 2]},
++             "new": None},
++            {"classification": "MODIFIED", "old": {"primary_page": 3, "primary_polygon": [1, 2, 5, 2, 5, 4, 1, 4]},
++             "new": {"primary_page": 3, "primary_polygon": [1, 2, 5, 2, 5, 4, 1, 4]}},
++            {"classification": "ADDED", "old": None, "new": {"primary_page": 3, "primary_polygon": [6, 2, 9, 2, 9, 4, 6, 4]}},
++        ]
++        old = [_element("OLD-TBL", [_rect(3, 1, 2, 9, 10)], 3, table_id="OLD-T1")]
++        self._docs(old, [])
++        result = resolve_locations(self.out, self.canonical, "table", self.table_id)
++        self.assertEqual([r["role"] for r in result["sides"]["old"]["regions"]], ["table", "cell"])
++        # new side has no table element: cells only (ADDED has a new cell, UNCHANGED has none on that side)
++        self.assertEqual([r["role"] for r in result["sides"]["new"]["regions"]], ["cell", "cell"][:2])
++        self.assertEqual(result["sides"]["old"]["regions"][1]["polygon"], [0.1, 0.1, 0.5, 0.1, 0.5, 0.2, 0.1, 0.2])
++        self.assertFalse(result["needs_review"])
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/tests/phase2/test_viewer_outline.py b/tests/phase2/test_viewer_outline.py
+index eaf3277..d0ccd06 100644
+--- a/tests/phase2/test_viewer_outline.py
++++ b/tests/phase2/test_viewer_outline.py
+@@ -65,6 +65,7 @@ class SeededJobTests(unittest.TestCase):
+     def test_every_change_and_table_appears_exactly_once(self):
+         placed = [i["record_id"] for n in _walk(self.outline["sections"]) for i in n["items"]]
+         placed += [i["record_id"] for i in self.outline["unplaced"]]
++        placed = [i for i in placed if not i.startswith("REVIEW-")]  # standalone review items are extra
+         expected = [c["change_id"] for c in self.canonical["changes"]] + \
+                    [t["table_change_id"] for t in self.canonical["table_changes"]]
+         self.assertTrue(expected)
+@@ -75,14 +76,21 @@ class SeededJobTests(unittest.TestCase):
+         self.assertEqual(ids, [r["review_id"] for r in self.canonical["review_queue"]])
+         self.assertTrue(ids)
+         self.assertTrue(all(i["kind"] == "review" and i["label"] for i in self.outline["review"]))
++        standalone = [i["record_id"] for n in _walk(self.outline["sections"]) for i in n["items"]
++                      if i["kind"] == "review"] + [i["record_id"] for i in self.outline["unplaced"]
++                                                   if i["kind"] == "review"]
++        self.assertTrue(all(i["linked_to"] is not None for i in self.outline["review"]))
++        self.assertEqual(sorted(standalone), sorted(i["record_id"] for i in self.outline["review"]
++                                                    if not i["linked_to"]))
+         self.assertEqual(self.outline["total"], len(self.canonical["changes"]) + len(self.canonical["table_changes"])
+-                         + len(ids))
++                         + len(standalone))
+ 
+     def test_documents_pages_and_item_shape(self):
+         self.assertEqual(self.outline["documents"], {"old": {"page_count": 3}, "new": {"page_count": 3}})
+         item = next(i for n in _walk(self.outline["sections"]) for i in n["items"])
+         self.assertEqual(set(item), {"kind", "record_id", "change_type", "label", "page_old", "page_new",
+-                                    "context_old", "context_new", "section_path"})
++                                    "context_old", "context_new", "section_path", "needs_review", "review_reason",
++                                    "review_ids", "llm_opinion"})
+         self.assertTrue(item["section_path"])
+         self.assertEqual([n["side"] for n in self.outline["sections"]], ["new"] * len(self.outline["sections"]))
+ 
+@@ -107,11 +115,132 @@ class SeededJobTests(unittest.TestCase):
+         with tempfile.TemporaryDirectory() as tmp:
+             result = build_outline(Path(tmp), self.canonical)
+         self.assertEqual(result["sections"], [])
+-        self.assertEqual(len(result["unplaced"]), len(self.canonical["changes"]))
++        self.assertEqual(len([i for i in result["unplaced"] if i["kind"] == "change"]), len(self.canonical["changes"]))
+         self.assertEqual(len(result["review"]), len(self.canonical["review_queue"]))
+         self.assertEqual(result["documents"], {"old": {"page_count": None}, "new": {"page_count": None}})
+ 
+ 
++def _review(rid, case="unresolved_residual_counterpart", reasons=(), **evidence):
++    return {"review_id": rid, "case_type": case, "source_candidate_id": evidence.pop("source_candidate_id", None),
++            "resolution": {"status": "review", "case_type": case, "review_reasons": list(reasons)},
++            "evidence": evidence}
++
++
++class ReviewLinkTests(unittest.TestCase):
++    def setUp(self):
++        self._tmp = tempfile.TemporaryDirectory()
++        self.addCleanup(self._tmp.cleanup)
++        self.out = Path(self._tmp.name)
++
++    def _elements(self):
++        return [{"element_id": e, "primary_page": p, "reading_order": o}
++                for e, p, o in (("H1", 1, 1), ("E1", 1, 2), ("E2", 2, 3), ("H2", 2, 4), ("E3", 3, 5),
++                                ("T1", 3, 6), ("M1", 2, 7), ("M2", 3, 8))]
++
++    def _write_both(self):
++        sections = [dict(_section("S1", "First"), heading_element_id="H1"),
++                    dict(_section("S2", "Second"), heading_element_id="H2")]
++        membership = {"E1": "S1", "E2": "S1", "E3": "S2", "M1": "S1", "M2": "S1"}
++        for side in ("old", "new"):
++            data = _structured([], membership, self._elements(), page_count=3)
++            data["document"]["structure_evidence"]["sections"] = sections
++            _write(self.out, side, data)
++
++    def _canonical(self):
++        c1, c2, c3 = _change("C1", "DELETED", old="E1"), _change("C2", "ADDED", new="E2"), _change("C3", "MODIFIED", old="E3", new="E3")
++        c3["source_candidate_id"] = "MOD-REVIEW-1"
++        for c in (c1, c2):
++            c["resolution"] = {"status": "review", "case_type": "unresolved_residual_counterpart",
++                               "review_reasons": ["plausible_unresolved_counterpart"]}
++        c3["resolution"] = {"status": "accepted", "route": "SPECIAL_CASE_LLM_OPTIONAL"}
++        table = {"table_change_id": "T1", "change_type": "TABLE_MODIFIED",
++                 "old": {"logical_table_id": "OLD-LT", "source_table_ids": ["T1"]},
++                 "new": {"logical_table_id": "NEW-LT", "source_table_ids": ["T1"]},
++                 "cell_changes": [{"classification": "UNCHANGED", "old": {"primary_page": 3}, "new": {"primary_page": 3}},
++                                  {"classification": "MODIFIED", "old": {"primary_page": 3}, "new": {"primary_page": 3}},
++                                  {"classification": "ADDED", "old": None, "new": {"primary_page": 3}}]}
++        return {"changes": [c1, c2, c3], "table_changes": [table], "review_queue": [
++            _review("R1", change_ids=["C1", "C2"], old_element_ids=["E1"], new_element_ids=["E2"]),
++            _review("R2", "movement_block_review", ["contiguous_structural_block_relative_order_relocation"],
++                    old_element_ids=["M1", "M2"], new_element_ids=["M2"], new_text_preview="Moved block text"),
++            _review("R3", "ambiguous_modified_pair", ["short_text_similarity_pair"], source_candidate_id="MOD-REVIEW-1"),
++        ]}
++
++    def _items(self, result):
++        return {i["record_id"]: (n["title"], i) for n in _walk(result["sections"]) for i in n["items"]}
++
++    def test_linked_records_mark_changes_and_are_not_items(self):
++        self._write_both()
++        result = build_outline(self.out, self._canonical())
++        items = self._items(result)
++        for cid in ("C1", "C2"):
++            item = items[cid][1]
++            self.assertTrue(item["needs_review"])
++            self.assertEqual(item["review_ids"], ["R1"])
++            self.assertEqual(item["review_reason"], "Possible match on the other side not confirmed")
++        self.assertNotIn("R1", items)
++        self.assertEqual({r["record_id"]: r["linked_to"] for r in result["review"]},
++                         {"R1": ["C1", "C2"], "R2": [], "R3": ["C3"]})
++
++    def test_candidate_id_links_ambiguous_pair_and_fills_reason(self):
++        self._write_both()
++        items = self._items(build_outline(self.out, self._canonical()))
++        item = items["C3"][1]  # status accepted, but a review record is linked through its candidate ID
++        self.assertTrue(item["needs_review"])
++        self.assertEqual(item["review_ids"], ["R3"])
++        self.assertEqual(item["review_reason"], "Short or ambiguous change \u2014 LLM could not decide")
++        self.assertNotIn("R3", items)
++        self.assertFalse(items.get("C4", (0, {"needs_review": False}))[1]["needs_review"])
++
++    def test_movement_block_is_standalone_item_in_a_section_with_pages(self):
++        self._write_both()
++        title, item = self._items(build_outline(self.out, self._canonical()))["R2"]
++        self.assertEqual((title, item["kind"], item["change_type"]), ("First", "review", "REVIEW"))
++        self.assertEqual(item["label"], "Moved block text")
++        self.assertTrue(item["needs_review"])
++        self.assertEqual(item["review_reason"], "Block of content moved")
++        self.assertEqual((item["page_old"], item["page_new"]), (2, 3))  # first element on each side
++
++    def test_llm_opinion_is_passed_without_confidence(self):
++        self._write_both()
++        canonical = self._canonical()
++        canonical["changes"][2]["resolution"]["packet_decision"] = {
++            "outcome": "UNCERTAIN", "confidence": 0.3, "reason": "Ambiguous  pair.",
++            "evaluator": "mock-evaluator-v1", "evidence_refs": ["E3", 7]}
++        items = self._items(build_outline(self.out, canonical))
++        self.assertEqual(items["C3"][1]["llm_opinion"], {
++            "outcome": "UNCERTAIN", "reason": "Ambiguous pair.", "evaluator": "mock-evaluator-v1",
++            "evidence_refs": ["E3"]})
++        self.assertIsNone(items["C1"][1]["llm_opinion"])
++
++    def test_list_text_preview_becomes_readable_label(self):
++        self._write_both()
++        canonical = self._canonical()
++        review = next(r for r in canonical["review_queue"] if r["review_id"] == "R2")
++        review["evidence"]["new_text_preview"] = ["Section 1: Purpose", "Section 2: Scope"]
++        _, item = self._items(build_outline(self.out, canonical))["R2"]
++        self.assertEqual(item["label"], "Section 1: Purpose · Section 2: Scope")
++
++    def test_table_goes_to_previous_section_and_counts_changed_cells(self):
++        self._write_both()
++        title, item = self._items(build_outline(self.out, self._canonical()))["T1"]
++        self.assertEqual(title, "Second")  # reading order 6 follows heading H2 (order 4); not in any section
++        self.assertEqual(item["label"], "Table \u00b7 p.3 \u00b7 2 cells changed")
++        self.assertFalse(item["needs_review"])
++
++    def test_table_before_any_heading_is_unplaced_and_zero_cells_label(self):
++        sections = [_section("S1", "First")]
++        elements = [{"element_id": "H1", "primary_page": 1, "reading_order": 5},
++                    {"element_id": "T1", "primary_page": 2, "reading_order": 1}]
++        data = _structured(sections, {}, elements)
++        _write(self.out, "new", data)
++        table = {"table_change_id": "T1", "change_type": "TABLE_ADDED", "old": None,
++                 "new": {"logical_table_id": "LT", "source_table_ids": ["T1"]},
++                 "cell_changes": [{"classification": "UNCHANGED", "old": None, "new": {"primary_page": 2}}]}
++        result = build_outline(self.out, {"table_changes": [table]})
++        self.assertEqual(result["unplaced"][0]["label"], "Table \u00b7 p.2")
++
++
+ class HandMadeTests(unittest.TestCase):
+     def setUp(self):
+         self._tmp = tempfile.TemporaryDirectory()
+@@ -169,9 +298,10 @@ class HandMadeTests(unittest.TestCase):
+         canonical = {"changes": [_change("C1", "ADDED", new="NOPE"), _change("C2", "ADDED", new=None)],
+                      "review_queue": [{"review_id": "R1", "case_type": "unresolved_residual_counterpart"}]}
+         result = build_outline(self.out, canonical)
+-        self.assertEqual([i["record_id"] for i in result["unplaced"]], ["C1", "C2"])
++        self.assertEqual([i["record_id"] for i in result["unplaced"]], ["C1", "C2", "R1"])  # R1: no element, standalone
+         self.assertEqual(result["sections"][0]["change_count"], 0)
+-        self.assertEqual(result["review"][0]["label"], "unresolved residual counterpart")
++        self.assertEqual(result["review"][0]["label"], "Possible match on the other side not confirmed")
++        self.assertEqual(result["unplaced"][2]["kind"], "review")
+ 
+     def test_table_is_placed_through_its_table_element(self):
+         elements = [{"element_id": "NT", "represented_by_table_id": "NEW-T1", "reading_order": 3}]
+@@ -184,7 +314,7 @@ class HandMadeTests(unittest.TestCase):
+         result = build_outline(self.out, {"table_changes": [table]})
+         item = result["sections"][0]["items"][0]
+         self.assertEqual((item["kind"], item["record_id"], item["page_old"], item["page_new"]), ("table", "T1", 2, 2))
+-        self.assertEqual(item["label"], "Table: 5")
++        self.assertEqual(item["label"], "Table \u00b7 p.2 \u00b7 1 cell changed")
+         self.assertEqual(item["section_path"], ["Tables"])
+ 
+     def test_label_collapses_whitespace_and_truncates(self):
+-- 
+2.50.1 (Apple Git-155)
+

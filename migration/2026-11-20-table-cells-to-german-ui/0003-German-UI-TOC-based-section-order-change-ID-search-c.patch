@@ -1,0 +1,1425 @@
+From 9ad37576c784879c583fda905f0d48fe04e8d820 Mon Sep 17 00:00:00 2001
+From: Quoc Cuong An <ancuong1610@gmail.com>
+Date: Fri, 20 Nov 2026 10:30:32 +0100
+Subject: [PATCH 3/3] German UI, TOC-based section order, change-ID search,
+ copyable job ID
+
+- Section number order: document TOC rank first (toc.usable, linked
+  entries), then natural label keys (numbers, letters, MaRisk AT/BT,
+  Roman numerals), unlabelled sections keep reading order
+- All visible UI text in German via ui/texts.py; API values unchanged
+- Sidebar search also matches record IDs quoted by the chat
+- Finished jobs show the job ID with a copy button
+- Codex work order: docs/plans/2026-11-20-frontend-followups-codex.md
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/contracts/view-endpoints.md              |   4 +
+ docs/operations/phase-testing.md              |   7 +-
+ .../2026-11-20-frontend-followups-codex.md    |  77 +++++++
+ src/document_compare/phase2/ui/README.md      |  33 +--
+ src/document_compare/phase2/ui/app.py         |  54 ++---
+ src/document_compare/phase2/ui/chat.py        |  14 +-
+ src/document_compare/phase2/ui/review.py      | 201 ++++++++++++------
+ src/document_compare/phase2/ui/texts.py       | 140 ++++++++++++
+ src/document_compare/phase2/viewer/outline.py |  18 +-
+ tests/phase2/test_ui_smoke.py                 | 157 +++++++++-----
+ tests/phase2/test_viewer_outline.py           |  35 +++
+ 11 files changed, 566 insertions(+), 174 deletions(-)
+ create mode 100644 docs/plans/2026-11-20-frontend-followups-codex.md
+ create mode 100644 src/document_compare/phase2/ui/texts.py
+
+diff --git a/docs/contracts/view-endpoints.md b/docs/contracts/view-endpoints.md
+index 41b69b4..44338ab 100644
+--- a/docs/contracts/view-endpoints.md
++++ b/docs/contracts/view-endpoints.md
+@@ -99,6 +99,10 @@ in it. Same job rules as above (404 unknown job, 409 `not_ready`).
+   section becomes a node with `side: "old"` after the new ones. Nesting follows
+   `parent_section_id` only when `parent_known` is true, otherwise sections are
+   top-level. All sections are listed, including those with no findings.
++- `toc_rank` is optional. It is the zero-based position in a usable
++  `document.structure_evidence.toc.entries` list of the first entry linked to
++  the section's body heading. A merged section uses the new document's rank
++  when available and otherwise falls back to the old document's rank.
+ - `change_count` is the node's own items plus all descendants.
+ - A change or table is placed by its NEW element's section (ADDED, MODIFIED and
+   other types) or its OLD element's section (DELETED), falling back to the other
+diff --git a/docs/operations/phase-testing.md b/docs/operations/phase-testing.md
+index 66cdcbb..8bd73ff 100644
+--- a/docs/operations/phase-testing.md
++++ b/docs/operations/phase-testing.md
+@@ -236,10 +236,11 @@ python -m uvicorn document_compare.phase2.api.service:app --host 127.0.0.1 --por
+ python -m streamlit run src/document_compare/phase2/ui/app.py --server.address 127.0.0.1 --browser.gatherUsageStats false
+ ```
+ 
+-Open the printed local URL, enter the job ID under "Open existing job", select a
++Open the printed local URL, enter the job ID under "Auftrag öffnen", select a
+ modified and a deleted finding, and check that the outlined region on the old
+-and new page sits on the changed text. Chat shows "not configured" unless
+-`TIA_API_KEY` and `LLM_MODEL` are set; do not set them for this offline check.
++and new page sits on the changed text. The chat panel displays
++"Der Assistent ist auf diesem Rechner nicht konfiguriert." unless `TIA_API_KEY`
++and `LLM_MODEL` are set. Leave both unset for this offline check.
+ 
+ Automated checks (no browser, no network):
+ 
+diff --git a/docs/plans/2026-11-20-frontend-followups-codex.md b/docs/plans/2026-11-20-frontend-followups-codex.md
+new file mode 100644
+index 0000000..b2af2f1
+--- /dev/null
++++ b/docs/plans/2026-11-20-frontend-followups-codex.md
+@@ -0,0 +1,77 @@
++# Work order: compare frontend follow-ups (for Codex)
++
++Lead: Claude (reviews the final diff). Implementer: Codex. Repo: this folder.
++Read first: `AGENTS.md`, `src/document_compare/phase2/ui/README.md`,
++`src/document_compare/phase2/viewer/outline.py`, `src/document_compare/phase2/ui/review.py`.
++
++## Already done (do not redo)
++
++- Table findings already point at the changed cell: `viewer/locations.py::_table_side`
++  returns a thin `role="table"` frame plus tinted `role="cell"` regions for every
++  non-UNCHANGED cell that has `primary_polygon`. Falls back to the whole table only
++  when a cell has no polygon.
++- Search by change ID: `ui/review.py::_matches` now also matches `record_id`
++  (substring, punctuation such as `` ` . , ; : ( ) `` stripped). Root cause: the
++  sidebar filter only searched the label and section titles, never the ID the chat
++  quotes (e.g. `CHANGE-000001`).
++- Job ID is shown with a copy button above a finished result (`ui/app.py::main`).
++
++## Task A — section order from the document's own TOC (no AI)
++
++Problem: "Section number" in `ui/review.py::order_sections` sorts by the first
++integer in the title (`_FIRST_INT`). MaRisk-style documents number sections with
++letters (`AT 1`, `BT 2`, `A`, `B`, `C`, `I`, `II`…), so the order breaks.
++
++Do:
++1. In `viewer/outline.py`, when `document.structure_evidence.toc.usable` is true
++   on a side, attach a `toc_rank` (0-based position in `toc.entries`) to each
++   section that a TOC entry links to (check the entry fields in Phase 1
++   `src/document_compare/phase1/stages/s05_anchors.py` /
++   `structure/reconstruction.py`; link via `heading_element_ids` or the entry's
++   linked section/heading ID). Prefer the new side, else old. Additive field only.
++2. In `ui/review.py`, replace the integer sort with this key order:
++   a. `toc_rank` when present (the document's own TOC wins);
++   b. else a natural section key parsed from the title prefix: dotted tokens
++      where each token is a number, a Roman numeral, or letters
++      (`A` < `B` < … , `AT` / `BT` prefixes kept as letter tokens), e.g.
++      `BT 1.2.3` → `("bt", 1, 2, 3)`;
++   c. sections without any label keep document (reading) order, after labelled ones.
++   Keep the "Document order" option unchanged. Update `numbers_ascending` to use
++   the same key.
++3. Tests (`tests/phase2/test_ui_smoke.py` or a new `test_ui_order.py`): numeric
++   `2 < 10`; letters `A < B < C`; MaRisk `AT 1 < AT 4.3 < BT 1`; Roman `II < IV`;
++   TOC rank beats the title key; unlabelled keep relative order. Outline test with a
++   fixture structured JSON whose `toc.usable=true`.
++   Note: bundled fixtures have `toc.detected=false`, so build a small synthetic one.
++
++## Task B — German interface
++
++Translate every user-visible string in `ui/app.py`, `ui/review.py`, `ui/chat.py`
++(titles, buttons, captions, notices, filter labels, radio options, errors,
++empty states) to German. Display labels for change types: MODIFIED → Geändert,
++DELETED → Gelöscht, ADDED → Hinzugefügt; Old/New → Alt/Neu.
++
++Rules: translate only display text. Do not change API routes, error codes, query
++values, `change_type` values sent to the API, or session-state keys. Keep options
++mapped internally (e.g. a dict label→value) so filters still send the English
++values. Put strings in one module `ui/texts.py` (German constants) so it can be
++reviewed in one place. Update the tests' expected strings accordingly.
++
++## Constraints
++
++- Phase 1 never imports Phase 2; services stay on 127.0.0.1; no new dependencies.
++- Keep each file's line endings (`service.py`, `pyproject.toml` are CRLF).
++- No commit/push; no real provider calls.
++
++## Verify
++
++```bash
++.venv/bin/python -m unittest discover -s tests/phase2
++.venv/bin/python tools/harness/validate.py
++```
++
++Then manual: start `compare-api` and `compare-ui` (`.claude/launch.json`), open
++job `b452d37d3cfd`; check German labels, ordering toggle, ID search
++`CHANGE-000001`, and a table finding highlighting one cell.
++
++Report back: changed files, test output, anything not verified.
+diff --git a/src/document_compare/phase2/ui/README.md b/src/document_compare/phase2/ui/README.md
+index 3aa7e8f..d774fd3 100644
+--- a/src/document_compare/phase2/ui/README.md
++++ b/src/document_compare/phase2/ui/README.md
+@@ -1,34 +1,37 @@
+ # Phase 2 UI
+ 
+-Streamlit reviewer: upload two PDFs, follow progress, open a finished job, browse
++The Streamlit reviewer uses German interface labels. Upload two PDFs, follow progress, open a finished job, browse
+ its findings as a section tree, step through them with old/new page images and
+ highlights, and ask the comparison agent.
+ 
+-Read first: `app.py` (shell, sidebar tabs Compare / Open job / Comparison agent,
+-polling), then `review.py` (summary chips, Type and Kind filters, structure tree,
+-viewer), `chat.py` (agent tab), `api_client.py`.
++Read first: `app.py` (shell, sidebar tabs Vergleichen / Auftrag öffnen / Vergleichsassistent,
++polling), then `review.py` (summary chips, filters, structure tree,
++viewer), `chat.py` (agent tab), `texts.py` (German labels), and `api_client.py`.
+ 
+ Layout: the main area shows file names (bold) and page counts, one row of count chips, the
+ filters, then two columns (2:3): the Structure tree (left) and the viewer (right: breadcrumb,
+ legend, old and new page side by side at the same width, Previous/Next in displayed order).
+ The tree is a Confluence-style page tree: one-line rows (ellipsis, full title in the tooltip),
+ a fixed chevron slot, a muted count pill at the right, 16px indent with a thin guide line,
+-change rows with a coloured dot and `p.N`; "Unplaced" is a last root node when non-empty.
++change rows with a coloured dot and `S. N`; "Nicht zugeordnet" is a last root node when non-empty.
+ Display inference only (the API outline is unchanged): when the engine found no hierarchy
+-(no section has children) and the first section's title has no section number, it is shown
++(no section has children) and the first section has neither a TOC rank nor a recognizable section label, it is shown
+ as the title root with every other top-level section as its child; the root starts expanded.
+-An "Order" radio above the tree switches sibling order between "Document order" (default;
+-a caption notes when section numbers are not ascending) and "Section number" (natural sort
+-by the first integer in the title, unnumbered siblings after, relative order kept).
+-Filters are Type (including Review), Kind, a case-insensitive Search over item labels and
+-section titles, and a "Needs review only" checkbox; they apply client-side, chips show
+-unfiltered totals (including "Needs review N"), and Previous/Next follow the filtered set.
+-Items flagged for review show a purple "Review" tag after the type dot and a
+-`Needs review - <reason>` line under the breadcrumb; review records that match no change
++The order control above the tree offers "Dokumentreihenfolge" (default) and
++"Abschnittsnummer". The latter sorts each sibling group first by linked TOC rank
++from the new document or, when absent, the old document, then by natural label
++(e.g. `AT 1` before `AT 4.3` before `BT 1`). Unlabelled sections follow in
++reading order. A caption appears in document order when the alternative would
++reorder sections.
++Filters are "Änderungstyp", "Kategorie", "Suche" over item labels, IDs and section
++titles, and "Nur mit Prüfbedarf". Filters apply client-side. The badges show
++unfiltered totals, and "Zurück" and "Weiter" follow the filtered set.
++Items flagged for review show a purple "Prüfung" tag after the type dot and a
++`Prüfung erforderlich — <reason>` line under the breadcrumb. Review records that match no change
+ are tree items of their own (purple dot). Their page highlights are purple and dashed.
+ Opening a job or selecting an item expands the path to the selected item; other sections
+ stay collapsed. When a finding exists on one side only, the other side shows the page of
+-the same section ("section context", no highlight) from the outline's `context_old` /
++the same section ("Abschnittskontext", no highlight) from the outline's `context_old` /
+ `context_new` fields. The tree comes from `GET /jobs/{id}/view/outline`. The first item
+ in tree order is selected when a job opens. Sections are an evidence-based structure
+ hypothesis; the outline view is not a statement about legal meaning.
+diff --git a/src/document_compare/phase2/ui/app.py b/src/document_compare/phase2/ui/app.py
+index 4090b30..8f9ca5a 100644
+--- a/src/document_compare/phase2/ui/app.py
++++ b/src/document_compare/phase2/ui/app.py
+@@ -10,12 +10,11 @@ import uuid
+ 
+ import streamlit as st
+ 
+-from document_compare.phase2.ui import chat, review
++from document_compare.phase2.ui import chat, review, texts
+ from document_compare.phase2.ui.api_client import ApiClient, ApiError, base_from_env
+ 
+ TOTAL_STAGES = 15
+ POLL_SECONDS = 2
+-EXTRACTION_NOTICE = "Comparing sends both PDFs to the configured extraction provider."
+ 
+ 
+ @st.cache_resource
+@@ -26,8 +25,8 @@ def _cached_client(base: str) -> ApiClient:
+ def _build_client() -> ApiClient | None:
+     try:
+         return _cached_client(base_from_env())
+-    except ValueError as exc:
+-        st.error(str(exc))
++    except ValueError:
++        st.error(texts.INVALID_API_BASE)
+         return None
+ 
+ 
+@@ -43,29 +42,29 @@ def _controls(client):
+     """Sidebar tabs: compare, open job, agent. Returns the agent tab to fill later."""
+     with st.sidebar:
+         st.markdown(TAB_CSS, unsafe_allow_html=True)  # static style: tabs share the sidebar width equally
+-        compare_tab, open_tab, agent_tab = st.tabs(["Compare", "Open job", "Comparison agent"])
++        compare_tab, open_tab, agent_tab = st.tabs([texts.COMPARE, texts.OPEN_JOB, texts.AGENT])
+     with compare_tab:
+-        old = st.file_uploader("Old PDF", type=["pdf"], key="old_pdf")
+-        new = st.file_uploader("New PDF", type=["pdf"], key="new_pdf")
+-        st.caption(EXTRACTION_NOTICE)
+-        if st.button("Compare", key="compare", type="primary"):
++        old = st.file_uploader(texts.OLD_PDF, type=["pdf"], key="old_pdf")
++        new = st.file_uploader(texts.NEW_PDF, type=["pdf"], key="new_pdf")
++        st.caption(texts.EXTRACTION_NOTICE)
++        if st.button(texts.COMPARE, key="compare", type="primary"):
+             if old is None or new is None:
+-                st.warning("Select both PDFs before comparing.")
++                st.warning(texts.SELECT_BOTH_PDFS)
+             else:
+                 try:
+                     job = client.submit(old.name, old.getvalue(), new.name, new.getvalue(), uuid.uuid4().hex)
+                 except ApiError as exc:
+-                    st.error(f"Upload failed: {exc.message}")
++                    st.error(texts.UPLOAD_FAILED.format(error=texts.api_error(exc.code, exc.status)))
+                 else:
+                     _select_job(str(job.get("job_id") or ""))
+     with open_tab:
+         id_col, button_col = st.columns([3, 1], vertical_alignment="bottom")
+-        job_id = id_col.text_input("Job ID", key="open_job_id")
+-        if button_col.button("Open", key="open_job"):
++        job_id = id_col.text_input(texts.JOB_ID, key="open_job_id")
++        if button_col.button(texts.OPEN, key="open_job"):
+             if job_id.strip():
+                 _select_job(job_id.strip())
+             else:
+-                st.warning("Enter a job ID.")
++                st.warning(texts.ENTER_JOB_ID)
+     return agent_tab
+ 
+ 
+@@ -83,13 +82,13 @@ def _select_job(job_id: str) -> None:
+ def _progress(status: dict) -> None:
+     done = min(len(status.get("stages_completed") or []), TOTAL_STAGES)
+     st.progress(done / TOTAL_STAGES)
+-    st.caption(f"{done}/{TOTAL_STAGES} stages complete")
++    st.caption(texts.STAGES_COMPLETE.format(done=done, total=TOTAL_STAGES))
+ 
+ 
+ def main(client=None) -> None:
+     injected = client is not None
+-    st.set_page_config(page_title="Document compare", layout="wide")
+-    st.title("Document compare")
++    st.set_page_config(page_title=texts.TITLE, layout="wide")
++    st.title(texts.TITLE)
+     if client is None:
+         client = _build_client()
+         if client is None:
+@@ -99,25 +98,30 @@ def main(client=None) -> None:
+     job_id = st.session_state.get("job_id")
+     if not job_id:
+         with agent_tab:
+-            st.caption("Open a job to use the agent.")
+-        st.info("Upload two PDFs and press Compare, or open an existing job by ID.")
++            st.caption(texts.OPEN_FOR_AGENT)
++        st.info(texts.START_HINT)
+         return
+     try:
+         status = client.status(job_id)
+     except ApiError as exc:
+-        st.error(f"Could not read the status of job {job_id}: {exc.message}")
++        error = texts.api_error(exc.code, exc.status)
++        if exc.code == "invalid_arguments" and exc.status is None:
++            error = texts.INVALID_JOB_ID
++        elif exc.status == 404:
++            error = texts.UNKNOWN_JOB
++        st.error(texts.STATUS_FAILED.format(job_id=job_id, error=error))
+         return
+     state = str(status.get("state") or "queued")
+     if state != "done":
+         with agent_tab:
+-            st.caption("Available when the comparison is done.")
++            st.caption(texts.AGENT_PENDING)
+     if state == "failed":
+-        st.caption(f"Job ID: {job_id}")
+-        st.error(f"Job {job_id} failed. {status.get('error_tail') or 'No error text was returned.'}")
++        st.caption(texts.JOB_ID_LINE.format(job_id=job_id))
++        st.error(texts.JOB_FAILED.format(job_id=job_id, detail=status.get("error_tail") or texts.NO_ERROR_DETAIL))
+         return
+     if state != "done":
+-        st.caption(f"Job ID: {job_id}")
+-        st.write(f"Job is {state}.")
++        st.caption(texts.JOB_ID_LINE.format(job_id=job_id))
++        st.write(texts.JOB_STATE.format(state=texts.JOB_STATES.get(state, texts.UNKNOWN_JOB_STATE)))
+         _progress(status)
+         if not injected:  # tests inject a client and drive reruns themselves
+             time.sleep(POLL_SECONDS)
+diff --git a/src/document_compare/phase2/ui/chat.py b/src/document_compare/phase2/ui/chat.py
+index 0cf2088..e30c10a 100644
+--- a/src/document_compare/phase2/ui/chat.py
++++ b/src/document_compare/phase2/ui/chat.py
+@@ -3,18 +3,17 @@ from __future__ import annotations
+ 
+ import streamlit as st
+ 
++from document_compare.phase2.ui import texts
+ from document_compare.phase2.ui.api_client import ApiError
+ 
+ HISTORY_HEIGHT = 420
+-NOT_CONFIGURED = "Agent not configured on this machine."
+-PLACEHOLDER = "Ask about this comparison (sends excerpts to the model)"
+ 
+ 
+ def _ask(client, job_id: str, question: str, history: list) -> None:
+     history.append({"role": "user", "content": question})
+     st.session_state.pop("chat_error", None)
+     try:
+-        with st.spinner("Asking..."):
++        with st.spinner(texts.CHAT_PENDING):
+             reply = client.chat(job_id, question)
+     except ApiError as exc:
+         st.session_state["chat_error"] = {"code": exc.code, "message": exc.message}
+@@ -27,7 +26,7 @@ def render(client, job_id: str) -> None:
+     """Call inside the sidebar's agent tab."""
+     history = st.session_state.setdefault("chat_history", [])
+     box = st.container(height=HISTORY_HEIGHT)  # scrolls internally; the input stays below it
+-    question = st.chat_input(PLACEHOLDER, key="chat_question")
++    question = st.chat_input(texts.CHAT_HINT, key="chat_question")
+     if question and question.strip():
+         _ask(client, job_id, question.strip(), history)
+     with box:
+@@ -35,9 +34,10 @@ def render(client, job_id: str) -> None:
+             with st.chat_message(message["role"]):
+                 st.text(message["content"])
+                 if message.get("limitations"):
+-                    st.caption("Limitations: " + ", ".join(message["limitations"]))
++                    limitations = [texts.LIMITATION_LABELS.get(code, code) for code in message["limitations"]]
++                    st.caption(texts.LIMITATIONS.format(items=", ".join(limitations)))
+     error = st.session_state.get("chat_error")
+     if error and error["code"] == "chat_not_configured":
+-        st.caption(NOT_CONFIGURED)
++        st.caption(texts.AGENT_NOT_CONFIGURED)
+     elif error:
+-        st.error(error["message"])
++        st.error(texts.api_error(error["code"]))
+diff --git a/src/document_compare/phase2/ui/review.py b/src/document_compare/phase2/ui/review.py
+index a04a28b..3262685 100644
+--- a/src/document_compare/phase2/ui/review.py
++++ b/src/document_compare/phase2/ui/review.py
+@@ -7,6 +7,7 @@ no result text ever reaches it. Nothing here is logged.
+ from __future__ import annotations
+ 
+ import inspect
++import json
+ import re
+ import struct
+ import zlib
+@@ -14,14 +15,12 @@ from typing import Any
+ 
+ import streamlit as st
+ 
++from document_compare.phase2.ui import texts
+ from document_compare.phase2.ui.api_client import ApiError
+ 
+ TYPE_OPTIONS = {"All": "all", "Added": "ADDED", "Deleted": "DELETED", "Modified": "MODIFIED", "Review": "REVIEW"}
+ KIND_OPTIONS = {"All": "all", "Change": "change", "Table": "table"}
+-TAGS = {"ADDED": ":green[ADDED]", "DELETED": ":red[DELETED]", "MODIFIED": ":orange[MODIFIED]",
+-        "REVIEW": ":violet[REVIEW]"}
+-LEGEND = ("Red = deleted, green = added, amber = modified, purple dashed = needs review "
+-          "(dashed outline = uncertain match).")
++TYPE_COLORS = {"ADDED": "green", "DELETED": "red", "MODIFIED": "orange", "REVIEW": "violet"}
+ TREE_CSS = (
+     "<style>"
+     # one-line rows: the row is a keyed container holding [button | right-aligned pill]
+@@ -56,11 +55,16 @@ TREE_HEIGHT = 700
+ UNPLACED_ID = "__unplaced__"
+ _MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~$&:])")
+ _DEFAULT_PAGE = (612, 792)
+-ORDER_OPTIONS = ["Document order", "Section number"]
+-ORDER_NOTE = "Sections appear in the order they occur in the new document."
+-_NUMBERED = re.compile(r"^\s*(section|article|chapter|part|\u00a7)?\s*\d", re.IGNORECASE)
+-_FIRST_INT = re.compile(r"\d+")
+-TAG_DOTS = {"ADDED": ":green[\u25cf]", "DELETED": ":red[\u25cf]", "MODIFIED": ":orange[\u25cf]", "REVIEW": ":violet[\u25cf]"}
++ORDER_OPTIONS = list(texts.ORDER_LABELS)
++_LABEL_PREFIX = re.compile(r"^\s*(?:(?i:section|article|chapter|part|abschnitt|artikel|kapitel|teil)\s+|§\s*)?")
++_SECTION_LABEL = re.compile(
++    r"(?:(?P<namespace>[A-Z]+)\s+(?=\d))?"
++    r"(\d+|[A-Z]+(?=[.)]|$)|[IVXLCDM]+|[A-Z])"
++    r"((?:\.(?:\d+|[A-Z]+))*)(?=$|[\s.)\u2013\u2014:-])"
++)
++_ROMAN = re.compile(r"M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})")
++_ROMAN_VALUES = dict(zip("IVXLCDM", (1, 5, 10, 50, 100, 500, 1000)))
++_TABLE_LABEL = re.compile(r"Table(?: · p\.(\d+))?(?: · (\d+) cells? changed)?")
+ CHEVRON_CLOSED, CHEVRON_OPEN, NO_CHEVRON = "\u203a\u2002", "\u2304\u2002", "\u2003"
+ 
+ 
+@@ -104,7 +108,7 @@ def _show_image(data: bytes) -> None:
+         except st.errors.StreamlitAPIException:
+             st.image(data, use_container_width=True)
+     except Exception:  # undecodable bytes: degrade, never crash or log them
+-        st.warning("This page image could not be displayed.")
++        st.warning(texts.PAGE_DISPLAY_FAILED)
+ 
+ 
+ _BUTTON_FILL = ({"width": "stretch"} if "width" in inspect.signature(st.button).parameters
+@@ -142,7 +146,12 @@ def _fold(value: Any) -> str:
+ 
+ 
+ def _matches(item: dict, query: str) -> bool:
+-    """Query hits the item's label or any title on its section path."""
++    """Query hits the item's record ID (e.g. CHANGE-000001 quoted by the chat), its label or any
++    title on its section path. Punctuation a chat answer wraps around an ID is ignored."""
++    record_id = _fold(item.get("record_id"))
++    bare = query.strip(" `'\"()[].,;:")
++    if record_id and bare and bare in record_id:
++        return True
+     return query in _fold(item.get("label")) or any(query in _fold(t) for t in item.get("section_path") or [])
+ 
+ 
+@@ -188,9 +197,43 @@ def filter_outline(outline: dict, kind: str = "all", ctype: str = "all", query:
+     return {"sections": sections, "unplaced": unplaced}
+ 
+ 
+-def _section_number(node: dict) -> int | None:
+-    found = _FIRST_INT.search(str(node.get("title") or ""))
+-    return int(found.group()) if found else None
++def _section_label(node: dict) -> tuple[str | None, list[str]]:
++    title = _LABEL_PREFIX.sub("", str(node.get("title") or ""), count=1)
++    match = _SECTION_LABEL.match(title)
++    if match is None:
++        return None, []
++    namespace, head, tail = match.groups()
++    return namespace, [head, *tail.split(".")[1:]]
++
++
++def _label_token(token: str, roman_family: bool) -> tuple[int, int | str]:
++    if token.isdecimal():
++        return 0, int(token)
++    if (roman_family or len(token) > 1) and _ROMAN.fullmatch(token):
++        values = [_ROMAN_VALUES[letter] for letter in token]
++        return 0, values[-1] + sum(-a if a < b else a for a, b in zip(values, values[1:]))
++    return 1, token.casefold()
++
++
++def _section_keys(sections: list[dict]) -> list[tuple]:
++    labels = [_section_label(node) for node in sections]
++    # Single letters such as C can also be Roman numerals. Resolve them as Roman
++    # when the alphabetic heads of this sibling group all fit that convention.
++    heads = [label[0] for namespace, label in labels if not namespace and label and label[0].isalpha()]
++    roman_family = bool(heads) and all(_ROMAN.fullmatch(head) for head in heads)
++    keys = []
++    for node, (namespace, label) in zip(sections, labels):
++        rank = node.get("toc_rank")
++        if isinstance(rank, int) and not isinstance(rank, bool) and rank >= 0:
++            keys.append((0, rank))
++        elif label:
++            tokens = tuple(_label_token(token, roman_family) for token in label)
++            if namespace:
++                tokens = ((1, namespace.casefold()), *tokens)
++            keys.append((1, tokens))
++        else:
++            keys.append((2,))
++    return keys
+ 
+ 
+ def with_title_root(outline: dict) -> dict:
+@@ -201,7 +244,7 @@ def with_title_root(outline: dict) -> dict:
+     if len(sections) < 2 or any(n.get("children") for n in sections):
+         return outline
+     first = sections[0]
+-    if _NUMBERED.match(str(first.get("title") or "")):
++    if first.get("toc_rank") is not None or _section_label(first)[1]:
+         return outline
+     rest = sections[1:]
+     root = dict(first, children=list(rest),
+@@ -210,18 +253,17 @@ def with_title_root(outline: dict) -> dict:
+ 
+ 
+ def order_sections(sections: list[dict], mode: str) -> list[dict]:
+-    """Sibling order at every level. 'Section number' sorts by the first integer in the title
+-    (natural: 2 < 10); siblings without a number keep their relative order, after numbered ones."""
++    """Sort siblings by TOC rank, then natural label, then stable reading order."""
+     out = [dict(n, children=order_sections(n.get("children") or [], mode)) for n in sections]
+     if mode == "Section number":
+-        out.sort(key=lambda n: (_section_number(n) is None, _section_number(n) or 0))
++        out = [node for _, node in sorted(zip(_section_keys(out), out), key=lambda pair: pair[0])]
+     return out
+ 
+ 
+ def numbers_ascending(sections: list[dict]) -> bool:
+-    """True when, among every group of siblings, the section numbers never go down."""
+-    nums = [n for n in map(_section_number, sections) if n is not None]
+-    return nums == sorted(nums) and all(numbers_ascending(n.get("children") or []) for n in sections)
++    """True when every sibling group already follows the section ordering key."""
++    keys = _section_keys(sections)
++    return keys == sorted(keys) and all(numbers_ascending(n.get("children") or []) for n in sections)
+ 
+ 
+ def _flatten_node(node: dict) -> list[dict]:
+@@ -296,28 +338,32 @@ def _header(status: dict, job_id: str, outline: dict) -> None:
+ 
+     def line(label: str, name: str, side: str) -> str:
+         count = (docs.get(side) or {}).get("page_count")
+-        pages = f" · {count} page{'s' if count != 1 else ''}" if isinstance(count, int) else ""
++        template = texts.PAGE_COUNT_ONE if count == 1 else texts.PAGE_COUNT_MANY
++        pages = template.format(count=count) if isinstance(count, int) else ""
+         return f"{label}: **{_plain(name)}**{pages}"
+ 
+-    old = str(status.get("old_name") or "old.pdf")
+-    new = str(status.get("new_name") or "new.pdf")
++    old = line(texts.SIDE_LABELS["old"], str(status.get("old_name") or texts.OLD_PDF_NAME), "old")
++    new = line(texts.SIDE_LABELS["new"], str(status.get("new_name") or texts.NEW_PDF_NAME), "new")
+     with st.container(key="hdrline"):
+-        st.markdown(f"{line('Old', old, 'old')}   |   {line('New', new, 'new')}")
+-    st.caption(f"Job ID: {job_id}")
++        st.markdown(f"{old}   |   {new}")
++    st.caption(texts.KEEP_JOB_ID)
++    st.code(job_id, language=None)  # copy button: reopen or fetch this result later
+ 
+ 
+ def _chips(counts: dict[str, int]) -> None:
+     colors = {"Changes": "blue", "Tables": "gray", "Added": "green", "Deleted": "red", "Modified": "orange",
+               "Needs review": "violet"}
+-    st.markdown(" ".join(f":{colors[k]}-badge[{k} {v}]" for k, v in counts.items()))
++    st.markdown(" ".join(f":{colors[k]}-badge[{texts.CHIP_LABELS[k]} {v}]" for k, v in counts.items()))
+ 
+ 
+ def _filters() -> tuple[str, str, str, bool]:
+     c1, c2, c3, c4 = st.columns([1, 1, 2, 1], vertical_alignment="bottom")
+-    ctype = c1.selectbox("Type", list(TYPE_OPTIONS), key="f_type")
+-    kind = c2.selectbox("Kind", list(KIND_OPTIONS), key="f_kind")
+-    query = c3.text_input("Search", key="f_search", placeholder="Search changes or sections")
+-    flagged = c4.checkbox("Needs review only", key="f_needs_review", value=False)
++    ctype = c1.selectbox(texts.TYPE_FILTER, list(TYPE_OPTIONS), key="f_type",
++                         format_func=lambda option: texts.TYPE_LABELS[TYPE_OPTIONS[option]])
++    kind = c2.selectbox(texts.KIND_FILTER, list(KIND_OPTIONS), key="f_kind",
++                        format_func=lambda option: texts.KIND_LABELS[KIND_OPTIONS[option]])
++    query = c3.text_input(texts.SEARCH, key="f_search", placeholder=texts.SEARCH_HINT)
++    flagged = c4.checkbox(texts.FLAGGED_ONLY, key="f_needs_review", value=False)
+     return KIND_OPTIONS[kind], TYPE_OPTIONS[ctype], query, flagged
+ 
+ 
+@@ -332,14 +378,26 @@ def _line(row_key: str):
+ 
+ def _row(item: dict, selected: dict | None) -> None:
+     page = _item_page(item)
+-    text = _plain(item.get("label") or item.get("record_id"))
++    label = item.get("label") or item.get("record_id")
++    if item.get("kind") == "review":
++        label = texts.REVIEW_REASONS.get(label, label)
++    elif item.get("kind") == "table" and (match := _TABLE_LABEL.fullmatch(label)):
++        table_page, cells = match.groups()
++        parts = [texts.KIND_LABELS["table"]]
++        if table_page:
++            parts.append(texts.PAGE_SHORT.format(page=table_page))
++        if cells:
++            cell_text = texts.TABLE_CELLS_ONE if cells == "1" else texts.TABLE_CELLS_MANY
++            parts.append(cell_text.format(count=cells))
++        label = " · ".join(parts)
+     left, right = _line(f"{item['kind']}::{item['record_id']}")
+-    tag = " :violet[Review]" if _is_flagged(item) else ""
+-    left.button(f"{TAG_DOTS[bucket(item)]}{tag} {text}", key=f"pick::{item['kind']}::{item['record_id']}",
+-                on_click=_select, args=(item,), help=str(item.get("label") or item.get("record_id")),
++    tag = f" :violet[{texts.TYPE_LABELS['REVIEW']}]" if _is_flagged(item) else ""
++    left.button(f":{TYPE_COLORS[bucket(item)]}[●]{tag} {_plain(label)}",
++                key=f"pick::{item['kind']}::{item['record_id']}",
++                on_click=_select, args=(item,), help=str(label),
+                 type="primary" if _same(item, selected) else "secondary", **_BUTTON_FILL)
+     if page is not None:
+-        right.markdown(f":gray[p.{page}]")
++        right.markdown(f":gray[{texts.PAGE_SHORT.format(page=page)}]")
+ 
+ 
+ def _open_set() -> set:
+@@ -389,7 +447,7 @@ def _tree_node(node: dict, selected: dict | None, opened: set) -> None:
+     items, children = node.get("items") or [], node.get("children") or []
+     expandable = bool(items or children)
+     is_open = node["section_id"] in opened
+-    _caret_row(node["section_id"], node.get("title") or "(untitled)", node["change_count"], expandable, is_open)
++    _caret_row(node["section_id"], node.get("title") or texts.UNTITLED, node["change_count"], expandable, is_open)
+     if expandable and is_open:
+         with st.container(key=f"ind::{node['section_id']}"):
+             for item in items:
+@@ -399,23 +457,24 @@ def _tree_node(node: dict, selected: dict | None, opened: set) -> None:
+ 
+ 
+ def _order_control() -> str:
+-    return st.radio("Order", ORDER_OPTIONS, key="tree_order", horizontal=True, label_visibility="collapsed")
++    return st.radio(texts.ORDER, ORDER_OPTIONS, key="tree_order", horizontal=True,
++                    label_visibility="collapsed", format_func=texts.ORDER_LABELS.__getitem__)
+ 
+ 
+ def _tree(filtered: dict, selected: dict | None, has_sections: bool, mode: str) -> None:
+-    st.markdown("**Structure**")
++    st.markdown(f"**{texts.STRUCTURE}**")
+     if mode == ORDER_OPTIONS[0] and not numbers_ascending(filtered["sections"]):
+-        st.caption(ORDER_NOTE)
++        st.caption(texts.ORDER_NOTE)
+     opened = _open_set()
+     with st.container(height=TREE_HEIGHT):
+         with st.container(key="treebox"):
+             if not filtered["sections"] and not filtered["unplaced"]:
+-                st.caption("No matching sections or changes." if has_sections
+-                           else "No section structure was found for this job.")
++                st.caption(texts.NO_MATCHING_SECTIONS if has_sections
++                           else texts.NO_SECTION_STRUCTURE)
+             for node in filtered["sections"]:
+                 _tree_node(node, selected, opened)
+             if filtered["unplaced"]:
+-                _caret_row(UNPLACED_ID, "Unplaced", len(filtered["unplaced"]), True, UNPLACED_ID in opened)
++                _caret_row(UNPLACED_ID, texts.UNPLACED, len(filtered["unplaced"]), True, UNPLACED_ID in opened)
+                 if UNPLACED_ID in opened:
+                     with st.container(key=f"ind::{UNPLACED_ID}"):
+                         for item in filtered["unplaced"]:
+@@ -426,23 +485,24 @@ def _tree(filtered: dict, selected: dict | None, has_sections: bool, mode: str)
+ 
+ def _breadcrumb(item: dict) -> str:
+     path = item.get("section_path") or []
+-    where = " › ".join(_plain(p) for p in path) if path else "Unplaced"
+-    return f"{where}   {TAGS[bucket(item)]}"
++    where = " › ".join(_plain(p) for p in path) if path else texts.UNPLACED
++    ctype = bucket(item)
++    return f"{where}   :{TYPE_COLORS[ctype]}[{texts.TYPE_LABELS[ctype]}]"
+ 
+ 
+ def _llm_opinion(opinion: Any) -> None:
+     """Compact, advisory LLM opinion box (variant A); nothing when the LLM did not look at it."""
+     if not isinstance(opinion, dict) or not opinion.get("outcome"):
+         return
+-    outcome = str(opinion["outcome"]).replace("_", " ").capitalize()
++    outcome = texts.LLM_OUTCOMES.get(opinion["outcome"], texts.UNKNOWN_LLM_OUTCOME)
+     with st.container(border=True, key="llm_opinion"):
+-        st.caption(":material/auto_awesome: LLM opinion · advisory")
+-        reason = _plain(opinion.get("reason") or "No reason given.")
++        st.caption(f":material/auto_awesome: {texts.LLM_OPINION}")
++        reason = _plain(opinion.get("reason") or texts.NO_LLM_REASON)
+         st.markdown(f":violet-badge[{_plain(outcome)}] {reason}")
+-        meta = [opinion.get("evaluator") or "evaluator not recorded"]
++        meta = [opinion.get("evaluator") or texts.NO_EVALUATOR]
+         refs = [r for r in opinion.get("evidence_refs") or [] if isinstance(r, str)]
+         if refs:
+-            meta.append("looked at " + ", ".join(refs[:6]) + (" …" if len(refs) > 6 else ""))
++            meta.append(texts.EVIDENCE_REFS.format(refs=", ".join(refs[:6]) + (" …" if len(refs) > 6 else "")))
+         st.caption(_plain(" · ".join(meta)))
+ 
+ 
+@@ -450,19 +510,20 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
+     kind, record_id, ck = item["kind"], item["record_id"], _key(client)
+     st.markdown(_breadcrumb(item))
+     if _is_flagged(item):
+-        st.markdown(f":violet[Needs review \u2014 {_plain(item.get('review_reason') or 'reason not recorded')}]")
++        reason = texts.REVIEW_REASONS.get(item.get("review_reason"), texts.NO_REVIEW_REASON)
++        st.markdown(f":violet[{texts.REVIEW_NOTE.format(reason=_plain(reason))}]")
+     _llm_opinion(item.get("llm_opinion"))
+-    st.caption(LEGEND)
++    st.caption(texts.LEGEND)
+     try:
+         details = _details(client, ck, job_id, kind, record_id)
+     except ApiError as exc:
+-        st.error(f"Could not load details: {exc.message}")
++        st.error(texts.DETAILS_FAILED.format(error=texts.api_error(exc.code, exc.status)))
+         return
+     payload = details.get(kind) or {}
+     try:
+         located = _locations(client, ck, job_id, kind, record_id)
+     except ApiError as exc:
+-        st.warning(f"Page locations are unavailable: {exc.message}")
++        st.warning(texts.NO_LOCATIONS.format(error=texts.api_error(exc.code, exc.status)))
+         located = {}
+     sides = (located or {}).get("sides") or {}
+     old_side, new_side = sides.get("old") or {}, sides.get("new") or {}
+@@ -493,7 +554,7 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
+             else:
+                 images[side] = _page_png(client, ck, job_id, side, page, kind, record_id, uncertain)
+         except ApiError as exc:
+-            st.warning(f"Could not render the {side} page: {exc.message}")
++            st.warning(texts.RENDER_FAILED.format(side=texts.SIDE_LABELS[side], error=texts.api_error(exc.code, exc.status)))
+             continue
+         source_missing = source_missing or images[side] is None
+ 
+@@ -503,27 +564,27 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
+     for col, side in zip(cols, ("old", "new")):
+         with col:
+             page, data = targets[side], images[side]
+-            name = side.capitalize()
++            name = texts.SIDE_LABELS[side]
+             if data:
+                 _show_image(data)
+-                st.caption(f"{name} \u00b7 page {page}" + (" \u00b7 section context" if context[side] else ""))
++                st.caption(texts.PAGE.format(side=name, page=page) + (texts.SECTION_CONTEXT if context[side] else ""))
+             else:
+                 _show_image(_placeholder_png(*size))
+                 if page is None:
+-                    st.caption(f"{name} \u00b7 no page location")
++                    st.caption(texts.NO_PAGE_LOCATION.format(side=name))
+                 else:
+-                    st.caption(f"{name} \u00b7 page {page} (image unavailable)")
++                    st.caption(texts.PAGE_IMAGE_UNAVAILABLE.format(side=name, page=page))
+     if source_missing:
+-        st.info("The source PDF is not available for this job, so page images cannot be shown.")
++        st.info(texts.SOURCE_PDF_UNAVAILABLE)
+ 
+     ids = [(i["kind"], i["record_id"]) for i in flat]
+     index = ids.index((kind, record_id)) if (kind, record_id) in ids else 0
+     prev_col, next_col = st.columns(2, gap="small", width=260)
+-    prev_col.button("Previous", key="prev_finding", disabled=index <= 0, on_click=_select,
++    prev_col.button(texts.PREVIOUS, key="prev_finding", disabled=index <= 0, on_click=_select,
+                     args=(flat[max(index - 1, 0)],), **_BUTTON_FILL)
+-    next_col.button("Next", key="next_finding", disabled=index >= len(flat) - 1, on_click=_select,
++    next_col.button(texts.NEXT, key="next_finding", disabled=index >= len(flat) - 1, on_click=_select,
+                     args=(flat[min(index + 1, len(flat) - 1)],), **_BUTTON_FILL)
+-    st.caption(f"Change ID: {record_id}")
++    st.caption(texts.CHANGE_ID.format(record_id=record_id))
+ 
+ 
+ SPLIT_MIN_PX = 260
+@@ -555,8 +616,8 @@ SPLITTER_JS = """
+     if (!h) {
+       h = doc.createElement('div'); h.className = 'dc-split-handle';
+       h.setAttribute('role', 'separator'); h.setAttribute('aria-orientation', 'vertical');
+-      h.setAttribute('aria-label', 'Resize structure panel'); h.tabIndex = 0;
+-      h.title = 'Drag to resize. Double-click to reset.';
++      h.setAttribute('aria-label', %(resize_structure)s); h.tabIndex = 0;
++      h.title = %(resize_hint)s;
+       h.addEventListener('mousedown', function (e) { start(e); });
+       h.addEventListener('dblclick', function () { store(null); var q = parts(); if (q) { apply(q, null); place(q); } });
+       h.addEventListener('keydown', function (e) {
+@@ -591,7 +652,11 @@ SPLITTER_JS = """
+   sync();
+ })();
+ </script>
+-""" % {"min": SPLIT_MIN_PX, "max": SPLIT_MAX_SHARE}
++""" % {
++    "min": SPLIT_MIN_PX, "max": SPLIT_MAX_SHARE,
++    "resize_structure": json.dumps(texts.RESIZE_STRUCTURE),
++    "resize_hint": json.dumps(texts.RESIZE_HINT),
++}
+ 
+ 
+ def _splitter() -> None:
+@@ -604,7 +669,7 @@ def render(client, job_id: str, status: dict | None = None) -> None:
+     try:
+         outline = _outline(client, _key(client), job_id)
+     except ApiError as exc:
+-        st.error(f"Could not load the result for job {job_id}: {exc.message}")
++        st.error(texts.RESULT_FAILED.format(job_id=job_id, error=texts.api_error(exc.code, exc.status)))
+         return
+     st.markdown(TREE_CSS, unsafe_allow_html=True)
+     _header(status or {}, job_id, outline)
+@@ -640,6 +705,6 @@ def render(client, job_id: str, status: dict | None = None) -> None:
+     with right:
+         current = next((i for i in flat if _same(i, selected)), None)
+         if current is None:
+-            st.info("No findings match these filters." if flatten(filter_outline(outline)) else "No findings in this result.")
++            st.info(texts.NO_MATCHING_FINDINGS if flatten(filter_outline(outline)) else texts.NO_FINDINGS)
+         else:
+             _viewer(client, job_id, current, flat)
+diff --git a/src/document_compare/phase2/ui/texts.py b/src/document_compare/phase2/ui/texts.py
+new file mode 100644
+index 0000000..c2089b2
+--- /dev/null
++++ b/src/document_compare/phase2/ui/texts.py
+@@ -0,0 +1,140 @@
++"""German display text for the Streamlit reviewer."""
++
++TITLE = "Dokumentenvergleich"
++COMPARE = "Vergleichen"
++OPEN_JOB = "Auftrag öffnen"
++AGENT = "Vergleichsassistent"
++OLD_PDF = "Alte PDF-Datei"
++NEW_PDF = "Neue PDF-Datei"
++OLD_PDF_NAME = "alt.pdf"
++NEW_PDF_NAME = "neu.pdf"
++EXTRACTION_NOTICE = "Beim Vergleich werden beide PDF-Dateien an den konfigurierten Extraktionsdienst gesendet."
++SELECT_BOTH_PDFS = "Wählen Sie beide PDF-Dateien aus."
++UPLOAD_FAILED = "Hochladen fehlgeschlagen. {error}"
++JOB_ID = "Auftrags-ID"
++JOB_ID_LINE = "Auftrags-ID: {job_id}"
++OPEN = "Öffnen"
++ENTER_JOB_ID = "Geben Sie eine Auftrags-ID ein."
++STAGES_COMPLETE = "{done}/{total} Verarbeitungsschritte abgeschlossen"
++OPEN_FOR_AGENT = "Öffnen Sie einen Auftrag, um den Assistenten zu nutzen."
++START_HINT = "Laden Sie zwei PDF-Dateien hoch und klicken Sie auf „Vergleichen“. Alternativ können Sie einen Auftrag per ID öffnen."
++STATUS_FAILED = "Der Status für Auftrag {job_id} konnte nicht geladen werden. {error}"
++AGENT_PENDING = "Der Assistent ist verfügbar, sobald der Vergleich abgeschlossen ist."
++JOB_FAILED = "Auftrag {job_id} ist fehlgeschlagen. {detail}"
++NO_ERROR_DETAIL = "Es wurde keine Fehlerbeschreibung übermittelt."
++JOB_STATE = "Auftragsstatus: {state}"
++JOB_STATES = {"queued": "In der Warteschlange", "running": "Wird verarbeitet"}
++UNKNOWN_JOB_STATE = "Unbekannt"
++KEEP_JOB_ID = "Mit dieser Auftrags-ID können Sie das Ergebnis später erneut öffnen oder abrufen."
++INVALID_API_BASE = "CRR_API_BASE muss eine gültige lokale HTTP-Adresse ohne Pfad, Abfrage oder Fragment sein."
++
++ERRORS = {
++    "timeout": "Die lokale API hat nicht rechtzeitig geantwortet und arbeitet möglicherweise noch.",
++    "api_unreachable": "Die lokale API ist nicht erreichbar.",
++    "invalid_arguments": "Die Anfrage enthält ungültige Angaben.",
++    "invalid_artifact": "Das gespeicherte Ergebnis oder eine zugehörige Datei ist nicht lesbar.",
++    "not_ready": "Das Ergebnis ist noch nicht verfügbar.",
++    "not_found": "Der angeforderte Eintrag wurde nicht gefunden.",
++    "source_pdf_unavailable": "Die Quell-PDF ist nicht verfügbar.",
++    "chat_failed": "Der Assistent konnte keine Antwort erstellen.",
++    "response_too_large": "Die Antwort überschreitet die zulässige Größe.",
++}
++INVALID_JOB_ID = "Die Auftrags-ID muss aus 12 Hexadezimalzeichen bestehen (0–9 und a–f)."
++HTTP_ERROR = "Die lokale API meldet einen Fehler (HTTP {status})."
++UNKNOWN_JOB = "Der Auftrag wurde nicht gefunden."
++UNKNOWN_ERROR = "Die Anfrage ist fehlgeschlagen."
++
++TYPE_LABELS = {
++    "all": "Alle",
++    "ADDED": "Hinzugefügt",
++    "DELETED": "Gelöscht",
++    "MODIFIED": "Geändert",
++    "REVIEW": "Prüfung",
++}
++KIND_LABELS = {"all": "Alle", "change": "Änderung", "table": "Tabelle"}
++TABLE_CELLS_ONE = "{count} Zelle geändert"
++TABLE_CELLS_MANY = "{count} Zellen geändert"
++CHIP_LABELS = {
++    "Changes": "Änderungen", "Tables": "Tabellen", "Added": TYPE_LABELS["ADDED"],
++    "Deleted": TYPE_LABELS["DELETED"], "Modified": TYPE_LABELS["MODIFIED"],
++    "Needs review": "Prüfung erforderlich",
++}
++SIDE_LABELS = {"old": "Alt", "new": "Neu"}
++ORDER_LABELS = {"Document order": "Dokumentreihenfolge", "Section number": "Abschnittsnummer"}
++ORDER = "Reihenfolge"
++ORDER_NOTE = "Die Abschnitte stehen in der Reihenfolge des neuen Dokuments."
++LEGEND = ("Rot = gelöscht, Grün = hinzugefügt, Orange = geändert, violett gestrichelt = Prüfung erforderlich "
++          "(gestrichelte Umrandung = unsichere Zuordnung).")
++PAGE_DISPLAY_FAILED = "Das Seitenbild konnte nicht angezeigt werden."
++PAGE_COUNT_ONE = " · {count} Seite"
++PAGE_COUNT_MANY = " · {count} Seiten"
++TYPE_FILTER = "Änderungstyp"
++KIND_FILTER = "Kategorie"
++SEARCH = "Suche"
++SEARCH_HINT = "Änderungen, Abschnitte oder IDs suchen"
++FLAGGED_ONLY = "Nur mit Prüfbedarf"
++PAGE_SHORT = "S. {page}"
++UNTITLED = "(ohne Titel)"
++STRUCTURE = "Gliederung"
++NO_MATCHING_SECTIONS = "Keine passenden Abschnitte oder Änderungen gefunden."
++NO_SECTION_STRUCTURE = "Für diesen Auftrag wurde keine Gliederung gefunden."
++UNPLACED = "Nicht zugeordnet"
++LLM_OPINION = "Einschätzung des Sprachmodells · beratend"
++NO_LLM_REASON = "Keine Begründung angegeben."
++NO_EVALUATOR = "Kein Bewertungsmodell angegeben"
++EVIDENCE_REFS = "Berücksichtigte Belege: {refs}"
++LLM_OUTCOMES = {
++    "REAL_CHANGE": "Tatsächliche Änderung", "ARTIFACT": "Artefakt", "UNCERTAIN": "Unsicher",
++}
++UNKNOWN_LLM_OUTCOME = "Unbekannte Einstufung"
++REVIEW_NOTE = "Prüfung erforderlich — {reason}"
++NO_REVIEW_REASON = "Der Grund wurde nicht näher angegeben"
++REVIEW_REASONS = {
++    "Possible match on the other side not confirmed": "Mögliche Entsprechung auf der anderen Seite unbestätigt",
++    "Block of content moved": "Ein Inhaltsblock wurde verschoben",
++    "Short or ambiguous change — LLM could not decide": "Kurze oder mehrdeutige Änderung ohne eindeutige Modelleinschätzung",
++    "Needs review": NO_REVIEW_REASON,
++    "review item": TYPE_LABELS["REVIEW"],
++}
++DETAILS_FAILED = "Die Details konnten nicht geladen werden. {error}"
++NO_LOCATIONS = "Die Seitenpositionen sind nicht verfügbar. {error}"
++RENDER_FAILED = "Das Seitenbild ({side}) konnte nicht erstellt werden. {error}"
++PAGE = "{side} · Seite {page}"
++SECTION_CONTEXT = " · Abschnittskontext"
++NO_PAGE_LOCATION = "{side} · keine Seitenposition"
++PAGE_IMAGE_UNAVAILABLE = "{side} · Seite {page} (Bild nicht verfügbar)"
++SOURCE_PDF_UNAVAILABLE = "Die Quell-PDF ist für diesen Auftrag nicht verfügbar. Daher fehlen die Seitenbilder."
++PREVIOUS = "Zurück"
++NEXT = "Weiter"
++CHANGE_ID = "Änderungs-ID: {record_id}"
++RESIZE_STRUCTURE = "Breite der Gliederung ändern"
++RESIZE_HINT = "Ziehen zum Ändern der Breite. Doppelklicken zum Zurücksetzen."
++RESULT_FAILED = "Das Ergebnis für Auftrag {job_id} konnte nicht geladen werden. {error}"
++NO_MATCHING_FINDINGS = "Keine Befunde entsprechen diesen Filtern."
++NO_FINDINGS = "Dieses Ergebnis enthält keine Befunde."
++
++AGENT_NOT_CONFIGURED = "Der Assistent ist auf diesem Rechner nicht konfiguriert."
++CHAT_HINT = "Frage zum Vergleich stellen (Textauszüge werden an das Modell gesendet)"
++CHAT_PENDING = "Die Anfrage wird verarbeitet …"
++LIMITATIONS = "Einschränkungen: {items}"
++LIMITATION_LABELS = {
++    "job_not_done": "Auftrag läuft noch",
++    "invalid_artifact": "Ergebnisdatei ungültig",
++    "review_open": "Prüfungen offen",
++    "table_reviews_open": "Tabellenprüfungen offen",
++    "llm_advisory_present": "Beratende Modelleinschätzung vorhanden",
++    "document_identity_missing": "Dokumentidentität fehlt",
++    "response_too_large": "Antwort zu umfangreich",
++    "old_extraction_validation_missing": "Extraktionsprüfung für das alte Dokument fehlt",
++    "new_extraction_validation_missing": "Extraktionsprüfung für das neue Dokument fehlt",
++    "old_extraction_validation_unreadable": "Extraktionsprüfung für das alte Dokument nicht lesbar",
++    "new_extraction_validation_unreadable": "Extraktionsprüfung für das neue Dokument nicht lesbar",
++    "old_extraction_requires_review": "Extraktion des alten Dokuments benötigt Prüfung",
++    "new_extraction_requires_review": "Extraktion des neuen Dokuments benötigt Prüfung",
++}
++
++
++def api_error(code: str, status: int | None = None) -> str:
++    if code in ERRORS:
++        return ERRORS[code]
++    return HTTP_ERROR.format(status=status) if status is not None else UNKNOWN_ERROR
+diff --git a/src/document_compare/phase2/viewer/outline.py b/src/document_compare/phase2/viewer/outline.py
+index d0ca07a..885b2c0 100644
+--- a/src/document_compare/phase2/viewer/outline.py
++++ b/src/document_compare/phase2/viewer/outline.py
+@@ -62,6 +62,7 @@ def _load_structured(output_dir: Path, side: str) -> dict[str, Any] | None:
+ class _Side:
+     def __init__(self, document: dict[str, Any] | None) -> None:
+         self.sections: list[dict[str, Any]] = []
++        self.toc_ranks: dict[str, int] = {}
+         self.by_element: dict[str, str] = {}
+         self.elements: dict[str, dict[str, Any]] = {}
+         self.table_element: dict[str, str] = {}
+@@ -74,6 +75,12 @@ class _Side:
+         sections = evidence.get("sections")
+         self.sections = [s for s in sections if isinstance(s, dict) and isinstance(s.get("section_id"), str)
+                          ] if isinstance(sections, list) else []
++        toc = evidence.get("toc")
++        if isinstance(toc, dict) and toc.get("usable") is True and isinstance(toc.get("entries"), list):
++            for rank, entry in enumerate(toc["entries"]):
++                heading_id = entry.get("body_element_id") if isinstance(entry, dict) else None
++                if isinstance(heading_id, str) and entry.get("status") == "linked":
++                    self.toc_ranks.setdefault(heading_id, rank)
+         membership = evidence.get("membership")
+         by_element = membership.get("by_element") if isinstance(membership, dict) else None
+         for eid, info in (by_element.items() if isinstance(by_element, dict) else []):
+@@ -147,16 +154,20 @@ class _Node:
+         self.path: list[str] = [title]
+         self.parent: _Node | None = None
+         self.section_ids: dict[str, str] = {side: section_id}  # per-side section id (merged by title)
++        self.toc_rank: int | None = None
+ 
+     def count(self) -> int:
+         return len(self.items) + sum(c.count() for c in self.children)
+ 
+     def as_dict(self) -> dict[str, Any]:
+         ordered = [item for _, item in sorted(self.items, key=lambda pair: pair[0])]
+-        return {
++        data = {
+             "section_id": self.section_id, "title": self.title, "side": self.side, "level": self.level,
+             "change_count": self.count(), "children": [c.as_dict() for c in self.children], "items": ordered,
+         }
++        if self.toc_rank is not None:
++            data["toc_rank"] = self.toc_rank
++        return data
+ 
+ 
+ def _build_tree(sides: dict[str, _Side]) -> tuple[list[_Node], dict[tuple[str, str], _Node]]:
+@@ -181,14 +192,19 @@ def _build_tree(sides: dict[str, _Side]) -> tuple[list[_Node], dict[tuple[str, s
+         created: list[tuple[_Node, dict[str, Any]]] = []
+         for section in sides[side].sections:  # first pass, so a parent listed late is still found
+             sid = section["section_id"]
++            heading_id = section.get("heading_element_id")
++            rank = sides[side].toc_ranks.get(heading_id) if isinstance(heading_id, str) else None
+             title = str(section.get("title") or "")
+             key = _norm(title)
+             merged = by_title.get(key) if side == "old" else None
+             if merged is not None:
+                 index[(side, sid)] = merged
+                 merged.section_ids.setdefault(side, sid)
++                if merged.toc_rank is None:
++                    merged.toc_rank = rank
+                 continue
+             node = _Node(sid, title, side, _int(section.get("level")))
++            node.toc_rank = rank
+             index[(side, sid)] = node
+             by_title.setdefault(key, node)
+             created.append((node, section))
+diff --git a/tests/phase2/test_ui_smoke.py b/tests/phase2/test_ui_smoke.py
+index 6719bc0..b4cf79e 100644
+--- a/tests/phase2/test_ui_smoke.py
++++ b/tests/phase2/test_ui_smoke.py
+@@ -8,7 +8,7 @@ try:
+ except ImportError:  # pragma: no cover - streamlit is an optional extra
+     raise unittest.SkipTest("streamlit is not installed")
+ 
+-from document_compare.phase2.ui import review
++from document_compare.phase2.ui import review, texts as ui_texts
+ from tests.phase2.ui_stub import StubClient, default_outline, item
+ 
+ 
+@@ -33,16 +33,51 @@ def texts(elements) -> str:
+     return "\n".join(str(getattr(e, "value", "")) for e in elements)
+ 
+ 
++class SectionOrderingTests(unittest.TestCase):
++    def test_natural_prefix_order(self):
++        cases = [
++            ["2 Scope", "10 Rules"],
++            ["A Scope", "B Rules", "C Appendix"],
++            ["AT 1 Scope", "AT 4.3 Rules", "BT 1 Appendix"],
++            ["BT 1.2.3 Scope", "BT 1.2.10 Rules"],
++            ["A.2 Scope", "A.10 Rules"],
++            ["I Scope", "II Rules", "IV Appendix"],
++            ["II.2 Scope", "II.10 Rules", "IV.1 Appendix"],
++        ]
++        for expected in cases:
++            with self.subTest(expected=expected):
++                sections = [{"title": title} for title in reversed(expected)]
++                ordered = review.order_sections(sections, "Section number")
++                self.assertEqual([node["title"] for node in ordered], expected)
++                self.assertFalse(review.numbers_ascending(sections))
++                self.assertTrue(review.numbers_ascending(ordered))
++
++    def test_toc_precedes_title_keys_and_unlabelled_order_is_stable(self):
++        sections = [{"title": "Zebra notes"}, {"title": "2 Scope"},
++                    {"title": "10 Rules", "toc_rank": 1}, {"title": "Appendix 1"},
++                    {"title": "Introduction", "toc_rank": 0}, {"title": "Closing notes"}]
++        ranked_first = {"sections": [sections[4], sections[1]]}
++        self.assertIs(review.with_title_root(ranked_first), ranked_first)
++        self.assertEqual(
++            [n["title"] for n in review.order_sections(sections, "Section number")],
++            ["Introduction", "10 Rules", "2 Scope", "Zebra notes", "Appendix 1", "Closing notes"],
++        )
++        self.assertEqual(
++            [n["title"] for n in review.order_sections(sections, "Document order")],
++            [n["title"] for n in sections],
++        )
++
++
+ class ShellTests(unittest.TestCase):
+     def test_app_loads_without_job(self):
+         at = make_app(StubClient()).run()
+         self.assertFalse(at.exception)
+-        self.assertEqual([t.label for t in at.sidebar.tabs], ["Compare", "Open job", "Comparison agent"])
+-        self.assertIn("Comparing sends both PDFs to the configured extraction provider.",
++        self.assertEqual([t.label for t in at.sidebar.tabs], ["Vergleichen", "Auftrag öffnen", "Vergleichsassistent"])
++        self.assertIn("Beim Vergleich werden beide PDF-Dateien an den konfigurierten Extraktionsdienst gesendet.",
+                       texts(at.sidebar.caption) + texts(at.sidebar.markdown))
+         self.assertEqual(len(at.sidebar.file_uploader), 2)
+         self.assertIn("flex:1 1 0", "".join(str(m.value) for m in at.sidebar.markdown))  # tabs share the width
+-        self.assertEqual(at.main.title[0].value, "Document compare")
++        self.assertEqual(at.main.title[0].value, "Dokumentenvergleich")
+ 
+     def test_upload_requires_both_files(self):
+         stub = StubClient()
+@@ -50,7 +85,7 @@ class ShellTests(unittest.TestCase):
+         at.sidebar.button(key="compare").click()
+         at.run()
+         self.assertFalse(at.exception)
+-        self.assertIn("both", texts(at.sidebar.warning).lower())
++        self.assertIn("beide", texts(at.sidebar.warning).lower())
+         self.assertFalse([c for c in stub.calls if c[0] == "submit"])
+ 
+     def test_upload_submits_both_pdfs_and_opens_job(self):
+@@ -85,10 +120,10 @@ class ShellTests(unittest.TestCase):
+ 
+     def test_api_down_shows_error(self):
+         stub = StubClient()
+-        stub.raise_on["status"] = stub.make_error(None, "api_unreachable", "Could not reach the API at http://127.0.0.1:8321.")
++        stub.raise_on["status"] = stub.make_error(None, "api_unreachable", "Die lokale API ist nicht erreichbar. at http://127.0.0.1:8321.")
+         at = open_job(make_app(stub))
+         self.assertFalse(at.exception)
+-        self.assertIn("Could not reach the API", texts(at.main.error))
++        self.assertIn("Die lokale API ist nicht erreichbar.", texts(at.main.error))
+         self.assertEqual(at.session_state["job_id"], "job1")
+ 
+     def test_outline_failure_is_a_visible_error(self):
+@@ -96,7 +131,7 @@ class ShellTests(unittest.TestCase):
+         stub.raise_on["outline"] = stub.make_error(409, "invalid_artifact", "comparison result is not readable")
+         at = open_job(make_app(stub))
+         self.assertFalse(at.exception)
+-        self.assertIn("comparison result is not readable", texts(at.main.error))
++        self.assertIn("Das gespeicherte Ergebnis oder eine zugehörige Datei ist nicht lesbar.", texts(at.main.error))
+ 
+     def test_invalid_job_id_shows_visible_error(self):
+         stub = StubClient()
+@@ -104,20 +139,20 @@ class ShellTests(unittest.TestCase):
+             None, "invalid_arguments", "Job ID must be 12 lowercase hex characters.")
+         at = open_job(make_app(stub), "x/../../jobs")
+         self.assertFalse(at.exception)
+-        self.assertIn("Job ID must be 12 lowercase hex characters.", texts(at.main.error))
++        self.assertIn("Die Auftrags-ID muss aus 12 Hexadezimalzeichen bestehen", texts(at.main.error))
+ 
+     def test_select_job_clears_chat_state(self):
+         at = open_job(make_app(StubClient()))
+         at.session_state["chat_error"] = {"code": "chat_failed", "message": "old failure"}
+         at.session_state["chat_history"] = [{"role": "user", "content": "old question"}]
+         at.run()
+-        self.assertIn("old failure", texts(at.sidebar.error))
++        self.assertIn("Der Assistent konnte keine Antwort erstellen.", texts(at.sidebar.error))
+         at.sidebar.text_input(key="open_job_id").set_value("job2")
+         at.sidebar.button(key="open_job").click()
+         at.run()
+         self.assertNotIn("chat_error", at.session_state)
+         self.assertEqual(at.session_state["chat_history"], [])
+-        self.assertNotIn("old failure", texts(at.sidebar.error))
++        self.assertNotIn("Der Assistent konnte keine Antwort erstellen.", texts(at.sidebar.error))
+ 
+ 
+ def pick(at: AppTest, record_id: str, kind: str = "change") -> AppTest:
+@@ -222,21 +257,33 @@ class ReviewTests(unittest.TestCase):
+         self.assertFalse(at.exception)
+         main_text = texts(at.main.markdown) + texts(at.main.caption)
+         self.assertIn("old\\_policy\\.pdf", main_text)
+-        self.assertIn("3 pages", main_text)
++        self.assertIn("3 Seiten", main_text)
+         self.assertIn("new\\_policy\\.pdf", main_text)
+-        self.assertIn("4 pages", main_text)
+-        self.assertIn("Job ID: job1", main_text)
+-        for chip in (":blue-badge[Changes 2]", ":gray-badge[Tables 0]", ":green-badge[Added 1]",
+-                     ":red-badge[Deleted 0]", ":orange-badge[Modified 1]"):
++        self.assertIn("4 Seiten", main_text)
++        self.assertIn("job1", [c.value for c in at.main.code])
++        for chip in (":blue-badge[Änderungen 2]", ":gray-badge[Tabellen 0]", ":green-badge[Hinzugefügt 1]",
++                     ":red-badge[Gelöscht 0]", ":orange-badge[Geändert 1]"):
+             self.assertIn(chip, main_text)
+         for gone in ("Limitations", "not legal or semantic ground truth", "Uncertain", "Supported"):
+             self.assertNotIn(gone, main_text)
+-        self.assertEqual({s.label for s in at.main.selectbox}, {"Type", "Kind"})  # no State filter
+-        self.assertEqual([t.label for t in at.main.text_input], ["Search"])
+-        self.assertEqual(at.main.text_input[0].placeholder, "Search changes or sections")
++        self.assertEqual({s.label for s in at.main.selectbox}, {"Änderungstyp", "Kategorie"})  # no State filter
++        self.assertEqual(at.main.selectbox(key="f_type").options,
++                         ["Alle", "Hinzugefügt", "Gelöscht", "Geändert", "Prüfung"])
++        self.assertEqual(at.main.selectbox(key="f_kind").options, ["Alle", "Änderung", "Tabelle"])
++        self.assertEqual([t.label for t in at.main.text_input], ["Suche"])
++        self.assertEqual(at.main.text_input[0].placeholder, "Änderungen, Abschnitte oder IDs suchen")
+         self.assertEqual(len(at.main.metric), 0)
+         self.assertEqual(len(at.main.text), 0)  # no old/new text dump
+-        self.assertIn("Change ID: CHANGE-000001", main_text)
++        self.assertIn("Änderungs-ID: CHANGE-000001", main_text)
++
++    def test_table_label_is_localized(self):
++        outline = default_outline()
++        outline["sections"][0]["items"].append(
++            item("table", "TABLE-000001", "TABLE_MODIFIED", "Table · p.2 · 1 cell changed", ["Section A"])
++        )
++        at = open_job(make_app(StubClient(outline_value=outline)))
++        button = at.main.button(key="pick::table::TABLE-000001")
++        self.assertIn("Tabelle · S\\. 2 · 1 Zelle geändert", button.label)
+ 
+     def test_tree_structure_and_default_selection(self):
+         stub = StubClient()
+@@ -257,13 +304,13 @@ class ReviewTests(unittest.TestCase):
+         self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001"])  # B's item hidden while collapsed
+         self.assertTrue(labels["pick::change::CHANGE-000001"].startswith(":orange[\u25cf]"))
+         self.assertIn("supported snippet", labels["pick::change::CHANGE-000001"])
+-        self.assertIn(":gray[p.2]", texts(at.main.markdown))
++        self.assertIn(":gray[S. 2]", texts(at.main.markdown))
+         self.assertIn(":gray-badge[2]", texts(at.main.markdown))
+         types = {b.key: b.proto.type for b in at.main.button if (b.key or "").startswith(("pick::", "tog::"))}
+         self.assertEqual(types["pick::change::CHANGE-000001"], "primary")
+         self.assertEqual(types["tog::S1"], "tertiary")
+         self.assertIn("Section A", texts(at.main.markdown))
+-        self.assertIn("Red = deleted", texts(at.main.caption))
++        self.assertIn("Rot = gelöscht", texts(at.main.caption))
+ 
+     def test_tree_toggle_expands_and_collapses(self):
+         at = open_job(make_app(StubClient()))
+@@ -301,8 +348,8 @@ class ReviewTests(unittest.TestCase):
+         at.run()
+         self.assertFalse(at.exception)
+         self.assertEqual(tree_keys(at), [])
+-        self.assertIn("No findings match", texts(at.main.info))
+-        self.assertIn("No matching sections or changes.", texts(at.main.caption))
++        self.assertIn("Keine Befunde entsprechen diesen Filtern.", texts(at.main.info))
++        self.assertIn("Keine passenden Abschnitte oder Änderungen gefunden.", texts(at.main.caption))
+         self.assertEqual(len(at.main.get("image")), 0)
+         at.main.text_input(key="f_search").set_value("")
+         at.run()
+@@ -321,14 +368,14 @@ class ReviewTests(unittest.TestCase):
+         self.assertEqual(new_calls[-1][3:], (2, "change", "CHANGE-000002", True))  # highlighted, dashed
+         self.assertEqual(at.session_state["selected"], {"kind": "change", "record_id": "CHANGE-000002"})
+         self.assertIn("Section A \u203a Section B", texts(at.main.markdown))
+-        self.assertIn(":green[ADDED]", texts(at.main.markdown))
++        self.assertIn(":green[Hinzugefügt]", texts(at.main.markdown))
+         self.assertEqual(len(at.main.get("image")), 2)
+         captions = texts(at.main.caption)
+-        self.assertIn("Old \u00b7 page 1 \u00b7 section context", captions)
+-        self.assertIn("New \u00b7 page 2", captions)
+-        self.assertNotIn("section context\n", captions.split("New")[-1])
++        self.assertIn("Alt \u00b7 Seite 1 \u00b7 Abschnittskontext", captions)
++        self.assertIn("Neu \u00b7 Seite 2", captions)
++        self.assertNotIn("Abschnittskontext\n", captions.split("Neu")[-1])
+         self.assertNotIn("No counterpart", captions + texts(at.main.markdown))
+-        self.assertIn("Change ID: CHANGE-000002", captions)
++        self.assertIn("Änderungs-ID: CHANGE-000002", captions)
+         types = {b.key: b.proto.type for b in at.main.button if (b.key or "").startswith("pick::")}
+         self.assertEqual(types["pick::change::CHANGE-000002"], "primary")
+ 
+@@ -341,7 +388,7 @@ class ReviewTests(unittest.TestCase):
+         for call in calls:
+             self.assertEqual(call[4:], ("change", "CHANGE-000001", False))
+         self.assertEqual(len(at.main.get("image")), 2)
+-        self.assertNotIn("section context", texts(at.main.caption))
++        self.assertNotIn("Abschnittskontext", texts(at.main.caption))
+ 
+     def test_next_previous_walk_tree_order(self):
+         at = open_job(make_app(StubClient()))
+@@ -372,7 +419,7 @@ class ReviewTests(unittest.TestCase):
+         at.run()
+         self.assertEqual(tree_keys(at), [])
+         self.assertNotIn("selected", at.session_state)
+-        self.assertIn("No findings match", texts(at.main.info))
++        self.assertIn("Keine Befunde entsprechen diesen Filtern.", texts(at.main.info))
+         self.assertEqual(len(at.main.get("image")), 0)
+ 
+     def test_deleted_item_shows_new_section_context_without_placeholder_text(self):
+@@ -383,28 +430,28 @@ class ReviewTests(unittest.TestCase):
+         self.assertFalse(at.exception)
+         self.assertNotIn("No counterpart", texts(at.main.caption))
+         self.assertEqual(len(at.main.get("image")), 2)
+-        self.assertIn("New \u00b7 page 2 \u00b7 section context", texts(at.main.caption))
++        self.assertIn("Neu \u00b7 Seite 2 \u00b7 Abschnittskontext", texts(at.main.caption))
+         new_call = [c for c in page_calls(stub) if c[2] == "new"][-1]
+         self.assertEqual(new_call[4:6], (None, None))
+ 
+     def test_unrenderable_context_side_keeps_placeholder(self):
+         stub = StubClient(png=None)
+         at = pick(open_job(make_app(stub)), "CHANGE-000001")
+-        self.assertIn("source PDF", texts(at.main.info))
++        self.assertIn("Quell-PDF", texts(at.main.info))
+         self.assertEqual(len(at.main.get("image")), 2)
+ 
+     def test_source_unavailable_shows_notice(self):
+         stub = StubClient(png=None)
+         at = pick(open_job(make_app(stub)), "CHANGE-000001")
+         self.assertFalse(at.exception)
+-        self.assertIn("source PDF", texts(at.main.info))
++        self.assertIn("Quell-PDF", texts(at.main.info))
+         self.assertEqual(len(at.main.text), 0)
+ 
+     def test_missing_names_fall_back(self):
+         stub = StubClient(status_value={"job_id": "job1", "state": "done", "stages_completed": []})
+         at = open_job(make_app(stub))
+-        self.assertIn("old\\.pdf", texts(at.main.markdown))
+-        self.assertIn("new\\.pdf", texts(at.main.markdown))
++        self.assertIn("alt\\.pdf", texts(at.main.markdown))
++        self.assertIn("neu\\.pdf", texts(at.main.markdown))
+ 
+     def test_flat_outline_with_unnumbered_title_gets_a_title_root(self):
+         outline = flat_outline(["Policy Title", "Section 4 Scope", "Section 5 Rules"])
+@@ -435,7 +482,7 @@ class ReviewTests(unittest.TestCase):
+     def test_section_number_order_reorders_tree_and_walk(self):
+         outline = flat_outline(["Section 12 Last", "Section 1 First", "Section 2 Second"])
+         at = open_job(make_app(StubClient(outline_value=outline)))
+-        self.assertEqual([o for o in at.main.radio(key="tree_order").options], ["Document order", "Section number"])
++        self.assertEqual([o for o in at.main.radio(key="tree_order").options], ["Dokumentreihenfolge", "Abschnittsnummer"])
+         self.assertEqual(at.main.radio(key="tree_order").value, "Document order")
+         self.assertEqual(toggle_keys(at), ["tog::S1", "tog::S2", "tog::S3"])
+         at.main.radio(key="tree_order").set_value("Section number")
+@@ -453,23 +500,23 @@ class ReviewTests(unittest.TestCase):
+     def test_order_caption_only_when_document_order_is_not_ascending(self):
+         out_of_order = flat_outline(["Section 12 Last", "Section 1 First"])
+         at = open_job(make_app(StubClient(outline_value=out_of_order)))
+-        self.assertIn(review.ORDER_NOTE, structure_text(at))
++        self.assertIn(ui_texts.ORDER_NOTE, structure_text(at))
+         at.main.radio(key="tree_order").set_value("Section number")
+         at.run()
+-        self.assertNotIn(review.ORDER_NOTE, structure_text(at))
++        self.assertNotIn(ui_texts.ORDER_NOTE, structure_text(at))
+         ascending = flat_outline(["Section 1 First", "Section 2 Second"])
+         at = open_job(make_app(StubClient(outline_value=ascending)))
+-        self.assertNotIn(review.ORDER_NOTE, structure_text(at))
++        self.assertNotIn(ui_texts.ORDER_NOTE, structure_text(at))
+         titled = flat_outline(["Policy Title", "Section 4 A", "Section 12 B", "Section 1 C"])  # under the root
+         at = open_job(make_app(StubClient(outline_value=titled)))
+-        self.assertIn(review.ORDER_NOTE, structure_text(at))
++        self.assertIn(ui_texts.ORDER_NOTE, structure_text(at))
+ 
+     def test_empty_outline(self):
+         stub = StubClient(outline_value={"documents": {"old": {"page_count": None}, "new": {"page_count": None}},
+                                          "sections": [], "unplaced": [], "review": [], "total": 0})
+         at = open_job(make_app(stub))
+         self.assertFalse(at.exception)
+-        self.assertIn("No findings in this result.", texts(at.main.info))
++        self.assertIn("Dieses Ergebnis enthält keine Befunde.", texts(at.main.info))
+ 
+ 
+ def review_outline() -> dict:
+@@ -495,13 +542,13 @@ class NeedsReviewTests(unittest.TestCase):
+         at = open_job(make_app(stub))
+         self.assertFalse(at.exception)
+         main_text = texts(at.main.markdown) + texts(at.main.caption)
+-        self.assertIn(":violet-badge[Needs review 2]", main_text)
+-        self.assertIn("purple dashed = needs review", main_text)
++        self.assertIn(":violet-badge[Prüfung erforderlich 2]", main_text)
++        self.assertIn("violett gestrichelt = Prüfung erforderlich", main_text)
+         labels = {b.key: b.label for b in at.main.button}
+-        self.assertIn(":violet[Review]", labels["pick::change::CHANGE-000001"])
++        self.assertIn(":violet[Prüfung]", labels["pick::change::CHANGE-000001"])
+         self.assertTrue(labels["pick::change::CHANGE-000001"].startswith(":orange["))  # type dot stays first
+-        self.assertTrue(labels["pick::review::REVIEW-000002"].startswith(":violet[\u25cf] :violet[Review]"))
+-        self.assertIn("Needs review \u2014 Possible match on the other side not confirmed", main_text)
++        self.assertTrue(labels["pick::review::REVIEW-000002"].startswith(":violet[\u25cf] :violet[Prüfung]"))
++        self.assertIn("Prüfung erforderlich \u2014 Mögliche Entsprechung auf der anderen Seite unbestätigt", main_text)
+ 
+     def test_llm_opinion_panel_only_on_items_the_llm_saw(self):
+         outline = review_outline()
+@@ -512,18 +559,18 @@ class NeedsReviewTests(unittest.TestCase):
+         self.assertFalse(at.exception)
+         self.assertEqual(at.session_state["selected"]["record_id"], "CHANGE-000001")
+         shown = texts(at.main.markdown) + texts(at.main.caption)
+-        self.assertIn("LLM opinion · advisory", shown)
+-        self.assertIn(":violet-badge[Uncertain] Ambiguous pair\\.", shown)
+-        self.assertIn("mock-evaluator-v1 · looked at OLD-P1, NEW-P1", shown.replace("\\", ""))
++        self.assertIn("Einschätzung des Sprachmodells · beratend", shown)
++        self.assertIn(":violet-badge[Unsicher] Ambiguous pair\\.", shown)
++        self.assertIn("mock-evaluator-v1 · Berücksichtigte Belege: OLD-P1, NEW-P1", shown.replace("\\", ""))
+         self.assertNotIn("0.3", shown)
+         at.session_state["selected"] = {"kind": "review", "record_id": "REVIEW-000002"}
+         at.run()
+-        self.assertNotIn("LLM opinion · advisory", texts(at.main.markdown) + texts(at.main.caption))
++        self.assertNotIn("Einschätzung des Sprachmodells · beratend", texts(at.main.markdown) + texts(at.main.caption))
+ 
+     def test_needs_review_only_filter_and_review_type(self):
+         stub = StubClient(outline_value=review_outline())
+         at = open_job(make_app(stub))
+-        self.assertEqual(at.main.checkbox(key="f_needs_review").label, "Needs review only")
++        self.assertEqual(at.main.checkbox(key="f_needs_review").label, "Nur mit Prüfbedarf")
+         self.assertFalse(at.main.checkbox(key="f_needs_review").value)
+         self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001", "pick::review::REVIEW-000002"])
+         at.main.checkbox(key="f_needs_review").check()
+@@ -535,7 +582,7 @@ class NeedsReviewTests(unittest.TestCase):
+         at.run()
+         self.assertEqual(tree_keys(at), ["pick::review::REVIEW-000002"])
+         self.assertEqual(at.session_state["selected"], {"kind": "review", "record_id": "REVIEW-000002"})
+-        self.assertIn("Needs review \u2014 Block of content moved", texts(at.main.markdown))
++        self.assertIn("Prüfung erforderlich \u2014 Ein Inhaltsblock wurde verschoben", texts(at.main.markdown))
+         self.assertEqual(len(at.main.get("image")), 2)
+         calls = [c for c in stub.calls if c[0] == "page_png" and c[4] == "review"]
+         self.assertTrue(calls and all(c[6] for c in calls))  # review highlights are drawn dashed
+@@ -559,7 +606,7 @@ class ChatTests(unittest.TestCase):
+         stub.raise_on["chat"] = stub.make_error(503, "chat_not_configured", "Chat is not configured on this server.")
+         at = self.ask(stub)
+         self.assertFalse(at.exception)
+-        self.assertIn("Agent not configured on this machine.", texts(at.sidebar.caption))
++        self.assertIn("Der Assistent ist auf diesem Rechner nicht konfiguriert.", texts(at.sidebar.caption))
+         self.assertEqual(len(at.sidebar.warning) + len(at.sidebar.info) + len(at.sidebar.error), 0)
+         self.assertTrue(tree_keys(at))  # rest of the UI still works
+ 
+@@ -580,7 +627,7 @@ class ChatTests(unittest.TestCase):
+         stub.raise_on["chat"] = stub.make_error(502, "chat_failed", "The assistant could not produce an answer.")
+         at = self.ask(stub)
+         self.assertFalse(at.exception)
+-        self.assertIn("could not produce an answer", texts(at.sidebar.error))
++        self.assertIn("konnte keine Antwort erstellen.", texts(at.sidebar.error))
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/tests/phase2/test_viewer_outline.py b/tests/phase2/test_viewer_outline.py
+index d0ccd06..09e40af 100644
+--- a/tests/phase2/test_viewer_outline.py
++++ b/tests/phase2/test_viewer_outline.py
+@@ -48,6 +48,41 @@ def _walk(nodes):
+         yield from _walk(node["children"])
+ 
+ 
++class TocRankTests(unittest.TestCase):
++    def test_ranks_use_entry_positions_and_prefer_new_links(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            out = Path(tmp)
++            old = _structured([_section("O1", "2 Scope"), _section("O2", "10 Rules"),
++                               _section("O3", "Appendix")], {})
++            new = _structured([_section("N1", "2 Scope"), _section("N2", "10 Rules"),
++                               _section("N3", "Body", parent="N2", known=True),
++                               _section("N4", "Closing")], {})
++            old["document"]["structure_evidence"]["toc"] = {"usable": True, "entries": [
++                {"entry_id": "O-1", "status": "linked", "body_element_id": "H-O1"},
++                {"entry_id": "O-2", "status": "linked", "body_element_id": "H-O2"},
++                {"entry_id": "O-3", "status": "linked", "body_element_id": "H-O3"},
++            ]}
++            new_toc = new["document"]["structure_evidence"]["toc"] = {"usable": True, "entries": [
++                {"entry_id": "N-1", "status": "linked", "body_element_id": "H-N2"},
++                {"entry_id": "N-2", "status": "unmatched", "body_element_id": None},
++                {"entry_id": "N-3", "status": "linked", "body_element_id": "H-N3"},
++            ]}
++            _write(out, "old", old)
++            _write(out, "new", new)
++            nodes = list(_walk(build_outline(out, {})["sections"]))
++            self.assertEqual(
++                [(n["title"], n["toc_rank"]) for n in nodes if "toc_rank" in n],
++                [("2 Scope", 0), ("10 Rules", 0), ("Body", 2), ("Appendix", 2)],
++            )
++            new_toc["usable"] = False
++            _write(out, "new", new)
++            nodes = list(_walk(build_outline(out, {})["sections"]))
++            self.assertEqual(
++                [(n["title"], n["toc_rank"]) for n in nodes if "toc_rank" in n],
++                [("2 Scope", 0), ("10 Rules", 1), ("Appendix", 2)],
++            )
++
++
+ class SeededJobTests(unittest.TestCase):
+     @classmethod
+     def setUpClass(cls):
+-- 
+2.50.1 (Apple Git-155)
+
