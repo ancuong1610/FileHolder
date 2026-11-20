@@ -48,6 +48,41 @@ def _walk(nodes):
         yield from _walk(node["children"])
 
 
+class TocRankTests(unittest.TestCase):
+    def test_ranks_use_entry_positions_and_prefer_new_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            old = _structured([_section("O1", "2 Scope"), _section("O2", "10 Rules"),
+                               _section("O3", "Appendix")], {})
+            new = _structured([_section("N1", "2 Scope"), _section("N2", "10 Rules"),
+                               _section("N3", "Body", parent="N2", known=True),
+                               _section("N4", "Closing")], {})
+            old["document"]["structure_evidence"]["toc"] = {"usable": True, "entries": [
+                {"entry_id": "O-1", "status": "linked", "body_element_id": "H-O1"},
+                {"entry_id": "O-2", "status": "linked", "body_element_id": "H-O2"},
+                {"entry_id": "O-3", "status": "linked", "body_element_id": "H-O3"},
+            ]}
+            new_toc = new["document"]["structure_evidence"]["toc"] = {"usable": True, "entries": [
+                {"entry_id": "N-1", "status": "linked", "body_element_id": "H-N2"},
+                {"entry_id": "N-2", "status": "unmatched", "body_element_id": None},
+                {"entry_id": "N-3", "status": "linked", "body_element_id": "H-N3"},
+            ]}
+            _write(out, "old", old)
+            _write(out, "new", new)
+            nodes = list(_walk(build_outline(out, {})["sections"]))
+            self.assertEqual(
+                [(n["title"], n["toc_rank"]) for n in nodes if "toc_rank" in n],
+                [("2 Scope", 0), ("10 Rules", 0), ("Body", 2), ("Appendix", 2)],
+            )
+            new_toc["usable"] = False
+            _write(out, "new", new)
+            nodes = list(_walk(build_outline(out, {})["sections"]))
+            self.assertEqual(
+                [(n["title"], n["toc_rank"]) for n in nodes if "toc_rank" in n],
+                [("2 Scope", 0), ("10 Rules", 1), ("Appendix", 2)],
+            )
+
+
 class SeededJobTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

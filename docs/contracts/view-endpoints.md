@@ -99,6 +99,10 @@ in it. Same job rules as above (404 unknown job, 409 `not_ready`).
   section becomes a node with `side: "old"` after the new ones. Nesting follows
   `parent_section_id` only when `parent_known` is true, otherwise sections are
   top-level. All sections are listed, including those with no findings.
+- `toc_rank` is optional. It is the zero-based position in a usable
+  `document.structure_evidence.toc.entries` list of the first entry linked to
+  the section's body heading. A merged section uses the new document's rank
+  when available and otherwise falls back to the old document's rank.
 - `change_count` is the node's own items plus all descendants.
 - A change or table is placed by its NEW element's section (ADDED, MODIFIED and
   other types) or its OLD element's section (DELETED), falling back to the other

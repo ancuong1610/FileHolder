@@ -236,10 +236,11 @@ python -m uvicorn document_compare.phase2.api.service:app --host 127.0.0.1 --por
 python -m streamlit run src/document_compare/phase2/ui/app.py --server.address 127.0.0.1 --browser.gatherUsageStats false
 ```
 
-Open the printed local URL, enter the job ID under "Open existing job", select a
+Open the printed local URL, enter the job ID under "Auftrag öffnen", select a
 modified and a deleted finding, and check that the outlined region on the old
-and new page sits on the changed text. Chat shows "not configured" unless
-`TIA_API_KEY` and `LLM_MODEL` are set; do not set them for this offline check.
+and new page sits on the changed text. The chat panel displays
+"Der Assistent ist auf diesem Rechner nicht konfiguriert." unless `TIA_API_KEY`
+and `LLM_MODEL` are set. Leave both unset for this offline check.
 
 Automated checks (no browser, no network):
 

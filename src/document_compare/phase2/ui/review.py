@@ -7,6 +7,7 @@ no result text ever reaches it. Nothing here is logged.
 from __future__ import annotations
 
 import inspect
+import json
 import re
 import struct
 import zlib
@@ -14,14 +15,12 @@ from typing import Any
 
 import streamlit as st
 
+from document_compare.phase2.ui import texts
 from document_compare.phase2.ui.api_client import ApiError
 
 TYPE_OPTIONS = {"All": "all", "Added": "ADDED", "Deleted": "DELETED", "Modified": "MODIFIED", "Review": "REVIEW"}
 KIND_OPTIONS = {"All": "all", "Change": "change", "Table": "table"}
-TAGS = {"ADDED": ":green[ADDED]", "DELETED": ":red[DELETED]", "MODIFIED": ":orange[MODIFIED]",
-        "REVIEW": ":violet[REVIEW]"}
-LEGEND = ("Red = deleted, green = added, amber = modified, purple dashed = needs review "
-          "(dashed outline = uncertain match).")
+TYPE_COLORS = {"ADDED": "green", "DELETED": "red", "MODIFIED": "orange", "REVIEW": "violet"}
 TREE_CSS = (
     "<style>"
     # one-line rows: the row is a keyed container holding [button | right-aligned pill]
@@ -56,11 +55,16 @@ TREE_HEIGHT = 700
 UNPLACED_ID = "__unplaced__"
 _MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~$&:])")
 _DEFAULT_PAGE = (612, 792)
-ORDER_OPTIONS = ["Document order", "Section number"]
-ORDER_NOTE = "Sections appear in the order they occur in the new document."
-_NUMBERED = re.compile(r"^\s*(section|article|chapter|part|\u00a7)?\s*\d", re.IGNORECASE)
-_FIRST_INT = re.compile(r"\d+")
-TAG_DOTS = {"ADDED": ":green[\u25cf]", "DELETED": ":red[\u25cf]", "MODIFIED": ":orange[\u25cf]", "REVIEW": ":violet[\u25cf]"}
+ORDER_OPTIONS = list(texts.ORDER_LABELS)
+_LABEL_PREFIX = re.compile(r"^\s*(?:(?i:section|article|chapter|part|abschnitt|artikel|kapitel|teil)\s+|§\s*)?")
+_SECTION_LABEL = re.compile(
+    r"(?:(?P<namespace>[A-Z]+)\s+(?=\d))?"
+    r"(\d+|[A-Z]+(?=[.)]|$)|[IVXLCDM]+|[A-Z])"
+    r"((?:\.(?:\d+|[A-Z]+))*)(?=$|[\s.)\u2013\u2014:-])"
+)
+_ROMAN = re.compile(r"M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})")
+_ROMAN_VALUES = dict(zip("IVXLCDM", (1, 5, 10, 50, 100, 500, 1000)))
+_TABLE_LABEL = re.compile(r"Table(?: · p\.(\d+))?(?: · (\d+) cells? changed)?")
 CHEVRON_CLOSED, CHEVRON_OPEN, NO_CHEVRON = "\u203a\u2002", "\u2304\u2002", "\u2003"
 
 
@@ -104,7 +108,7 @@ def _show_image(data: bytes) -> None:
         except st.errors.StreamlitAPIException:
             st.image(data, use_container_width=True)
     except Exception:  # undecodable bytes: degrade, never crash or log them
-        st.warning("This page image could not be displayed.")
+        st.warning(texts.PAGE_DISPLAY_FAILED)
 
 
 _BUTTON_FILL = ({"width": "stretch"} if "width" in inspect.signature(st.button).parameters
@@ -142,7 +146,12 @@ def _fold(value: Any) -> str:
 
 
 def _matches(item: dict, query: str) -> bool:
-    """Query hits the item's label or any title on its section path."""
+    """Query hits the item's record ID (e.g. CHANGE-000001 quoted by the chat), its label or any
+    title on its section path. Punctuation a chat answer wraps around an ID is ignored."""
+    record_id = _fold(item.get("record_id"))
+    bare = query.strip(" `'\"()[].,;:")
+    if record_id and bare and bare in record_id:
+        return True
     return query in _fold(item.get("label")) or any(query in _fold(t) for t in item.get("section_path") or [])
 
 
@@ -188,9 +197,43 @@ def filter_outline(outline: dict, kind: str = "all", ctype: str = "all", query: 
     return {"sections": sections, "unplaced": unplaced}
 
 
-def _section_number(node: dict) -> int | None:
-    found = _FIRST_INT.search(str(node.get("title") or ""))
-    return int(found.group()) if found else None
+def _section_label(node: dict) -> tuple[str | None, list[str]]:
+    title = _LABEL_PREFIX.sub("", str(node.get("title") or ""), count=1)
+    match = _SECTION_LABEL.match(title)
+    if match is None:
+        return None, []
+    namespace, head, tail = match.groups()
+    return namespace, [head, *tail.split(".")[1:]]
+
+
+def _label_token(token: str, roman_family: bool) -> tuple[int, int | str]:
+    if token.isdecimal():
+        return 0, int(token)
+    if (roman_family or len(token) > 1) and _ROMAN.fullmatch(token):
+        values = [_ROMAN_VALUES[letter] for letter in token]
+        return 0, values[-1] + sum(-a if a < b else a for a, b in zip(values, values[1:]))
+    return 1, token.casefold()
+
+
+def _section_keys(sections: list[dict]) -> list[tuple]:
+    labels = [_section_label(node) for node in sections]
+    # Single letters such as C can also be Roman numerals. Resolve them as Roman
+    # when the alphabetic heads of this sibling group all fit that convention.
+    heads = [label[0] for namespace, label in labels if not namespace and label and label[0].isalpha()]
+    roman_family = bool(heads) and all(_ROMAN.fullmatch(head) for head in heads)
+    keys = []
+    for node, (namespace, label) in zip(sections, labels):
+        rank = node.get("toc_rank")
+        if isinstance(rank, int) and not isinstance(rank, bool) and rank >= 0:
+            keys.append((0, rank))
+        elif label:
+            tokens = tuple(_label_token(token, roman_family) for token in label)
+            if namespace:
+                tokens = ((1, namespace.casefold()), *tokens)
+            keys.append((1, tokens))
+        else:
+            keys.append((2,))
+    return keys
 
 
 def with_title_root(outline: dict) -> dict:
@@ -201,7 +244,7 @@ def with_title_root(outline: dict) -> dict:
     if len(sections) < 2 or any(n.get("children") for n in sections):
         return outline
     first = sections[0]
-    if _NUMBERED.match(str(first.get("title") or "")):
+    if first.get("toc_rank") is not None or _section_label(first)[1]:
         return outline
     rest = sections[1:]
     root = dict(first, children=list(rest),
@@ -210,18 +253,17 @@ def with_title_root(outline: dict) -> dict:
 
 
 def order_sections(sections: list[dict], mode: str) -> list[dict]:
-    """Sibling order at every level. 'Section number' sorts by the first integer in the title
-    (natural: 2 < 10); siblings without a number keep their relative order, after numbered ones."""
+    """Sort siblings by TOC rank, then natural label, then stable reading order."""
     out = [dict(n, children=order_sections(n.get("children") or [], mode)) for n in sections]
     if mode == "Section number":
-        out.sort(key=lambda n: (_section_number(n) is None, _section_number(n) or 0))
+        out = [node for _, node in sorted(zip(_section_keys(out), out), key=lambda pair: pair[0])]
     return out
 
 
 def numbers_ascending(sections: list[dict]) -> bool:
-    """True when, among every group of siblings, the section numbers never go down."""
-    nums = [n for n in map(_section_number, sections) if n is not None]
-    return nums == sorted(nums) and all(numbers_ascending(n.get("children") or []) for n in sections)
+    """True when every sibling group already follows the section ordering key."""
+    keys = _section_keys(sections)
+    return keys == sorted(keys) and all(numbers_ascending(n.get("children") or []) for n in sections)
 
 
 def _flatten_node(node: dict) -> list[dict]:
@@ -296,28 +338,32 @@ def _header(status: dict, job_id: str, outline: dict) -> None:
 
     def line(label: str, name: str, side: str) -> str:
         count = (docs.get(side) or {}).get("page_count")
-        pages = f" · {count} page{'s' if count != 1 else ''}" if isinstance(count, int) else ""
+        template = texts.PAGE_COUNT_ONE if count == 1 else texts.PAGE_COUNT_MANY
+        pages = template.format(count=count) if isinstance(count, int) else ""
         return f"{label}: **{_plain(name)}**{pages}"
 
-    old = str(status.get("old_name") or "old.pdf")
-    new = str(status.get("new_name") or "new.pdf")
+    old = line(texts.SIDE_LABELS["old"], str(status.get("old_name") or texts.OLD_PDF_NAME), "old")
+    new = line(texts.SIDE_LABELS["new"], str(status.get("new_name") or texts.NEW_PDF_NAME), "new")
     with st.container(key="hdrline"):
-        st.markdown(f"{line('Old', old, 'old')}   |   {line('New', new, 'new')}")
-    st.caption(f"Job ID: {job_id}")
+        st.markdown(f"{old}   |   {new}")
+    st.caption(texts.KEEP_JOB_ID)
+    st.code(job_id, language=None)  # copy button: reopen or fetch this result later
 
 
 def _chips(counts: dict[str, int]) -> None:
     colors = {"Changes": "blue", "Tables": "gray", "Added": "green", "Deleted": "red", "Modified": "orange",
               "Needs review": "violet"}
-    st.markdown(" ".join(f":{colors[k]}-badge[{k} {v}]" for k, v in counts.items()))
+    st.markdown(" ".join(f":{colors[k]}-badge[{texts.CHIP_LABELS[k]} {v}]" for k, v in counts.items()))
 
 
 def _filters() -> tuple[str, str, str, bool]:
     c1, c2, c3, c4 = st.columns([1, 1, 2, 1], vertical_alignment="bottom")
-    ctype = c1.selectbox("Type", list(TYPE_OPTIONS), key="f_type")
-    kind = c2.selectbox("Kind", list(KIND_OPTIONS), key="f_kind")
-    query = c3.text_input("Search", key="f_search", placeholder="Search changes or sections")
-    flagged = c4.checkbox("Needs review only", key="f_needs_review", value=False)
+    ctype = c1.selectbox(texts.TYPE_FILTER, list(TYPE_OPTIONS), key="f_type",
+                         format_func=lambda option: texts.TYPE_LABELS[TYPE_OPTIONS[option]])
+    kind = c2.selectbox(texts.KIND_FILTER, list(KIND_OPTIONS), key="f_kind",
+                        format_func=lambda option: texts.KIND_LABELS[KIND_OPTIONS[option]])
+    query = c3.text_input(texts.SEARCH, key="f_search", placeholder=texts.SEARCH_HINT)
+    flagged = c4.checkbox(texts.FLAGGED_ONLY, key="f_needs_review", value=False)
     return KIND_OPTIONS[kind], TYPE_OPTIONS[ctype], query, flagged
 
 
@@ -332,14 +378,26 @@ def _line(row_key: str):
 
 def _row(item: dict, selected: dict | None) -> None:
     page = _item_page(item)
-    text = _plain(item.get("label") or item.get("record_id"))
+    label = item.get("label") or item.get("record_id")
+    if item.get("kind") == "review":
+        label = texts.REVIEW_REASONS.get(label, label)
+    elif item.get("kind") == "table" and (match := _TABLE_LABEL.fullmatch(label)):
+        table_page, cells = match.groups()
+        parts = [texts.KIND_LABELS["table"]]
+        if table_page:
+            parts.append(texts.PAGE_SHORT.format(page=table_page))
+        if cells:
+            cell_text = texts.TABLE_CELLS_ONE if cells == "1" else texts.TABLE_CELLS_MANY
+            parts.append(cell_text.format(count=cells))
+        label = " · ".join(parts)
     left, right = _line(f"{item['kind']}::{item['record_id']}")
-    tag = " :violet[Review]" if _is_flagged(item) else ""
-    left.button(f"{TAG_DOTS[bucket(item)]}{tag} {text}", key=f"pick::{item['kind']}::{item['record_id']}",
-                on_click=_select, args=(item,), help=str(item.get("label") or item.get("record_id")),
+    tag = f" :violet[{texts.TYPE_LABELS['REVIEW']}]" if _is_flagged(item) else ""
+    left.button(f":{TYPE_COLORS[bucket(item)]}[●]{tag} {_plain(label)}",
+                key=f"pick::{item['kind']}::{item['record_id']}",
+                on_click=_select, args=(item,), help=str(label),
                 type="primary" if _same(item, selected) else "secondary", **_BUTTON_FILL)
     if page is not None:
-        right.markdown(f":gray[p.{page}]")
+        right.markdown(f":gray[{texts.PAGE_SHORT.format(page=page)}]")
 
 
 def _open_set() -> set:
@@ -389,7 +447,7 @@ def _tree_node(node: dict, selected: dict | None, opened: set) -> None:
     items, children = node.get("items") or [], node.get("children") or []
     expandable = bool(items or children)
     is_open = node["section_id"] in opened
-    _caret_row(node["section_id"], node.get("title") or "(untitled)", node["change_count"], expandable, is_open)
+    _caret_row(node["section_id"], node.get("title") or texts.UNTITLED, node["change_count"], expandable, is_open)
     if expandable and is_open:
         with st.container(key=f"ind::{node['section_id']}"):
             for item in items:
@@ -399,23 +457,24 @@ def _tree_node(node: dict, selected: dict | None, opened: set) -> None:
 
 
 def _order_control() -> str:
-    return st.radio("Order", ORDER_OPTIONS, key="tree_order", horizontal=True, label_visibility="collapsed")
+    return st.radio(texts.ORDER, ORDER_OPTIONS, key="tree_order", horizontal=True,
+                    label_visibility="collapsed", format_func=texts.ORDER_LABELS.__getitem__)
 
 
 def _tree(filtered: dict, selected: dict | None, has_sections: bool, mode: str) -> None:
-    st.markdown("**Structure**")
+    st.markdown(f"**{texts.STRUCTURE}**")
     if mode == ORDER_OPTIONS[0] and not numbers_ascending(filtered["sections"]):
-        st.caption(ORDER_NOTE)
+        st.caption(texts.ORDER_NOTE)
     opened = _open_set()
     with st.container(height=TREE_HEIGHT):
         with st.container(key="treebox"):
             if not filtered["sections"] and not filtered["unplaced"]:
-                st.caption("No matching sections or changes." if has_sections
-                           else "No section structure was found for this job.")
+                st.caption(texts.NO_MATCHING_SECTIONS if has_sections
+                           else texts.NO_SECTION_STRUCTURE)
             for node in filtered["sections"]:
                 _tree_node(node, selected, opened)
             if filtered["unplaced"]:
-                _caret_row(UNPLACED_ID, "Unplaced", len(filtered["unplaced"]), True, UNPLACED_ID in opened)
+                _caret_row(UNPLACED_ID, texts.UNPLACED, len(filtered["unplaced"]), True, UNPLACED_ID in opened)
                 if UNPLACED_ID in opened:
                     with st.container(key=f"ind::{UNPLACED_ID}"):
                         for item in filtered["unplaced"]:
@@ -426,23 +485,24 @@ def _tree(filtered: dict, selected: dict | None, has_sections: bool, mode: str) 
 
 def _breadcrumb(item: dict) -> str:
     path = item.get("section_path") or []
-    where = " › ".join(_plain(p) for p in path) if path else "Unplaced"
-    return f"{where}   {TAGS[bucket(item)]}"
+    where = " › ".join(_plain(p) for p in path) if path else texts.UNPLACED
+    ctype = bucket(item)
+    return f"{where}   :{TYPE_COLORS[ctype]}[{texts.TYPE_LABELS[ctype]}]"
 
 
 def _llm_opinion(opinion: Any) -> None:
     """Compact, advisory LLM opinion box (variant A); nothing when the LLM did not look at it."""
     if not isinstance(opinion, dict) or not opinion.get("outcome"):
         return
-    outcome = str(opinion["outcome"]).replace("_", " ").capitalize()
+    outcome = texts.LLM_OUTCOMES.get(opinion["outcome"], texts.UNKNOWN_LLM_OUTCOME)
     with st.container(border=True, key="llm_opinion"):
-        st.caption(":material/auto_awesome: LLM opinion · advisory")
-        reason = _plain(opinion.get("reason") or "No reason given.")
+        st.caption(f":material/auto_awesome: {texts.LLM_OPINION}")
+        reason = _plain(opinion.get("reason") or texts.NO_LLM_REASON)
         st.markdown(f":violet-badge[{_plain(outcome)}] {reason}")
-        meta = [opinion.get("evaluator") or "evaluator not recorded"]
+        meta = [opinion.get("evaluator") or texts.NO_EVALUATOR]
         refs = [r for r in opinion.get("evidence_refs") or [] if isinstance(r, str)]
         if refs:
-            meta.append("looked at " + ", ".join(refs[:6]) + (" …" if len(refs) > 6 else ""))
+            meta.append(texts.EVIDENCE_REFS.format(refs=", ".join(refs[:6]) + (" …" if len(refs) > 6 else "")))
         st.caption(_plain(" · ".join(meta)))
 
 
@@ -450,19 +510,20 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
     kind, record_id, ck = item["kind"], item["record_id"], _key(client)
     st.markdown(_breadcrumb(item))
     if _is_flagged(item):
-        st.markdown(f":violet[Needs review \u2014 {_plain(item.get('review_reason') or 'reason not recorded')}]")
+        reason = texts.REVIEW_REASONS.get(item.get("review_reason"), texts.NO_REVIEW_REASON)
+        st.markdown(f":violet[{texts.REVIEW_NOTE.format(reason=_plain(reason))}]")
     _llm_opinion(item.get("llm_opinion"))
-    st.caption(LEGEND)
+    st.caption(texts.LEGEND)
     try:
         details = _details(client, ck, job_id, kind, record_id)
     except ApiError as exc:
-        st.error(f"Could not load details: {exc.message}")
+        st.error(texts.DETAILS_FAILED.format(error=texts.api_error(exc.code, exc.status)))
         return
     payload = details.get(kind) or {}
     try:
         located = _locations(client, ck, job_id, kind, record_id)
     except ApiError as exc:
-        st.warning(f"Page locations are unavailable: {exc.message}")
+        st.warning(texts.NO_LOCATIONS.format(error=texts.api_error(exc.code, exc.status)))
         located = {}
     sides = (located or {}).get("sides") or {}
     old_side, new_side = sides.get("old") or {}, sides.get("new") or {}
@@ -493,7 +554,7 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
             else:
                 images[side] = _page_png(client, ck, job_id, side, page, kind, record_id, uncertain)
         except ApiError as exc:
-            st.warning(f"Could not render the {side} page: {exc.message}")
+            st.warning(texts.RENDER_FAILED.format(side=texts.SIDE_LABELS[side], error=texts.api_error(exc.code, exc.status)))
             continue
         source_missing = source_missing or images[side] is None
 
@@ -503,27 +564,27 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
     for col, side in zip(cols, ("old", "new")):
         with col:
             page, data = targets[side], images[side]
-            name = side.capitalize()
+            name = texts.SIDE_LABELS[side]
             if data:
                 _show_image(data)
-                st.caption(f"{name} \u00b7 page {page}" + (" \u00b7 section context" if context[side] else ""))
+                st.caption(texts.PAGE.format(side=name, page=page) + (texts.SECTION_CONTEXT if context[side] else ""))
             else:
                 _show_image(_placeholder_png(*size))
                 if page is None:
-                    st.caption(f"{name} \u00b7 no page location")
+                    st.caption(texts.NO_PAGE_LOCATION.format(side=name))
                 else:
-                    st.caption(f"{name} \u00b7 page {page} (image unavailable)")
+                    st.caption(texts.PAGE_IMAGE_UNAVAILABLE.format(side=name, page=page))
     if source_missing:
-        st.info("The source PDF is not available for this job, so page images cannot be shown.")
+        st.info(texts.SOURCE_PDF_UNAVAILABLE)
 
     ids = [(i["kind"], i["record_id"]) for i in flat]
     index = ids.index((kind, record_id)) if (kind, record_id) in ids else 0
     prev_col, next_col = st.columns(2, gap="small", width=260)
-    prev_col.button("Previous", key="prev_finding", disabled=index <= 0, on_click=_select,
+    prev_col.button(texts.PREVIOUS, key="prev_finding", disabled=index <= 0, on_click=_select,
                     args=(flat[max(index - 1, 0)],), **_BUTTON_FILL)
-    next_col.button("Next", key="next_finding", disabled=index >= len(flat) - 1, on_click=_select,
+    next_col.button(texts.NEXT, key="next_finding", disabled=index >= len(flat) - 1, on_click=_select,
                     args=(flat[min(index + 1, len(flat) - 1)],), **_BUTTON_FILL)
-    st.caption(f"Change ID: {record_id}")
+    st.caption(texts.CHANGE_ID.format(record_id=record_id))
 
 
 SPLIT_MIN_PX = 260
@@ -555,8 +616,8 @@ SPLITTER_JS = """
     if (!h) {
       h = doc.createElement('div'); h.className = 'dc-split-handle';
       h.setAttribute('role', 'separator'); h.setAttribute('aria-orientation', 'vertical');
-      h.setAttribute('aria-label', 'Resize structure panel'); h.tabIndex = 0;
-      h.title = 'Drag to resize. Double-click to reset.';
+      h.setAttribute('aria-label', %(resize_structure)s); h.tabIndex = 0;
+      h.title = %(resize_hint)s;
       h.addEventListener('mousedown', function (e) { start(e); });
       h.addEventListener('dblclick', function () { store(null); var q = parts(); if (q) { apply(q, null); place(q); } });
       h.addEventListener('keydown', function (e) {
@@ -591,7 +652,11 @@ SPLITTER_JS = """
   sync();
 })();
 </script>
-""" % {"min": SPLIT_MIN_PX, "max": SPLIT_MAX_SHARE}
+""" % {
+    "min": SPLIT_MIN_PX, "max": SPLIT_MAX_SHARE,
+    "resize_structure": json.dumps(texts.RESIZE_STRUCTURE),
+    "resize_hint": json.dumps(texts.RESIZE_HINT),
+}
 
 
 def _splitter() -> None:
@@ -604,7 +669,7 @@ def render(client, job_id: str, status: dict | None = None) -> None:
     try:
         outline = _outline(client, _key(client), job_id)
     except ApiError as exc:
-        st.error(f"Could not load the result for job {job_id}: {exc.message}")
+        st.error(texts.RESULT_FAILED.format(job_id=job_id, error=texts.api_error(exc.code, exc.status)))
         return
     st.markdown(TREE_CSS, unsafe_allow_html=True)
     _header(status or {}, job_id, outline)
@@ -640,6 +705,6 @@ def render(client, job_id: str, status: dict | None = None) -> None:
     with right:
         current = next((i for i in flat if _same(i, selected)), None)
         if current is None:
-            st.info("No findings match these filters." if flatten(filter_outline(outline)) else "No findings in this result.")
+            st.info(texts.NO_MATCHING_FINDINGS if flatten(filter_outline(outline)) else texts.NO_FINDINGS)
         else:
             _viewer(client, job_id, current, flat)

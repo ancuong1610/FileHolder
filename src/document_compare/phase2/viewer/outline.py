@@ -62,6 +62,7 @@ def _load_structured(output_dir: Path, side: str) -> dict[str, Any] | None:
 class _Side:
     def __init__(self, document: dict[str, Any] | None) -> None:
         self.sections: list[dict[str, Any]] = []
+        self.toc_ranks: dict[str, int] = {}
         self.by_element: dict[str, str] = {}
         self.elements: dict[str, dict[str, Any]] = {}
         self.table_element: dict[str, str] = {}
@@ -74,6 +75,12 @@ class _Side:
         sections = evidence.get("sections")
         self.sections = [s for s in sections if isinstance(s, dict) and isinstance(s.get("section_id"), str)
                          ] if isinstance(sections, list) else []
+        toc = evidence.get("toc")
+        if isinstance(toc, dict) and toc.get("usable") is True and isinstance(toc.get("entries"), list):
+            for rank, entry in enumerate(toc["entries"]):
+                heading_id = entry.get("body_element_id") if isinstance(entry, dict) else None
+                if isinstance(heading_id, str) and entry.get("status") == "linked":
+                    self.toc_ranks.setdefault(heading_id, rank)
         membership = evidence.get("membership")
         by_element = membership.get("by_element") if isinstance(membership, dict) else None
         for eid, info in (by_element.items() if isinstance(by_element, dict) else []):
@@ -147,16 +154,20 @@ class _Node:
         self.path: list[str] = [title]
         self.parent: _Node | None = None
         self.section_ids: dict[str, str] = {side: section_id}  # per-side section id (merged by title)
+        self.toc_rank: int | None = None
 
     def count(self) -> int:
         return len(self.items) + sum(c.count() for c in self.children)
 
     def as_dict(self) -> dict[str, Any]:
         ordered = [item for _, item in sorted(self.items, key=lambda pair: pair[0])]
-        return {
+        data = {
             "section_id": self.section_id, "title": self.title, "side": self.side, "level": self.level,
             "change_count": self.count(), "children": [c.as_dict() for c in self.children], "items": ordered,
         }
+        if self.toc_rank is not None:
+            data["toc_rank"] = self.toc_rank
+        return data
 
 
 def _build_tree(sides: dict[str, _Side]) -> tuple[list[_Node], dict[tuple[str, str], _Node]]:
@@ -181,14 +192,19 @@ def _build_tree(sides: dict[str, _Side]) -> tuple[list[_Node], dict[tuple[str, s
         created: list[tuple[_Node, dict[str, Any]]] = []
         for section in sides[side].sections:  # first pass, so a parent listed late is still found
             sid = section["section_id"]
+            heading_id = section.get("heading_element_id")
+            rank = sides[side].toc_ranks.get(heading_id) if isinstance(heading_id, str) else None
             title = str(section.get("title") or "")
             key = _norm(title)
             merged = by_title.get(key) if side == "old" else None
             if merged is not None:
                 index[(side, sid)] = merged
                 merged.section_ids.setdefault(side, sid)
+                if merged.toc_rank is None:
+                    merged.toc_rank = rank
                 continue
             node = _Node(sid, title, side, _int(section.get("level")))
+            node.toc_rank = rank
             index[(side, sid)] = node
             by_title.setdefault(key, node)
             created.append((node, section))
