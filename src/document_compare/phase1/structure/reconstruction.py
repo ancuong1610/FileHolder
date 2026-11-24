@@ -27,6 +27,7 @@ from typing import Any
 from document_compare.phase1.structure.furniture import (
     DERIVED_FURNITURE_VERSION,
     classify_derived_furniture,
+    furniture_exclusion_ids,
 )
 from document_compare.phase1.contracts.validation import require
 
@@ -956,6 +957,7 @@ def build_structure_evidence(
             section["uncertainty"].append("parent_label_not_found")
 
     # ---- derived element membership: every element accounted for once ----
+    furniture_layout_ids = furniture_exclusion_ids(derived_furniture)
     membership_by_element: dict[str, dict[str, Any]] = {}
     counts = {"section": 0, "preamble": 0, "toc": 0, "layout": 0, "uncertain": 0}
     current_section_id: str | None = None
@@ -963,9 +965,8 @@ def build_structure_evidence(
         element_id = element_id_of(element)
         if is_layout(element):
             category = "layout"
-        elif element_id in furniture_ids:
-            # Derived recurring page furniture (even when a single DI role
-            # called it a heading/title) is accounted for as layout.
+        elif element_id in furniture_layout_ids:
+            # Layout membership requires confirmed exclusion evidence.
             category = "layout"
         elif element_id in toc_source_ids or element_id in toc_table_ids:
             category = "toc"
@@ -1197,12 +1198,11 @@ def validate_structure_evidence(document: dict[str, Any], evidence: dict[str, An
             element_id not in heading_ids,
             f"structure: derived furniture {element_id!r} must not be a section heading",
         )
-    for element_id in by_element:
-        if element_id in furniture_by_element:
-            require(
-                by_element[element_id]["category"] == "layout",
-                "structure: derived furniture membership must be accounted for as layout",
-            )
+    for element_id in furniture_exclusion_ids(furniture):
+        require(
+            by_element[element_id]["category"] == "layout",
+            "structure: derived furniture membership must be accounted for as layout",
+        )
 
     outline = evidence.get("outline")
     if outline is not None:

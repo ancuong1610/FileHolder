@@ -29,9 +29,9 @@ def build_tools(gateway: ReaderGateway, *, result_limit: int = 10) -> dict[str, 
         change_type: str = "",
         cursor: str | None = None,
     ) -> dict[str, Any]:
-        """Literal/token search over changes, tables (cell text) and review records.
+        """Literal/token search over changes, tables (cell text), review records and moves.
 
-        kind is all/change/table/review; status is all/accepted/review; default
+        kind is all/change/table/review/move; status is all/accepted/review; default
         scope includes unresolved review. When the response is truncated, call
         again with the returned next_cursor (and no other changed filter).
         """
@@ -58,13 +58,14 @@ def build_tools(gateway: ReaderGateway, *, result_limit: int = 10) -> dict[str, 
     ) -> dict[str, Any]:
         """Canonical old/new values, evidence and bounded surrounding context.
 
-        kind is change/table/review. Long cells/text are returned in an explicit
+        kind is change/table/review/move. Long cells/text are returned in an explicit
         offset/limit window; text_next_offset is the continuation pointer when
         more text remains. For tables, page cell changes with cell_offset/
         cell_limit and follow next_offset until cell_changes_truncated is false.
         For a review, context groups neighbour text by source anchor id and
         context_source_offset pages those anchors (old and new share the offset).
-        Missing source context is warned, never invented.
+        For a move, context_source_offset pages the saved old/new block members.
+        Missing source context for changes, tables and reviews is reported.
         """
         return gateway.details(
             job_id,

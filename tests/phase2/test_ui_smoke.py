@@ -266,15 +266,69 @@ class ReviewTests(unittest.TestCase):
             self.assertIn(chip, main_text)
         for gone in ("Limitations", "not legal or semantic ground truth", "Uncertain", "Supported"):
             self.assertNotIn(gone, main_text)
-        self.assertEqual({s.label for s in at.main.selectbox}, {"Änderungstyp", "Kategorie"})  # no State filter
+        self.assertEqual({s.label for s in at.main.selectbox}, {"Änderungstyp", "Kategorie", "Auswirkung"})
         self.assertEqual(at.main.selectbox(key="f_type").options,
                          ["Alle", "Hinzugefügt", "Gelöscht", "Geändert", "Prüfung"])
-        self.assertEqual(at.main.selectbox(key="f_kind").options, ["Alle", "Änderung", "Tabelle"])
+        self.assertEqual(at.main.selectbox(key="f_kind").options, ["Alle", "Änderung", "Tabelle", "Verschiebung"])
         self.assertEqual([t.label for t in at.main.text_input], ["Suche"])
         self.assertEqual(at.main.text_input[0].placeholder, "Änderungen, Abschnitte oder IDs suchen")
         self.assertEqual(len(at.main.metric), 0)
         self.assertEqual(len(at.main.text), 0)  # no old/new text dump
         self.assertIn("Änderungs-ID: CHANGE-000001", main_text)
+        self.assertNotIn(":blue-badge[Inhalt]", main_text)  # legacy change has unknown impact
+
+    def test_impact_badges_filter_counts_and_move_viewer(self):
+        outline = default_outline()
+        top = outline["sections"][0]
+        top["items"][0]["impact"] = {
+            "level": "content", "priority": "high", "signals": list(ui_texts.IMPACT_SIGNALS), "kinds": [],
+        }
+        top["children"][0]["items"][0]["impact"] = {
+            "level": "editorial", "priority": "low", "signals": [], "kinds": ["punctuation"],
+        }
+        for index, move_kind in ((1, "paragraph_move"), (2, "local_reorder")):
+            move = item("move", f"MOVE-{index:06d}", None, "Versetzter Absatz", ["Section A"])
+            move.update(from_anchor="Früher", to_anchor="Jetzt",
+                        impact={"level": "moved", "priority": "normal", "signals": [], "kinds": [move_kind]})
+            top["items"].append(move)
+        outline["unplaced"].append(
+            item("change", "CHANGE-000003", "MODIFIED", "Die Frist beträgt 60 Tage.", [])
+        )
+        stub = StubClient(outline_value=outline)
+        at = open_job(make_app(stub))
+        self.assertFalse(at.exception)
+        self.assertEqual(at.selectbox(key="f_impact").options, ["Alle", "Inhalt", "Redaktionell", "Verschoben"])
+        self.assertFalse(at.checkbox(key="f_local_reorders").value)
+        self.assertEqual(at.checkbox(key="f_local_reorders").label, "Lokale Umstellungen anzeigen")
+        self.assertIn("pick::move::MOVE-000001", tree_keys(at))
+        self.assertNotIn("pick::move::MOVE-000002", tree_keys(at))
+        main = texts(at.main.markdown)
+        for badge in ("Inhalt 1", "Redaktionell 1", "Verschoben 1", "Wichtig"):
+            self.assertIn(badge + "]", main)
+        captions = texts(at.main.caption)
+        for signal in ui_texts.IMPACT_SIGNALS.values():
+            self.assertIn(signal, captions)
+
+        at.selectbox(key="f_impact").select("moved").run()
+        self.assertFalse(at.exception)
+        self.assertEqual(tree_keys(at), ["pick::move::MOVE-000001"])
+        self.assertEqual(at.session_state["selected"]["record_id"], "MOVE-000001")
+        self.assertIn("Versetzter Absatz", texts(at.main.caption))
+        self.assertIn("Früher → Jetzt", texts(at.main.caption))
+        self.assertEqual(page_calls(stub)[-2:], [
+            ("page_png", "job1", "old", 1, "move", "MOVE-000001", False),
+            ("page_png", "job1", "new", 2, "move", "MOVE-000001", False),
+        ])
+        self.assertIn("Inhalt 0]", texts(at.main.markdown))
+        self.assertIn("Änderungen 0]", texts(at.main.markdown))
+
+        at.checkbox(key="f_local_reorders").check().run()
+        self.assertEqual(tree_keys(at), ["pick::move::MOVE-000001", "pick::move::MOVE-000002"])
+        self.assertIn("Verschoben 2]", texts(at.main.markdown))
+        at.selectbox(key="f_impact").select("editorial").run()
+        self.assertIn("1 Befunde ohne Auswirkungsangabe sind ausgeblendet.", texts(at.main.caption))
+        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000002"])
+        self.assertIn(":gray-badge[Redaktionell]", texts(at.main.markdown))
 
     def test_table_label_is_localized(self):
         outline = default_outline()

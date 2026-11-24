@@ -35,6 +35,8 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from document_compare.phase1.matching.element_types import type_change_fields
+
 EXACT_MATCHES_FILENAME = "exact_element_matches.json"
 MODIFIED_MATCHES_FILENAME = "modified_element_matches.json"
 COMPARISON_CANDIDATES_FILENAME = "comparison_candidates.json"
@@ -224,6 +226,7 @@ def paired_candidate(
         "similarity": matching_similarity(match),
         "similarity_evidence": match.get("similarity_evidence"),
         "candidate_retrieval_method": match.get("candidate_retrieval_method"),
+        **type_change_fields(old, new),
         "old": old,
         "new": new,
         "needs_review": True if force_review else needs_review,

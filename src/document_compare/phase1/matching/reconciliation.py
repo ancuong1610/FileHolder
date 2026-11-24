@@ -18,6 +18,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from document_compare.phase1.matching.element_types import matching_family, type_change_fields
+
 TOKEN_RE = re.compile(r"[^\W_]{3,}", re.UNICODE)
 
 # Raw-text quantitative evidence: signed/plus/decimal numbers (ASCII minus,
@@ -168,10 +170,14 @@ def reconcile_residuals(
     # separated sign, short unit and scale difference visible as DELETE/ADD.
     old_raw = [_raw_text(c.get("old")) for c in deleted_candidates]
     new_raw = [_raw_text(c.get("new")) for c in added_candidates]
+    old_families = [matching_family(c.get("old")) for c in deleted_candidates]
+    new_families = [matching_family(c.get("new")) for c in added_candidates]
 
     scored: list[tuple[float, float, int, int]] = []
     for oi, (_, otoks) in enumerate(old_sets):
         for ni, (_, ntoks) in enumerate(new_sets):
+            if old_families[oi] != new_families[ni]:
+                continue
             if not _quantitative_compatible(old_raw[oi], new_raw[ni]):
                 continue
             jaccard, containment = _overlap(otoks, ntoks)
@@ -218,6 +224,7 @@ def reconcile_residuals(
                 "candidate_type": "RESEGMENTATION_REVIEW",
                 "old": old_element,
                 "new": new_element,
+                **type_change_fields(old_element, new_element),
                 "similarity": round(score, 6),
                 "needs_review": True,
                 "review_reasons": [

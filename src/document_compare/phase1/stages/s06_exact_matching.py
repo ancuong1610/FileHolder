@@ -3,11 +3,10 @@
 Input  : ``<root>/output/old_document_structured.json`` and
          ``new_document_structured.json`` (Step-5 structured models).
 
-Work   : Extracts comparable elements, filters repeated left-margin markers,
-         and pairs elements whose (element type, comparison text) are
-         identical when the pairing is globally unique or when equal
-         nonempty provisional anchor context resolves duplicates by
-         occurrence order.
+Work   : Filters repeated left-margin markers and derived furniture from
+         comparable elements, then pairs identical matching-family/text keys.
+         Globally unique pairs match directly. Duplicate pairs require equal
+         nonempty provisional anchor context and match by occurrence order.
 
 Output : ``<root>/output/exact_element_matches.json`` plus console
          statistics and previews.
@@ -25,6 +24,12 @@ environment. File orchestration lives in :func:`main`, which the
 from document_compare.shared.paths import find_project_root
 from document_compare.phase1.extraction.di_fields import get_page_number, set_page_number
 from document_compare.phase1.contracts.validation import require
+from document_compare.phase1.matching.element_types import matching_family, type_change_fields
+from document_compare.phase1.structure.furniture import (
+    classify_derived_furniture,
+    confirm_furniture_exclusions,
+    furniture_exclusion_ids,
+)
 
 # ---- imports and configuration constants ----
 
@@ -205,26 +210,57 @@ def compact(element: dict[str, Any], keys_by_id: dict[str, str]) -> dict[str, An
     }
 
 
-def extract_candidates(model: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+def _document_furniture(model: dict[str, Any]) -> dict[str, Any]:
+    structure = document_from(model).get("structure_evidence") or {}
+    furniture = structure.get("furniture") or {}
+    if any(
+        record.get("evidence_path") == "recurrence_edge_only"
+        and "exclusion_confirmed_by_other_document" not in record
+        for record in (furniture.get("by_element") or {}).values()
+    ):
+        # Stage 05 artifacts from before pair confirmation used a looser
+        # coordinate check. Recompute their furniture evidence in memory.
+        return classify_derived_furniture(document_from(model))
+    return furniture
+
+
+def extract_candidates(
+    model: dict[str, Any], *, opposite_model: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     document = document_from(model)
+    furniture = _document_furniture(model)
+    if opposite_model is not None:
+        furniture = confirm_furniture_exclusions(furniture, _document_furniture(opposite_model))
+    furniture_ids = furniture_exclusion_ids(furniture)
     ignored_ids, marker_profile = detect_repeated_margin_markers(document)
+    ignored_ids -= {
+        element_id for element_id, record in (furniture.get("by_element") or {}).items()
+        if record.get("evidence_path") == "recurrence_edge_only" and element_id not in furniture_ids
+    }
     keys_by_id = anchor_key_map(document)
+    source_candidates = [
+        element for element in document["elements"]
+        if element.get("comparison_eligible") and element.get("element_type") != TABLE_ELEMENT_TYPE
+        and str(element.get("normalized_text") or "").strip()
+    ]
     candidates, ignored = [], []
-    for element in document["elements"]:
-        if not element.get("comparison_eligible") or element.get("element_type") == TABLE_ELEMENT_TYPE:
-            continue
-        text = str(element.get("normalized_text") or "").strip()
-        if not text:
-            continue
-        if element.get("element_id") in ignored_ids:
+    for element in source_candidates:
+        element_id = element["element_id"]
+        if element_id in furniture_ids or element_id in ignored_ids:
             ignored.append({
-                "element_id": element["element_id"],
-                "normalized_text": text,
+                "element_id": element_id,
+                "normalized_text": str(element["normalized_text"]).strip(),
                 "primary_page": element.get("primary_page"),
-                "reason": "repeated_left_margin_marker",
+                "reason": "derived_furniture" if element_id in furniture_ids else "repeated_left_margin_marker",
             })
         else:
             candidates.append(compact(element, keys_by_id))
+    accounted_ids = [item["element_id"] for item in candidates + ignored]
+    require(
+        len(accounted_ids) == len(set(accounted_ids)) == len(source_candidates)
+        and set(accounted_ids) == {element["element_id"] for element in source_candidates},
+        "s06: comparable and excluded source identities are not conserved",
+    )
     candidates.sort(key=lambda item: int(item.get("reading_order") or 0))
     metadata = {
         "document_id": document.get("document_id"),
@@ -244,7 +280,7 @@ def matching_text(item: dict[str, Any]) -> str:
 
 
 def content_key(item: dict[str, Any]) -> tuple[str, str]:
-    return str(item["element_type"]), matching_text(item)
+    return matching_family(item), matching_text(item)
 
 
 def context_keys(item: dict[str, Any]) -> tuple[str, ...]:
@@ -273,6 +309,7 @@ def make_match(old: dict[str, Any], new: dict[str, Any], method: str, *, duplica
         "context_is_authoritative_hierarchy": False,
         "page_changed": old.get("primary_page") != new.get("primary_page"),
         "absolute_order_index_changed": old.get("reading_order") != new.get("reading_order"),
+        **type_change_fields(old, new),
         "old": old,
         "new": new,
     }
@@ -314,10 +351,12 @@ def build_result(old_meta: dict[str, Any], new_meta: dict[str, Any], old_items: 
                 unresolved_old.extend(left)
                 unresolved_new.extend(right)
         if unresolved_old or unresolved_new:
+            types = {item["element_type"] for item in unresolved_old + unresolved_new}
             ambiguous.append({
                 "group_id": None,
                 "reason": "duplicate_requires_non_authoritative_context_or_review",
-                "element_type": key[0],
+                "element_type": next(iter(types)) if len(types) == 1 else None,
+                "matching_family": key[0],
                 "normalized_text": key[1],
                 "old_element_ids": [item["element_id"] for item in unresolved_old],
                 "new_element_ids": [item["element_id"] for item in unresolved_new],
@@ -342,6 +381,10 @@ def build_result(old_meta: dict[str, Any], new_meta: dict[str, Any], old_items: 
             item = dict(item)
             item["exact_unmatched_reason"] = "duplicate_context_ambiguous" if item["element_id"] in ambiguous_new else "no_exact_counterpart"
             unmatched_new.append(item)
+    old_furniture = [item for item in old_ignored if item.get("reason") == "derived_furniture"]
+    new_furniture = [item for item in new_ignored if item.get("reason") == "derived_furniture"]
+    old_markers = [item for item in old_ignored if item.get("reason") != "derived_furniture"]
+    new_markers = [item for item in new_ignored if item.get("reason") != "derived_furniture"]
     return {
         "schema_version": RESULT_SCHEMA_VERSION,
         "comparison_stage": "exact_element_matching_with_provisional_context",
@@ -356,7 +399,7 @@ def build_result(old_meta: dict[str, Any], new_meta: dict[str, Any], old_items: 
         "old_document": old_meta,
         "new_document": new_meta,
         "matching_rules": {
-            "exact_content_key": ["element_type", "comparison_text"],
+            "exact_content_key": ["matching_family", "comparison_text"],
             "unique_exact_matches_are_global": True,
             "duplicate_matches_require_equal_nonempty_provisional_context": True,
             "duplicate_context_conflicts_left_unmatched": True,
@@ -368,15 +411,19 @@ def build_result(old_meta: dict[str, Any], new_meta: dict[str, Any], old_items: 
             "ambiguous_duplicate_groups": len(ambiguous),
             "unmatched_old_elements": len(unmatched_old),
             "unmatched_new_elements": len(unmatched_new),
-            "ignored_old_nonsemantic_margin_markers": len(old_ignored),
-            "ignored_new_nonsemantic_margin_markers": len(new_ignored),
+            "ignored_old_nonsemantic_margin_markers": len(old_markers),
+            "ignored_new_nonsemantic_margin_markers": len(new_markers),
+            "ignored_old_derived_furniture": len(old_furniture),
+            "ignored_new_derived_furniture": len(new_furniture),
             "match_methods": dict(sorted(Counter(x["match_method"] for x in matches).items())),
             "context_relations": dict(sorted(Counter(x["context_relation"] for x in matches).items())),
         },
         "matches": matches,
         "ambiguous_duplicate_groups": ambiguous,
-        "ignored_old_nonsemantic_margin_markers": old_ignored,
-        "ignored_new_nonsemantic_margin_markers": new_ignored,
+        "ignored_old_nonsemantic_margin_markers": old_markers,
+        "ignored_new_nonsemantic_margin_markers": new_markers,
+        "ignored_old_derived_furniture": old_furniture,
+        "ignored_new_derived_furniture": new_furniture,
         "unmatched_old": unmatched_old,
         "unmatched_new": unmatched_new,
     }
@@ -397,8 +444,12 @@ def validate_result(result: dict[str, Any], old_items: list[dict[str, Any]], new
     )
     for item in matches:
         require(
-            item["old"]["element_type"] == item["new"]["element_type"],
-            "s06: exact match crosses element types",
+            matching_family(item["old"]) == matching_family(item["new"]),
+            "s06: exact match crosses matching families",
+        )
+        require(
+            item.get("type_changed") == type_change_fields(item["old"], item["new"]).get("type_changed"),
+            "s06: exact match type-change evidence does not match source types",
         )
         require(
             matching_text(item["old"]) == matching_text(item["new"]),
@@ -446,8 +497,8 @@ def main() -> None:
 
     started = time.perf_counter()
 
-    old_meta, old_items, old_ignored, old_profile = extract_candidates(old_model)
-    new_meta, new_items, new_ignored, new_profile = extract_candidates(new_model)
+    old_meta, old_items, old_ignored, old_profile = extract_candidates(old_model, opposite_model=new_model)
+    new_meta, new_items, new_ignored, new_profile = extract_candidates(new_model, opposite_model=old_model)
     result = build_result(old_meta, new_meta, old_items, new_items, old_ignored, new_ignored, old_profile, new_profile)
     validate_result(result, old_items, new_items)
 

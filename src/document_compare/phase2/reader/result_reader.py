@@ -11,7 +11,7 @@ Contract summary (see docs/THREE_TOOL_READER.md):
   Counts are derived from the records themselves, not from possibly stale
   ``statistics``.
 - ``search``/``details`` require a completed result (``done``).
-- Every record reference is typed (``change``/``table``/``review``); missing,
+- Every record reference is typed (``change``/``table``/``review``/``move``); missing,
   non-string or duplicate record ids are contract failures, never overwritten.
 - Search cursors bind job, query/filters and canonical content fingerprint and
   reject malformed/cross-job/query/stale cursors. Cursor encoding is not
@@ -67,11 +67,19 @@ MAX_ANCHOR_ID_LENGTH = 128
 MAX_RESPONSE_BYTES = 65536
 BUDGET_HINT = "Reduce text_limit/cell_limit/context_window"
 
-ID_FIELDS = {"change": "change_id", "table": "table_change_id", "review": "review_id"}
+ID_FIELDS = {
+    "change": "change_id", "table": "table_change_id", "review": "review_id", "move": "move_id",
+}
+_RECORD_LISTS = {
+    "change": "changes", "table": "table_changes", "review": "review_queue", "move": "moves",
+}
 CANONICAL_ARTIFACT = "comparison_result.json"
 
-SEARCH_KINDS = ("all", "change", "table", "review")
-DETAIL_KINDS = ("change", "table", "review")
+DETAIL_KINDS = tuple(ID_FIELDS)
+SEARCH_KINDS = ("all", *DETAIL_KINDS)
+SEARCH_IMPACTS = ("content", "editorial", "moved")
+_IMPACT_LEVELS = (*SEARCH_IMPACTS, "non_content")
+_IMPACT_PRIORITIES = ("high", "normal", "low")
 STATUSES = ("all", "accepted", "review")
 
 GROUND_TRUTH_NOTICE = (
@@ -214,6 +222,8 @@ def _decode_cursor(cursor: str) -> dict[str, Any]:
     change_type = payload.get("change_type")
     if not isinstance(change_type, str) or len(change_type) > MAX_CHANGE_TYPE_LENGTH:
         raise ReaderError("invalid_cursor", "cursor change_type is invalid")
+    if payload.get("impact") not in (None, *SEARCH_IMPACTS):
+        raise ReaderError("invalid_cursor", "cursor impact is invalid")
     offset = payload.get("offset")
     if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0 or offset > MAX_OFFSET:
         raise ReaderError("invalid_cursor", "cursor offset is invalid")
@@ -258,6 +268,25 @@ def _bounded_json(value: Any) -> tuple[Any, bool]:
     state = {"clipped": False}
     projected = _bound_json(value, 0, state)
     return projected, state["clipped"]
+
+
+def project_impact(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Expose only the bounded impact fields shared by the reader and outline."""
+    impact = _as_dict(record.get("impact"))
+    level = impact.get("level")
+    if level not in _IMPACT_LEVELS:
+        return None
+    priority = impact.get("priority")
+    fields = {
+        "level": level,
+        "priority": priority if priority in _IMPACT_PRIORITIES else None,
+        "signals": [value for value in _as_list(impact.get("signals")) if isinstance(value, str)],
+        "kinds": [value for value in _as_list(impact.get("kinds")) if isinstance(value, str)],
+    }
+    projected, clipped = _bounded_json(fields)
+    if clipped:
+        projected["clipped"] = True
+    return projected
 
 
 def _response_bytes(payload: Any) -> int:
@@ -346,6 +375,7 @@ def summarize(
     changes = _as_list(canonical.get("changes"))
     tables = _as_list(canonical.get("table_changes"))
     reviews = _as_list(canonical.get("review_queue"))
+    moves = _as_list(canonical.get("moves"))
     try:
         _typed_index(canonical)
     except ReaderError:
@@ -361,6 +391,16 @@ def summarize(
             continue
         basis = _source_bound_assessment(item).get("basis")
         semantic_basis_counts[basis] = semantic_basis_counts.get(basis, 0) + 1
+
+    impact_level_counts: dict[str, int] = {}
+    impact_priority_counts: dict[str, int] = {}
+    for item in [*changes, *tables, *moves]:
+        impact = _as_dict(item.get("impact"))
+        level, priority = impact.get("level"), impact.get("priority")
+        if level in _IMPACT_LEVELS:
+            impact_level_counts[level] = impact_level_counts.get(level, 0) + 1
+            if priority in _IMPACT_PRIORITIES:
+                impact_priority_counts[priority] = impact_priority_counts.get(priority, 0) + 1
 
     derived_limitations: list[str] = []
     if reviews:
@@ -388,6 +428,9 @@ def summarize(
                 "changes": len(changes),
                 "table_changes": len(tables),
                 "review_open": len(reviews),
+                "moves": len(moves),
+                "impact_level_counts": impact_level_counts,
+                "impact_priority_counts": impact_priority_counts,
                 "change_type_counts": change_type_counts,
                 "resolution_status_counts": resolution_status_counts,
                 "semantic_basis_counts": semantic_basis_counts,
@@ -454,13 +497,22 @@ def _record_id(item: Any, kind: str) -> str:
     value = item.get(ID_FIELDS[kind])
     if not isinstance(value, str) or not value or len(value) > MAX_RECORD_ID_LENGTH:
         raise ReaderError("invalid_artifact", f"{kind} record has a missing or invalid record id")
+    if kind == "move" and not _is_move_id(value):
+        raise ReaderError("invalid_artifact", "move record must have a MOVE- id")
     return value
+
+
+def _is_move_id(value: Any) -> bool:
+    return (
+        isinstance(value, str) and value.startswith("MOVE-")
+        and len("MOVE-") < len(value) <= MAX_RECORD_ID_LENGTH
+    )
 
 
 def _iter_typed(canonical: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     """All typed records, validating container and row shapes."""
     typed: list[tuple[str, dict[str, Any]]] = []
-    for key, kind in (("changes", "change"), ("table_changes", "table"), ("review_queue", "review")):
+    for kind, key in _RECORD_LISTS.items():
         value = canonical.get(key)
         if value is None:
             value = []
@@ -491,6 +543,13 @@ def _pages(*sides: dict[str, Any] | None) -> list[int]:
         if isinstance(side, dict) and isinstance(side.get("primary_page"), int)
     }
     return sorted(pages)[:MAX_PAGES]
+
+
+def _change_side_sources(record: dict[str, Any], side: str) -> list[dict[str, Any]]:
+    return [
+        _as_dict(record.get(side)),
+        *(_as_dict(part) for part in _as_list(record.get(f"{side}_elements"))),
+    ]
 
 
 def _table_pages(table: dict[str, Any]) -> list[int]:
@@ -545,6 +604,14 @@ def _record_fields(item: dict[str, Any], kind: str) -> dict[str, Any]:
             "new_header": " | ".join(str(part) for part in new_header) if isinstance(new_header, list) else "",
             "change_type": item.get("change_type") or "",
         }
+    if kind == "move":
+        return {
+            "record_id": _record_id(item, kind),
+            "old_text": [_as_dict(part).get("text") for part in _as_list(item.get("old_elements"))],
+            "new_text": [_as_dict(part).get("text") for part in _as_list(item.get("new_elements"))],
+            "from_anchor": item.get("from_anchor"),
+            "to_anchor": item.get("to_anchor"),
+        }
     evidence, _ = _bounded_json(item.get("evidence"))
     return {
         "record_id": _record_id(item, kind),
@@ -596,11 +663,16 @@ def _build_search_records(canonical: dict[str, Any]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for (kind, record_id), item in _typed_index(canonical).items():
         fields = _record_fields(item, kind)
-        needs_review = _needs_review(item, kind)
+        needs_review = kind != "move" and _needs_review(item, kind)
         if kind == "change":
-            pages = _pages(_as_dict(item.get("old")), _as_dict(item.get("new")))
+            pages = _pages(*_change_side_sources(item, "old"), *_change_side_sources(item, "new"))
         elif kind == "table":
             pages = _table_pages(item)
+        elif kind == "move":
+            pages = _pages(
+                *({"primary_page": _as_dict(part).get("page")}
+                  for side in ("old", "new") for part in _as_list(item.get(f"{side}_elements")))
+            )
         else:
             pages = []
         records.append(
@@ -608,16 +680,18 @@ def _build_search_records(canonical: dict[str, Any]) -> list[dict[str, Any]]:
                 "kind": kind,
                 "record_id": record_id,
                 "change_type": item.get("change_type"),
-                "status": _status(item) or ("review" if needs_review else "unresolved"),
-                "result_state": _result_state(item, kind),
+                "status": "moved" if kind == "move" else (
+                    _status(item) or ("review" if needs_review else "unresolved")
+                ),
+                "result_state": None if kind == "move" else _result_state(item, kind),
+                **({"impact": project_impact(item)} if kind != "review" else {}),
                 "needs_review": needs_review,
-                "confirmed": _confirmed(item, kind),
+                "confirmed": kind != "move" and _confirmed(item, kind),
                 "pages": pages,
                 "fields": fields,
             }
         )
-    order = {"change": 0, "table": 1, "review": 2}
-    records.sort(key=lambda r: (order.get(r["kind"], 9), r["record_id"]))
+    records.sort(key=lambda r: (DETAIL_KINDS.index(r["kind"]), r["record_id"]))
     return records
 
 
@@ -689,6 +763,7 @@ def search(
     change_type: str | None = None,
     cursor: str | None = None,
     limit: int | None = None,
+    impact: str | None = None,
 ) -> dict[str, Any]:
     job_id = validate_job_id(job_id)
     if not isinstance(canonical, dict):
@@ -699,6 +774,7 @@ def search(
     resolved_kind = _validate_choice(kind if kind is not None else "all", SEARCH_KINDS, "kind")
     resolved_status = _validate_choice(status if status is not None else "all", STATUSES, "status")
     resolved_change_type = _validate_change_type(change_type)
+    resolved_impact = _validate_choice(impact, SEARCH_IMPACTS, "impact") if impact is not None else None
     resolved_limit = _validate_int(limit if limit is not None else DEFAULT_LIMIT, "limit", 1, MAX_LIMIT)
     offset = 0
 
@@ -716,14 +792,18 @@ def search(
             raise ReaderError("stale_cursor", "cursor does not match this status filter")
         if change_type not in (None, "") and change_type != payload.get("change_type"):
             raise ReaderError("stale_cursor", "cursor does not match this change_type filter")
+        if impact is not None and impact != payload.get("impact"):
+            raise ReaderError("stale_cursor", "cursor does not match this impact filter")
         resolved_query = payload.get("query") or ""
         resolved_kind = str(payload.get("kind") or "all")
         resolved_status = str(payload.get("status") or "all")
         resolved_change_type = str(payload.get("change_type") or "")
+        resolved_impact = payload.get("impact")
         offset = payload["offset"]
 
     terms = _terms(resolved_query)
     matched: list[dict[str, Any]] = []
+    excluded_unknown_impact = 0
     for record in _build_search_records(canonical):
         if resolved_kind != "all" and record["kind"] != resolved_kind:
             continue
@@ -734,6 +814,11 @@ def search(
         if resolved_change_type and str(record["change_type"] or "").casefold() != resolved_change_type.casefold():
             continue
         if not _match(record, terms):
+            continue
+        record_impact = _as_dict(record.get("impact")).get("level")
+        if resolved_impact is not None and record_impact != resolved_impact:
+            if record_impact is None:
+                excluded_unknown_impact += 1
             continue
         snippet, source = _best_snippet(record, terms)
         matched.append(
@@ -746,6 +831,7 @@ def search(
                 "needs_review": record["needs_review"],
                 "confirmed": record["confirmed"],
                 "pages": record["pages"],
+                **({"impact": record["impact"]} if "impact" in record else {}),
                 "snippet": snippet,
                 "snippet_source": source,
             }
@@ -764,11 +850,12 @@ def search(
                 "kind": resolved_kind,
                 "status": resolved_status,
                 "change_type": resolved_change_type,
+                **({"impact": resolved_impact} if resolved_impact is not None else {}),
                 "fingerprint": fingerprint,
                 "offset": next_offset,
             }
         )
-    coverage = _search_coverage(canonical, resolved_kind)
+    coverage = _search_coverage(canonical, resolved_kind) if resolved_impact is None else None
     warnings: list[str] = []
     if coverage and coverage.get("warning"):
         warnings.append(str(coverage["warning"]))
@@ -779,6 +866,8 @@ def search(
         "query": resolved_query,
         "status": resolved_status,
         "change_type": resolved_change_type,
+        "impact": resolved_impact,
+        **({"excluded_unknown_impact": excluded_unknown_impact} if resolved_impact is not None else {}),
         "total_matches": total,
         "returned": page,
         "offset": offset,
@@ -989,9 +1078,26 @@ def _change_projection(record: dict[str, Any], text_offset: int, text_limit: int
         )
         if flag
     ]
+
+    def member_metadata(side: str) -> dict[str, Any]:
+        members = _as_list(record.get(f"{side}_elements"))
+        if not members:
+            return {}
+        ids = _as_list(record.get(f"{side}_element_ids"))
+        return {
+            "pages": _pages(*_change_side_sources(record, side)),
+            "element_ids": [
+                value for value in ids[:MAX_METADATA_ITEMS]
+                if isinstance(value, str) and 0 < len(value) <= MAX_ANCHOR_ID_LENGTH
+            ],
+        }
+
+    move_id = _as_dict(record.get("movement")).get("move_id")
     return {
         "change_id": record.get("change_id"),
         "change_type": record.get("change_type"),
+        "impact": project_impact(record),
+        **({"movement": {"move_id": move_id}} if _is_move_id(move_id) else {}),
         "result_state": _result_state(record, "change"),
         "old": {
             **_bounded_text(old.get("text"), text_offset, text_limit),
@@ -999,6 +1105,7 @@ def _change_projection(record: dict[str, Any], text_offset: int, text_limit: int
             "element_type": old.get("element_type"),
             "primary_page": old.get("primary_page"),
             "reading_order": old.get("reading_order"),
+            **member_metadata("old"),
         },
         "new": {
             **_bounded_text(new.get("text"), text_offset, text_limit),
@@ -1006,6 +1113,7 @@ def _change_projection(record: dict[str, Any], text_offset: int, text_limit: int
             "element_type": new.get("element_type"),
             "primary_page": new.get("primary_page"),
             "reading_order": new.get("reading_order"),
+            **member_metadata("new"),
         },
         "token_diff": token_diff,
         "similarity": record.get("similarity"),
@@ -1143,6 +1251,48 @@ def _review_context(
     }
 
 
+def _move_projection(
+    record: dict[str, Any], source_offset: int, text_offset: int, text_limit: int
+) -> dict[str, Any]:
+    anchors, clipped = _bounded_json({
+        key: record.get(key) if isinstance(record.get(key), str) else None
+        for key in ("from_anchor", "to_anchor")
+    })
+    out = {
+        "move_id": record["move_id"],
+        "impact": project_impact(record),
+        **anchors,
+        "clipped": clipped,
+        "contains_modified": record.get("contains_modified") is True,
+        "source_offset": source_offset,
+        "source_limit": MAX_CONTEXT_SOURCES,
+    }
+    end = source_offset + MAX_CONTEXT_SOURCES
+    total = 0
+    for side in ("old", "new"):
+        ids = _as_list(record.get(f"{side}_element_ids"))
+        elements = _as_list(record.get(f"{side}_elements"))
+        total = max(total, len(elements))
+        page = []
+        for idx, element in enumerate(elements[source_offset:end], source_offset):
+            element = _as_dict(element)
+            element_id = ids[idx] if idx < len(ids) else None
+            element_type = element.get("element_type")
+            order, number = element.get("reading_order"), element.get("page")
+            page.append({
+                "element_id": element_id[:MAX_ANCHOR_ID_LENGTH] if isinstance(element_id, str) else None,
+                "element_type": element_type[:MAX_METADATA_TEXT] if isinstance(element_type, str) else None,
+                "reading_order": order if type(order) is int else None,
+                "page": number if type(number) is int else None,
+                **_bounded_text(element.get("text"), text_offset, text_limit),
+            })
+        out[f"{side}_elements"] = page
+    out["element_count"] = total
+    out["sources_truncated"] = end < total
+    out["next_source_offset"] = end if end < total else None
+    return out
+
+
 def _context_warnings(out: dict[str, Any]) -> None:
     warnings = out["warnings"]
 
@@ -1258,6 +1408,7 @@ def details(
         out["table"] = {
             "table_change_id": record.get("table_change_id"),
             "change_type": record.get("change_type"),
+            "impact": project_impact(record),
             "classification": record.get("classification"),
             "result_state": _result_state(record, "table"),
             "old": _bounded_table_side(record.get("old")),
@@ -1293,6 +1444,8 @@ def details(
                 text_limit=text_limit,
             ),
         }
+    elif kind == "move":
+        out["move"] = _move_projection(record, context_source_offset, text_offset, text_limit)
     else:
         evidence, evidence_clipped = _bounded_json(record.get("evidence"))
         resolution, resolution_clipped = _bounded_json(_resolution(record))
@@ -1352,7 +1505,8 @@ def details(
             ),
         }
 
-    _context_warnings(out)
+    if "context" in out:
+        _context_warnings(out)
     out["ground_truth_notice"] = GROUND_TRUTH_NOTICE
     _enforce_budget(out)
     return out

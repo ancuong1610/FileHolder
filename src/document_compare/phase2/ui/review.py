@@ -11,6 +11,7 @@ import json
 import re
 import struct
 import zlib
+from collections.abc import Callable
 from typing import Any
 
 import streamlit as st
@@ -19,8 +20,9 @@ from document_compare.phase2.ui import texts
 from document_compare.phase2.ui.api_client import ApiError
 
 TYPE_OPTIONS = {"All": "all", "Added": "ADDED", "Deleted": "DELETED", "Modified": "MODIFIED", "Review": "REVIEW"}
-KIND_OPTIONS = {"All": "all", "Change": "change", "Table": "table"}
-TYPE_COLORS = {"ADDED": "green", "DELETED": "red", "MODIFIED": "orange", "REVIEW": "violet"}
+KIND_OPTIONS = {"All": "all", "Change": "change", "Table": "table", "Move": "move"}
+TYPE_COLORS = {"ADDED": "green", "DELETED": "red", "MODIFIED": "orange", "REVIEW": "violet", "MOVED": "orange"}
+IMPACT_COLORS = {"content": "blue", "editorial": "gray", "moved": "orange"}
 TREE_CSS = (
     "<style>"
     # one-line rows: the row is a keyed container holding [button | right-aligned pill]
@@ -130,9 +132,11 @@ def target_page(side_info: dict, other_side: dict) -> int | None:
 # --------------------------------------------------------------------------- outline helpers (pure)
 
 def bucket(item: dict) -> str:
-    """ADDED / DELETED / MODIFIED for change and table items; REVIEW for standalone review items."""
+    """Change type for change/table items and the display type for review/move items."""
     if item.get("kind") == "review":
         return "REVIEW"
+    if item.get("kind") == "move":
+        return "MOVED"
     ctype = str(item.get("change_type") or "").upper()
     if "ADDED" in ctype:
         return "ADDED"
@@ -152,30 +156,25 @@ def _matches(item: dict, query: str) -> bool:
     bare = query.strip(" `'\"()[].,;:")
     if record_id and bare and bare in record_id:
         return True
-    return query in _fold(item.get("label")) or any(query in _fold(t) for t in item.get("section_path") or [])
+    label = _move_label(item) if item.get("kind") == "move" else item.get("label")
+    return query in _fold(label) or any(query in _fold(t) for t in item.get("section_path") or [])
 
 
 def _is_flagged(item: dict) -> bool:
     return bool(item.get("needs_review")) or item.get("kind") == "review"
 
 
-def _passes(item: dict, kind: str, ctype: str, flagged_only: bool = False) -> bool:
-    if item.get("kind") not in ("change", "table", "review"):
-        return False
-    if kind != "all" and item.get("kind") != kind:
-        return False
-    if flagged_only and not _is_flagged(item):
-        return False
-    return ctype == "all" or bucket(item) == ctype
+def _impact(item: dict) -> dict:
+    impact = item.get("impact")
+    return impact if isinstance(impact, dict) else {}
 
 
-def _filter_node(node: dict, kind: str, ctype: str, query: str, flagged: bool = False,
-                 inherited: bool = False) -> dict | None:
+def _filter_node(node: dict, passes: Callable[[dict], bool], query: str, inherited: bool = False) -> dict | None:
     """Filtered copy of a section; None when a search leaves nothing of it. A section whose own
     title matches the query stays with all its Type/Kind-matching items and descendants."""
     hit = inherited or (bool(query) and query in _fold(node.get("title")))
-    items = [i for i in node.get("items") or [] if _passes(i, kind, ctype, flagged) and (not query or hit or _matches(i, query))]
-    kids = (_filter_node(c, kind, ctype, query, flagged, hit) for c in node.get("children") or [])
+    items = [i for i in node.get("items") or [] if (not query or hit or _matches(i, query)) and passes(i)]
+    kids = (_filter_node(c, passes, query, hit) for c in node.get("children") or [])
     children = [c for c in kids if c]
     if query and not hit and not items and not children:
         return None
@@ -184,17 +183,41 @@ def _filter_node(node: dict, kind: str, ctype: str, query: str, flagged: bool = 
 
 
 def filter_outline(outline: dict, kind: str = "all", ctype: str = "all", query: str = "",
-                   flagged_only: bool = False) -> dict:
-    """Client-side Type/Kind/Search/Needs-review filter; counts are recomputed so they match what is shown.
+                   flagged_only: bool = False, impact: str = "all", show_local_reorders: bool = False) -> dict:
+    """Filter the loaded outline and recompute counts for the visible findings.
 
     An item matches a query through its label or any title on its section path. Standalone review
     items live in the tree and unplaced list; the compatibility ``review`` list is never shown."""
     query = _fold(query)
-    sections = [n for n in (_filter_node(n, kind, ctype, query, flagged_only) for n in outline.get("sections") or [])
-                if n]
+    excluded_unknown_impact = 0
+
+    def passes(item: dict) -> bool:
+        nonlocal excluded_unknown_impact
+        item_kind = item.get("kind")
+        item_impact = _impact(item)
+        if item_kind not in ("change", "table", "review", "move"):
+            return False
+        if kind != "all" and item_kind != kind:
+            return False
+        if flagged_only and not _is_flagged(item):
+            return False
+        if ctype != "all" and bucket(item) != ctype:
+            return False
+        if item_kind == "move" and not show_local_reorders and "local_reorder" in (item_impact.get("kinds") or []):
+            return False
+        if impact != "all" and item_impact.get("level") != impact:
+            if not item_impact.get("level"):
+                excluded_unknown_impact += 1
+            return False
+        return True
+
+    sections = [n for n in (_filter_node(n, passes, query) for n in outline.get("sections") or []) if n]
     unplaced = [i for i in outline.get("unplaced") or []
-                if _passes(i, kind, ctype, flagged_only) and (not query or _matches(i, query))]
-    return {"sections": sections, "unplaced": unplaced}
+                if (not query or _matches(i, query)) and passes(i)]
+    result = {"sections": sections, "unplaced": unplaced}
+    if impact != "all":
+        result["excluded_unknown_impact"] = excluded_unknown_impact
+    return result
 
 
 def _section_label(node: dict) -> tuple[str | None, list[str]]:
@@ -283,14 +306,16 @@ def flatten(outline: dict) -> list[dict]:
 
 
 def chip_counts(outline: dict) -> dict[str, int]:
-    items = [i for i in flatten(outline) if i.get("kind") in ("change", "table")]
+    visible = flatten(outline)
+    items = [i for i in visible if i.get("kind") in ("change", "table")]
     return {
         "Changes": sum(1 for i in items if i["kind"] == "change"),
         "Tables": sum(1 for i in items if i["kind"] == "table"),
         "Added": sum(1 for i in items if bucket(i) == "ADDED"),
         "Deleted": sum(1 for i in items if bucket(i) == "DELETED"),
         "Modified": sum(1 for i in items if bucket(i) == "MODIFIED"),
-        "Needs review": sum(1 for i in flatten(outline) if _is_flagged(i)),
+        "Needs review": sum(1 for i in visible if _is_flagged(i)),
+        **{level: sum(1 for i in visible if _impact(i).get("level") == level) for level in IMPACT_COLORS},
     }
 
 
@@ -352,19 +377,24 @@ def _header(status: dict, job_id: str, outline: dict) -> None:
 
 def _chips(counts: dict[str, int]) -> None:
     colors = {"Changes": "blue", "Tables": "gray", "Added": "green", "Deleted": "red", "Modified": "orange",
-              "Needs review": "violet"}
-    st.markdown(" ".join(f":{colors[k]}-badge[{texts.CHIP_LABELS[k]} {v}]" for k, v in counts.items()))
+              "Needs review": "violet", **IMPACT_COLORS}
+    labels = {**texts.CHIP_LABELS, **texts.IMPACT_LABELS}
+    st.markdown(" ".join(f":{colors[k]}-badge[{labels[k]} {v}]" for k, v in counts.items()))
 
 
-def _filters() -> tuple[str, str, str, bool]:
-    c1, c2, c3, c4 = st.columns([1, 1, 2, 1], vertical_alignment="bottom")
+def _filters() -> tuple[str, str, str, bool, str, bool]:
+    c1, c2, c3, c4 = st.columns([1, 1, 1, 2], vertical_alignment="bottom")
     ctype = c1.selectbox(texts.TYPE_FILTER, list(TYPE_OPTIONS), key="f_type",
                          format_func=lambda option: texts.TYPE_LABELS[TYPE_OPTIONS[option]])
     kind = c2.selectbox(texts.KIND_FILTER, list(KIND_OPTIONS), key="f_kind",
                         format_func=lambda option: texts.KIND_LABELS[KIND_OPTIONS[option]])
-    query = c3.text_input(texts.SEARCH, key="f_search", placeholder=texts.SEARCH_HINT)
-    flagged = c4.checkbox(texts.FLAGGED_ONLY, key="f_needs_review", value=False)
-    return KIND_OPTIONS[kind], TYPE_OPTIONS[ctype], query, flagged
+    impact = c3.selectbox(texts.IMPACT_FILTER, list(texts.IMPACT_LABELS), key="f_impact",
+                          format_func=texts.IMPACT_LABELS.__getitem__)
+    query = c4.text_input(texts.SEARCH, key="f_search", placeholder=texts.SEARCH_HINT)
+    c5, c6 = st.columns(2)
+    flagged = c5.checkbox(texts.FLAGGED_ONLY, key="f_needs_review", value=False)
+    local = c6.checkbox(texts.LOCAL_REORDERS, key="f_local_reorders", value=False)
+    return KIND_OPTIONS[kind], TYPE_OPTIONS[ctype], query, flagged, impact, local
 
 
 # --------------------------------------------------------------------------- tree
@@ -374,6 +404,25 @@ def _line(row_key: str):
     box = st.container(key=f"row::{row_key}")
     with box:
         return st.columns([1, 0.001], gap="small", vertical_alignment="center")
+
+
+def _impact_badges(item: dict) -> str:
+    impact = _impact(item)
+    level = impact.get("level")
+    if level not in IMPACT_COLORS:
+        return ""
+    badge = f":{IMPACT_COLORS[level]}-badge[{texts.IMPACT_LABELS[level]}]"
+    if level == "content" and impact.get("priority") == "high":
+        badge += f" :red-badge[{texts.IMPORTANT}]"
+    return badge
+
+
+def _move_label(item: dict) -> str:
+    return texts.MOVE_LABEL.format(
+        text=item.get("label") or item["record_id"],
+        source=item.get("from_anchor") or texts.UNKNOWN_ANCHOR,
+        destination=item.get("to_anchor") or texts.UNKNOWN_ANCHOR,
+    )
 
 
 def _row(item: dict, selected: dict | None) -> None:
@@ -392,7 +441,13 @@ def _row(item: dict, selected: dict | None) -> None:
         label = " · ".join(parts)
     left, right = _line(f"{item['kind']}::{item['record_id']}")
     tag = f" :violet[{texts.TYPE_LABELS['REVIEW']}]" if _is_flagged(item) else ""
-    left.button(f":{TYPE_COLORS[bucket(item)]}[●]{tag} {_plain(label)}",
+    badges = _impact_badges(item)
+    if item.get("kind") == "move":
+        label = _move_label(item)
+        button_label = f"{badges or texts.TYPE_LABELS['MOVED']}\\: {_plain(label)}"
+    else:
+        button_label = f":{TYPE_COLORS[bucket(item)]}[●]{tag} {badges} {_plain(label)}"
+    left.button(button_label,
                 key=f"pick::{item['kind']}::{item['record_id']}",
                 on_click=_select, args=(item,), help=str(label),
                 type="primary" if _same(item, selected) else "secondary", **_BUTTON_FILL)
@@ -487,7 +542,10 @@ def _breadcrumb(item: dict) -> str:
     path = item.get("section_path") or []
     where = " › ".join(_plain(p) for p in path) if path else texts.UNPLACED
     ctype = bucket(item)
-    return f"{where}   :{TYPE_COLORS[ctype]}[{texts.TYPE_LABELS[ctype]}]"
+    badges = _impact_badges(item)
+    if ctype == "MOVED" and badges:
+        return f"{where}   {badges}"
+    return f"{where}   :{TYPE_COLORS[ctype]}[{texts.TYPE_LABELS[ctype]}] {badges}"
 
 
 def _llm_opinion(opinion: Any) -> None:
@@ -509,6 +567,13 @@ def _llm_opinion(opinion: Any) -> None:
 def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
     kind, record_id, ck = item["kind"], item["record_id"], _key(client)
     st.markdown(_breadcrumb(item))
+    if kind == "move":
+        st.caption(_plain(_move_label(item)))
+    impact = _impact(item)
+    if impact.get("level") == "content" and impact.get("priority") == "high":
+        signals = [texts.IMPACT_SIGNALS[s] for s in impact.get("signals") or [] if s in texts.IMPACT_SIGNALS]
+        if signals:
+            st.caption(" · ".join(signals))
     if _is_flagged(item):
         reason = texts.REVIEW_REASONS.get(item.get("review_reason"), texts.NO_REVIEW_REASON)
         st.markdown(f":violet[{texts.REVIEW_NOTE.format(reason=_plain(reason))}]")
@@ -673,18 +738,21 @@ def render(client, job_id: str, status: dict | None = None) -> None:
         return
     st.markdown(TREE_CSS, unsafe_allow_html=True)
     _header(status or {}, job_id, outline)
-    _chips(chip_counts(outline))
-    kind, ctype, query, flagged = _filters()
-    _splitter()
-    left, right = st.container(key="split").columns([2, 3])
-    with left:
-        mode = _order_control()
+    filters = _filters()
     shown = with_title_root(outline)
     root = shown["sections"][0]["section_id"] if shown is not outline else None
     if root and st.session_state.get("root_open") != (job_id, root):
         _open_set().add(root)  # the title root starts expanded, once per job
         st.session_state["root_open"] = (job_id, root)
-    filtered = filter_outline(shown, kind, ctype, query, flagged)
+    filtered = filter_outline(shown, *filters)
+    excluded = filtered.get("excluded_unknown_impact", 0)
+    if excluded:
+        st.caption(texts.EXCLUDED_UNKNOWN_IMPACT.format(count=excluded))
+    _chips(chip_counts(filtered))
+    _splitter()
+    left, right = st.container(key="split").columns([2, 3])
+    with left:
+        mode = _order_control()
     filtered["sections"] = order_sections(filtered["sections"], mode)
     flat = flatten(filtered)
 
@@ -705,6 +773,6 @@ def render(client, job_id: str, status: dict | None = None) -> None:
     with right:
         current = next((i for i in flat if _same(i, selected)), None)
         if current is None:
-            st.info(texts.NO_MATCHING_FINDINGS if flatten(filter_outline(outline)) else texts.NO_FINDINGS)
+            st.info(texts.NO_MATCHING_FINDINGS if flatten(outline) else texts.NO_FINDINGS)
         else:
             _viewer(client, job_id, current, flat)

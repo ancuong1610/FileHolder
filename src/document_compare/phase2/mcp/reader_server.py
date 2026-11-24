@@ -10,7 +10,7 @@ endpoints; no result filtering is reimplemented here.
 
 Tools:
     summarize(job_id)
-    search(job_id, query="", kind="all", status="all", change_type="", cursor=None, limit=10)
+    search(job_id, query="", kind="all", status="all", change_type="", cursor=None, limit=10, impact=None)
     details(job_id, kind, record_id, context_window=1, cell_offset=0, cell_limit=20,
             text_offset=0, text_limit=4000, context_source_offset=0)
 """
@@ -71,8 +71,9 @@ def search(
     change_type: str = "",
     cursor: str | None = None,
     limit: int = 10,
+    impact: str | None = None,
 ) -> dict:
-    """Literal/token search across changes, tables (cell text) and review records."""
+    """Search changes, table cells, review records and moves. Impact may be content, editorial or moved."""
     return _get(
         f"/jobs/{_job_id(job_id)}/read/search",
         {
@@ -82,6 +83,7 @@ def search(
             "change_type": change_type,
             "cursor": cursor,
             "limit": limit,
+            "impact": impact,
         },
     )
 

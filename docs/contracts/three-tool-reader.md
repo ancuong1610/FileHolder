@@ -15,12 +15,45 @@ The service owns a reusable read projection over saved canonical/structured arti
 Every call is scoped by a validated job ID. Summaries distinguish `queued`/`running`/`failed` from a completed result; search/details reject unfinished jobs rather than read partial output. Job scoping and preventing the planner from changing its bound job are not substitutes for server-side authorization in a future shared deployment.
 
 - `summarize(job_id)`: bounded overall status, counts for element/table changes and unresolved review, processing/extraction/structure limitations where present, old/new identity where available, and safe relative artifact links. `counts.result_state_counts` reports distinct `supported`/`uncertain`/`non_semantic` records; a review linked to a change/table is not counted twice. Counts are computed from records, not narrated by another LLM. Engine acceptance is not legal/semantic ground truth. Missing data is explicit.
-- `search(job_id, query="", kind="all", status="all", change_type="", cursor=None, limit=10)`: bounded literal/token-based search across changes, tables (including cell text) and review records. Each returned record carries top-level `result_state` (`supported`, `uncertain` or `non_semantic`) alongside the legacy `status`, `needs_review` and `confirmed` fields. Legacy filter names are not renamed: `kind=review` selects review records (always `uncertain`), `status=accepted` selects confirmed records, and `status=review` selects `needs_review` records. Return stable typed references, useful snippets, status/review flags, source pages, total matches, truncation and a next cursor. `limit` is validated and capped at 50; no silent first-page-as-complete result. Default scope includes uncertainty, not accepted-only.
+- `search(job_id, query="", kind="all", status="all", change_type="", cursor=None, limit=10, impact=None)`: bounded literal/token-based search across changes, tables (including cell text), review records and moves. Change, table and review hits carry top-level `result_state` (`supported`, `uncertain` or `non_semantic`) alongside the legacy `status`, `needs_review` and `confirmed` fields. Legacy filter names are not renamed: `kind=review` selects review records (always `uncertain`), `status=accepted` selects confirmed records, and `status=review` selects `needs_review` records. Return stable typed references, useful snippets, status/review flags, source pages, total matches, truncation and a next cursor. `limit` is validated and capped at 50; no silent first-page-as-complete result. Default scope includes uncertainty, not accepted-only.
 - `details(job_id, kind, record_id, context_window=1, cell_offset=0, cell_limit=20, text_offset=0, text_limit=4000, context_source_offset=0)`: canonical old/new values, locations/evidence, resolution/review reasons and bounded surrounding document context, with table cell rows/columns/headers where available. Normalized state appears at `change.result_state`, `table.result_state` or `review.result_state`, and also inside the returned `resolution`; a review record is always `uncertain`. For a review record, `linked_refs` gives typed, canonical-validated references to its linked change/table (the review stays unresolved) and `context` groups bounded neighbour text per source anchor id, paged by `context_source_offset` with per-side `sources_total`/`source_offset`/`sources_truncated`/`next_source_offset` (`MAX_CONTEXT_SOURCES` anchors per side per page; old and new share the offset). Long text/cells/context have explicit offset/limit windows and a continuation mechanism (`text_next_offset`, `cell_*`, `next_source_offset`), not invisible clipping or a full-report dump. Unsupported/missing source context is named rather than invented from tentative hierarchy. Every successful envelope is bounded by `MAX_RESPONSE_BYTES`; exceeding it returns `response_too_large` rather than silently dropping fields. Optional offsets/limits are documented with the implementation.
 
-Response metadata identifies the result snapshot. The HTTP/API operational summary exposes the same distinct counts at top-level `result_states` (the reader nests them at `counts.result_state_counts`). Search cursors bind job, query/filters and canonical fingerprint, with deterministic ordering; malformed, cross-job/query and stale cursors are rejected. Cursor encoding is not authentication. Typed record references distinguish change, table and review IDs; duplicate/ambiguous IDs are contract failures rather than dictionary overwrite. Query/limits/context windows are bounded. No tool accepts arbitrary filesystem paths or returns provider credentials/logs.
+Response metadata identifies the result snapshot. The HTTP/API operational summary exposes the same distinct counts at top-level `result_states` (the reader nests them at `counts.result_state_counts`). Search cursors bind job, query/filters and canonical fingerprint, with deterministic ordering; malformed, cross-job/query and stale cursors are rejected. Cursor encoding is not authentication. Typed record references distinguish change, table, review and move IDs; duplicate/ambiguous IDs are contract failures rather than dictionary overwrite. Query/limits/context windows are bounded. No tool accepts arbitrary filesystem paths or returns provider credentials/logs.
 
 Service read errors have stable safe codes (`not_found`, `not_ready`, `invalid_arguments`, `invalid_cursor`, `stale_cursor`, `invalid_artifact`, `response_too_large`, `context_unavailable` as applicable), not leaked stack traces or private server paths. HTTP/MCP transport errors remain distinguishable from a successful empty search.
+
+### Impact and move projection
+
+- Completed summaries add `counts.moves`, `counts.impact_level_counts` and
+  `counts.impact_priority_counts`. Impact counts combine change, table and move
+  records with known impact. Linked reviews and suppressed events are outside
+  those counts. The summary stays aggregate.
+- Search hits and details for changes, tables and moves carry `impact` with
+  `level`, `priority`, `signals` and `kinds`. Missing impact is `null`. Impact
+  metadata clipped to reader bounds carries `clipped: true`.
+- HTTP (`/jobs/{job_id}/read/search`) and reader MCP search accept optional
+  `impact=content|editorial|moved`. It combines with the other filters and
+  binds to the cursor. Omitting it searches all impact levels, including
+  legacy records with unknown impact. A continuation cursor carries the
+  filter and older cursors without an impact filter remain valid. Filtered
+  searches return `excluded_unknown_impact`, counting records that match the
+  other filters and query but lack a known impact. The count is independent of
+  pagination.
+- Search includes the bounded union of source member pages for a paragraph
+  split or merge. Details expose bounded per-side `pages` and `element_ids`
+  for those groups.
+- `kind=move` accepts typed `MOVE-…` references. Search indexes saved OLD and NEW
+  member text and the preceding heading labels. Move hits report
+  `status: "moved"`, `result_state: null`, `confirmed: false` and
+  `needs_review: false`. The legacy acceptance and review filters apply to
+  disposition-bearing records. The reader includes `local_reorder` moves.
+- Details put the move under `move`, with anchors, `element_count`,
+  `contains_modified` and bounded lists of `old_elements` and `new_elements`.
+  Elements include their ID, page, reading order, type and text window.
+  `context_source_offset` pages these members in parallel on both sides
+  (up to `MAX_CONTEXT_SOURCES` per side), using `next_source_offset` while
+  `sources_truncated` is true. Change details carry `movement.move_id` when
+  present. Older results without `moves` expose zero move records.
 
 ### Gate A assessment projection
 

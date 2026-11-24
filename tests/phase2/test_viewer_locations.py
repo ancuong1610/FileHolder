@@ -175,6 +175,42 @@ class HandBuiltLocationTests(unittest.TestCase):
         self.assertEqual(info["regions"][0]["polygon"], [0.1, 0.1, 0.5, 0.1, 0.5, 0.2, 0.1, 0.2])
         self.assertEqual(info["regions"][1]["polygon"], [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0])
 
+    def test_editorial_split_highlights_both_fragment_pages(self) -> None:
+        pages = [_page(1), _page(2)]
+        first = _element("N1", [_rect(1, 1, 2, 5, 4)], 1)
+        second = _element("N2", [_rect(2, 1, 6, 5, 8)], 2)
+        _write_docs(self.out, None, {"pages": pages, "elements": [first, second]})
+        canonical = self._canonical(None, "N1")
+        canonical["changes"][0].update(
+            impact={"level": "editorial", "kinds": ["paragraph_split"]},
+            new_element_ids=["N1", "N2"],
+            new_elements=[
+                {"element_id": "N1", "text": "Die Frist gilt", "primary_page": 1},
+                {"element_id": "N2", "text": "ab Genehmigung.", "primary_page": 2},
+            ],
+        )
+        result = resolve_locations(self.out, canonical, "change", "C1")
+        self.assertEqual([r["page_number"] for r in result["sides"]["new"]["regions"]], [1, 2])
+
+    def test_move_resolves_all_members_on_both_sides(self) -> None:
+        pages = [_page(1), _page(2), _page(3)]
+        docs = [
+            {"pages": pages, "elements": [
+                _element(f"{side}1", [_rect(first, 1, 2, 5, 4)], first),
+                _element(f"{side}2", [_rect(second, 1, 6, 5, 8)], second),
+            ]}
+            for side, first, second in (("O", 1, 2), ("N", 2, 3))
+        ]
+        _write_docs(self.out, *docs)
+        move = {"move_id": "MOVE-000001", "old_element_ids": ["O1", "O2"], "new_element_ids": ["N1", "N2"]}
+        result = resolve_locations(self.out, {"moves": [move]}, "move", move["move_id"])
+        self.assertFalse(result["needs_review"])
+        for side, expected in (("old", [1, 2]), ("new", [2, 3])):
+            info = result["sides"][side]
+            self.assertEqual((info["location"], info["primary_page"]), ("polygon", expected[0]))
+            self.assertEqual([r["page_number"] for r in info["regions"]], expected)
+            self.assertEqual(info["regions"][0]["polygon"], [0.1, 0.1, 0.5, 0.1, 0.5, 0.2, 0.1, 0.2])
+
     def test_values_are_clamped_to_unit_range(self) -> None:
         doc = {"page_count": 1, "pages": [_page(1)], "elements": [_element("E1", [_rect(1, -1, -1, 50, 50)], 1)]}
         _write_docs(self.out, doc, doc)

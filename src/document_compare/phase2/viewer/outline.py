@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from document_compare.phase2.reader.result_reader import ID_FIELDS, ReaderError
+from document_compare.phase2.reader.result_reader import ID_FIELDS, ReaderError, project_impact
 from document_compare.phase2.viewer.locations import (
     SIDES, _CONTAINERS, _load_document, linked_change_ids, needs_review_status, record_side_ref, review_reason,
 )
@@ -232,12 +232,21 @@ def _table_pages(record: dict[str, Any], side: str) -> int | None:
     return None
 
 
+def _first_move_element(record: dict[str, Any], side: str) -> dict[str, Any]:
+    elements = record.get(f"{side}_elements")
+    if isinstance(elements, list) and elements and isinstance(elements[0], dict):
+        return elements[0]
+    return {}
+
+
 def _item(kind: str, record: dict[str, Any], sides: dict[str, _Side]) -> dict[str, Any]:
     ctype = record.get("change_type") if isinstance(record.get("change_type"), str) else None
     item: dict[str, Any] = {
         "kind": kind, "record_id": record.get(ID_FIELDS[kind]), "change_type": ctype,
         "label": "", "page_old": None, "page_new": None, "section_path": [],
     }
+    if kind != "review":
+        item["impact"] = project_impact(record)
     if kind == "change":
         pref = ("old", "new") if ctype == "DELETED" else ("new", "old")
         text = ""
@@ -265,6 +274,19 @@ def _item(kind: str, record: dict[str, Any], sides: dict[str, _Side]) -> dict[st
         if cells:
             label += f" \u00b7 {len(cells)} cell{'s' if len(cells) != 1 else ''} changed"
         item["label"] = label
+    elif kind == "move":
+        item["label"] = _label(
+            _first_move_element(record, "new").get("text")
+            or _first_move_element(record, "old").get("text")
+        )
+        for key in ("from_anchor", "to_anchor"):
+            item[key] = _label(record.get(key)) or None
+        for side in SIDES:
+            page = _int(_first_move_element(record, side).get("page"))
+            if page is None:
+                eid = record_side_ref(kind, record, side)
+                page = _int((sides[side].elements.get(eid) or {}).get("primary_page"))
+            item[f"page_{side}"] = page
     else:
         evidence = record.get("evidence") if isinstance(record.get("evidence"), dict) else {}
         text = next((evidence.get(k) for k in ("new_text_preview", "old_text_preview") if _collapse(evidence.get(k))), "")
@@ -333,7 +355,7 @@ def _fill_context_pages(roots: list[_Node], placed: list[tuple[_Node, dict[str, 
         for side in SIDES:
             other = "new" if side == "old" else "old"
             item[f"context_{side}"] = False
-            if item.get(f"page_{side}") is not None:
+            if item["kind"] == "move" or item.get(f"page_{side}") is not None:
                 continue
             span = context[id(node)][side] if node is not None else None
             page = None
@@ -393,6 +415,8 @@ def _order_of(kind: str, record: dict[str, Any], sides: dict[str, _Side], pref: 
         order = _int(element.get("reading_order")) if element else None
         if order is None and kind == "change" and isinstance(record.get(side), dict):
             order = _int(record[side].get("reading_order"))
+        elif order is None and kind == "move":
+            order = _int(_first_move_element(record, side).get("reading_order"))
         if order is not None:
             return (order, position)
     return (_BIG, position)
@@ -417,6 +441,8 @@ def build_outline(output_dir: Path, canonical: dict) -> dict:
     def put(kind: str, record: dict[str, Any], item: dict[str, Any], position: int) -> None:
         ctype = record.get("change_type") if isinstance(record.get("change_type"), str) else ""
         pref = ("old", "new") if "DELETED" in ctype else ("new", "old")
+        if kind == "move":
+            pref = ("new",)
         node = _place(kind, record, sides, index, pref)
         if node is None:
             unplaced.append(item)
@@ -425,13 +451,14 @@ def build_outline(output_dir: Path, canonical: dict) -> dict:
             node.items.append((_order_of(kind, record, sides, pref, position), item))
             placed_items.append((node, item))
 
-    for kind in ("change", "table"):
+    for kind in ("change", "table", "move"):
         rows = canonical.get(_CONTAINERS[kind])
         for position, record in enumerate(rows if isinstance(rows, list) else []):
             if not isinstance(record, dict) or not isinstance(record.get(ID_FIELDS[kind]), str):
                 continue
             item = _item(kind, record, sides)
-            by_id[record[ID_FIELDS[kind]]] = item
+            if kind != "move":
+                by_id[record[ID_FIELDS[kind]]] = item
             put(kind, record, item, position)
 
     changes = canonical.get("changes") if isinstance(canonical.get("changes"), list) else []

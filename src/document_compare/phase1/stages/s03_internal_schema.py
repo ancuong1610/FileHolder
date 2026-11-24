@@ -215,7 +215,11 @@ def confidence_for_spans(spans: list[dict[str, int]], word_offsets: list[int], w
 # ---- heading and paragraph-type evidence ----
 PAGE_NUMBER_PATTERN = re.compile(r"^\s*(?:page|seite)\s+\d+\s*$", re.IGNORECASE)
 LIST_ITEM_PATTERN = re.compile(
-    r"^\s*(?:[•‣▪◦-]|\(\d+[a-z]?\)|\([a-z]\)|\d+(?:\.\d+)*[.)]|[a-z][.)])\s+",
+    r"^\s*"
+    r"(?!(?:z\.\s*[bt]\.|d\.\s*h\.|u\.\s*[aä]\.|s\.\s*[ou]\.|"
+    r"i\.\s*(?:s\.\s*d\.|d\.\s*r\.)|v\.\s*a\.|o\.\s*ä\.|m\.\s*e\.|"
+    r"ggf\.|bzw\.|vgl\.|usw\.)(?!\w))"
+    r"(?:[•‣▪◦-]|\(\d+[a-z]?\)|\([a-z]\)|\d+(?:\.\d+)*[.)]|[a-z][.)])\s+",
     re.IGNORECASE,
 )
 HEADING_LIKE_ROLES = {"title", "sectionHeading"}

@@ -12,7 +12,8 @@ pre-existing limitation, not proof of general cross-seed semantic stability.
 Thresholds and candidate ordering were not retuned here.
 
 This note documents (a) the unchanged lexical matching defaults, (b) Gate A's
-additive source-proof/residual safety policy, and (c) the benchmark schema used by
+additive source-proof/residual safety policy, (c) change impact and moves, and
+(d) the benchmark schema used by
 `phase1/evaluation/evaluate.py`. It exists so a result can be read honestly: an
 uncovered condition is never reported as a perfect score.
 
@@ -30,6 +31,31 @@ The historical calibration of these values is not recorded in the repository;
 they are the existing defaults and were deliberately not retuned. Gate A adds
 evidence and guarded routing; it does not lower these global thresholds or
 change provider authority. Existing result fields stay compatible.
+
+## Text family and page furniture
+
+Stages 06 and 07 use one matching family for `paragraph`, `heading`,
+`list_item`, `footnote` and `title`. Tables and each layout type stay
+separate. Stage 06 keys by family and comparison text. Duplicate assignments
+continue to rely on shared nonempty provisional anchor context and occurrence
+order. Stage 07 uses the family for retrieval and compatibility, and Stage 09
+uses it for residual pairing. A pair with differing source types records
+`type_changed` with the original OLD and NEW types. An exact match with only a
+type change is unchanged content. For modified pairs, Stage 14 adds
+`element_type_changed` to the normal impact kinds.
+
+Stage 05 records the furniture evidence path as `role_supported` or
+`recurrence_edge_only`. The second path requires normalized text of at most
+40 characters and five words, at most one occurrence per page, and occurrence
+on at least five pages and 30% of physical pages. At least 90% of all
+occurrences must share a top or bottom edge band, and every occurrence must
+be free of a DI heading role. A polygon must fit the page bounds in either the
+reported or rotated coordinate frame to count as recurrence edge evidence.
+A `recurrence_edge_only` record becomes a layout member and is excluded from
+matching only when the other document derives furniture with the same group key
+using either evidence path. Without corroboration, the record carries
+`exclusion_confirmed_by_other_document: false` and the text stays comparable.
+Source roles, types, text and IDs remain available in the structured document.
 
 ## Gate A: source-bound material evidence and residual safety
 
@@ -78,6 +104,75 @@ The exposed 72-case experiment is development/regression evidence for this chang
 A separately frozen 48-pair set is reserved until candidate source freeze; both
 sets are AI-authored controlled examples, not expert-certified natural revisions.
 No >=80% supported recall / >=95% precision claim follows from these code checks.
+
+## Change impact and moves
+
+Stage 14 adds an `impact` object to each change and table change. The object
+carries `version`, `level`, `priority`, `kinds`, `signals`, `basis` and
+`language_profile`. For table modifications with text differences, changed-cell
+classifications determine the strongest impact and contribute their kinds and
+signals. Changes to cell spans, row or column membership, or other table
+structure carry `table_structure_changed` and `content` impact. They have
+normal priority, elevated if a changed cell has high-priority signals. Impact
+and priority describe the observed difference independently of resolution and
+review status.
+
+| Level | Deterministic rule |
+| --- | --- |
+| `content` | Text is added or deleted, or the old and new lexical tokens differ. A changed material signal gives `high` priority. Other insertions, deletions or replacements have `normal` priority. |
+| `editorial` | Tokens match after editorial normalization. Examples include punctuation, letter case, certain German gender forms and equivalent number formats. German `ß` folds to `ss` at the end of a word or before a consonant. These findings have `low` priority and remain visible. |
+| `non_content` | Text is identical or equal after glyph folding. Folding covers whitespace, ligatures, Unicode composition, invisible characters and selected quote, dash and bullet variants. Deterministically resolved glyph-only differences are kept as low-priority `non_semantic_events` and omitted from the findings list. |
+| `moved` | A paired element or block changed relative reading order or a body element crossed a matched section boundary. Moves are separate records with their own priorities. |
+
+Leading purely decorative bullets (`• ◦ ▪ ‣ ⁃ ·`) may fold away. A leading
+hyphen followed by a space can fold away unless a digit, percent sign or
+currency follows. State marks such as `□`, `■` and `☑` remain distinct and
+give a `state_marker` signal when changed. Stage 11 requires the same ordered
+digits, plus and minus signs, and state marks in the raw text before using
+glyph equivalence to suppress a finding. Editorial normalization retains
+numeric operators between numbers, including `/`, `:`, `-`, `–`, `x` and
+`×`. Changing or removing one yields a `number` signal.
+
+The German-first lexicons (`language_profile: de-en`) include English fallback
+terms. Changed token spans can produce `modal`, `negation`, `qualifier`,
+`condition`, `number`, `date`, and `reference` signals. Token edit operations
+produce `added_text`, `deleted_text`, and `replaced_text` signals.
+The rules preserve changed numbers, dates, negations and references as evidence
+when those tokens change.
+
+Stage 09 reconciles unambiguous splits and merges of one paragraph into two to
+four adjacent paragraphs. The whole and its parts must share the same folded
+preceding heading key and have usable extraction evidence. Ambiguous token
+buckets leave their candidates in the ordinary matching and review flow.
+Glyph-equivalent groups route through Stage 11 to
+`structural_only` events in Stage 14, suppressing redundant add/delete findings
+while preserving the source members. Groups that also differ editorially
+surface as editorial modifications. Material token differences stay in the
+ordinary matching and review flow.
+
+Stage 09 compares established pairs in OLD and NEW reading order. It flags
+pairs outside a longest increasing subsequence and body pairs whose preceding
+headings do not form an established heading pair. It groups flagged pairs when
+contiguous on both sides.
+Stage 14 emits these blocks in `moves` with a `MOVE-…` ID, element IDs and text
+evidence on both sides, preceding headings (`from_anchor` and `to_anchor`),
+`element_count`, `contains_modified` and `impact`. The move kinds are
+`section_move` (heading-led block), `paragraph_move`, and `local_reorder`.
+A single unmodified body element under the same heading is a low-priority local
+reorder and is hidden by default in the reviewer. Other moves are normal
+priority, elevated when they involve a heading or a high-priority modification.
+A moved modification also remains in `changes` with `movement.move_id`.
+Stage 14 statistics expose `moves`, `impact_level_counts`,
+`impact_priority_counts` and `table_impact_level_counts`.
+
+This is deterministic lexical and reading-order evidence. Editorial equivalence,
+materiality and movement can depend on context or extraction quality. Verification
+for these rules is limited to synthetic probes and regression fixtures.
+
+## Known limits
+
+- A heading demotion with identical text does not produce a change record.
+- Change IDs are positional. Regenerating a comparison may renumber them.
 
 ## Opt-in matching diagnostics
 

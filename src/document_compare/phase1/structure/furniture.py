@@ -1,19 +1,10 @@
 """Generic, derived document-furniture classification (T-03).
 
-Repeated page furniture (running headers/footers) is recognised from three
-independent signals that already exist in the neutral model, so production
-never trusts a single DI role:
-
-* recurrence of the same normalized text on several physical pages,
-* a supporting cohort of layout-role occurrences (``header``/``footer``/
-  ``page_number``) on several pages, and
-* page-edge geometry shared by those occurrences.
-
-Only the combined evidence derives a furniture classification. Original roles,
-types, text, spans, polygons and IDs are never modified; insufficient evidence
-leaves an element unclassified so a legitimate repeated body heading survives.
-No CRR/legal vocabulary, sample page numbers or document-specific rules are
-used.
+Repeated page furniture (running headers/footers) can be supported by a layout
+role cohort and shared page-edge geometry. A second path uses short text with
+widespread recurrence, at most once per physical page, and a dominant edge
+across all occurrences. A heading role vetoes the second path. Both paths
+preserve the original roles, types, text, spans, polygons and IDs.
 
 The classifier is pure: it reads its input mapping only, uses the standard
 library only, and is shared by the body-section producer
@@ -25,6 +16,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
+from math import isfinite
 from typing import Any
 
 from document_compare.phase1.contracts.validation import require
@@ -45,6 +37,11 @@ FURNITURE_SUPPORTING_ROLE_MIN_SHARE = 0.5
 FURNITURE_EDGE_BAND_RATIO = 0.2
 FURNITURE_EDGE_MIN_SHARE = 0.9
 FURNITURE_GEOMETRY_MIN_SHARE = 0.5
+RECURRENCE_EDGE_MIN_PAGES = 5
+RECURRENCE_EDGE_MIN_PAGE_SHARE = 0.30
+RECURRENCE_EDGE_MAX_CHARACTERS = 40
+RECURRENCE_EDGE_MAX_WORDS = 5
+HEADING_ROLES = {"title", "sectionHeading"}
 
 WHITESPACE = re.compile(r"\s+")
 KEY_TRANSLATION = str.maketrans({
@@ -99,6 +96,8 @@ def _page_size_map(document: dict[str, Any]) -> dict[int, tuple[float, float]]:
 def _edge_band(
     element: dict[str, Any],
     sizes: dict[int, tuple[float, float]],
+    *,
+    validate_frame: bool = False,
 ) -> str | None:
     """Return ``"top"``/``"bottom"`` when the element sits at a page edge.
 
@@ -111,8 +110,17 @@ def _edge_band(
     size = sizes.get(element.get("primary_page"))
     if bounds is None or size is None:
         return None
-    _, height = size
-    _, min_y, _, max_y = bounds
+    width, height = size
+    min_x, min_y, max_x, max_y = bounds
+    if validate_frame:
+        if not all(isfinite(value) for value in element["primary_polygon"]):
+            return None
+        if not (0 <= min_x <= max_x and 0 <= min_y <= max_y):
+            return None
+        if max_x > width or max_y > height:
+            if max_x > height or max_y > width:
+                return None
+            height = width
     if min_y / height <= FURNITURE_EDGE_BAND_RATIO:
         return "top"
     if (height - max_y) / height <= FURNITURE_EDGE_BAND_RATIO:
@@ -125,17 +133,25 @@ def _record(
     *,
     key: str,
     edge: str,
+    evidence_path: str,
     occurrence_count: int,
     page_count: int,
     layout_count: int,
     layout_page_count: int,
     geometry_count: int,
-    edge_share: float,
+    dominant_count: int,
 ) -> dict[str, Any]:
     return {
         "classification": "furniture",
         "derived": True,
-        "reason": "recurring_text_with_supporting_layout_role_cohort_and_page_edge_geometry",
+        "evidence_path": evidence_path,
+        **({"exclusion_confirmed_by_other_document": False}
+           if evidence_path == "recurrence_edge_only" else {}),
+        "reason": (
+            "recurring_text_with_supporting_layout_role_cohort_and_page_edge_geometry"
+            if evidence_path == "role_supported"
+            else "short_text_recurring_once_per_page_at_shared_page_edge"
+        ),
         "group_key": key,
         "evidence": {
             "occurrence_count": occurrence_count,
@@ -145,7 +161,8 @@ def _record(
             "supporting_role_share": round(layout_count / occurrence_count, 4),
             "geometry_occurrence_count": geometry_count,
             "edge": edge,
-            "edge_share_of_geometry": round(edge_share, 4),
+            "edge_share_of_geometry": round(dominant_count / geometry_count, 4),
+            "edge_share_of_occurrences": round(dominant_count / occurrence_count, 4),
             "element_edge": edge,
             "element_role": element.get("original_role"),
             "element_type": element.get("element_type"),
@@ -169,6 +186,10 @@ def classify_derived_furniture(document: dict[str, Any]) -> dict[str, Any]:
     )
 
     sizes = _page_size_map(document)
+    physical_pages = {
+        page["page_number"] for page in document.get("pages") or []
+        if isinstance(page, dict) and isinstance(page.get("page_number"), int)
+    }
 
     groups: dict[str, list[dict[str, Any]]] = {}
     for element in elements:
@@ -206,50 +227,59 @@ def classify_derived_furniture(document: dict[str, Any]) -> dict[str, Any]:
             for element in layout_occurrences
             if isinstance(element.get("primary_page"), int)
         }
-        if (
-            len(layout_occurrences) < FURNITURE_MIN_SUPPORTING_ROLE_OCCURRENCES
-            or len(layout_pages) < FURNITURE_MIN_SUPPORTING_ROLE_PAGES
-        ):
-            continue
-        if (
-            len(layout_occurrences) / occurrence_count
-            < FURNITURE_SUPPORTING_ROLE_MIN_SHARE
-        ):
-            continue
-
         geometry = [
             (element, band)
             for element in occurrences
             if (band := _edge_band(element, sizes)) is not None
         ]
-        if len(geometry) < FURNITURE_MIN_OCCURRENCES:
-            continue
-        if len(geometry) / occurrence_count < FURNITURE_GEOMETRY_MIN_SHARE:
-            continue
-
         bands = Counter(band for _, band in geometry)
-        dominant_band, dominant_count = bands.most_common(1)[0]
-        if dominant_count / len(geometry) < FURNITURE_EDGE_MIN_SHARE:
-            continue
-
+        dominant_band, dominant_count = next(iter(bands.most_common(1)), (None, 0))
         layout_edge = [
             element
-            for element in layout_occurrences
-            if _edge_band(element, sizes) == dominant_band
+            for element, band in geometry
+            if band == dominant_band and element.get("element_type") in LAYOUT_ELEMENT_TYPES
         ]
         layout_edge_pages = {
             element.get("primary_page")
             for element in layout_edge
             if isinstance(element.get("primary_page"), int)
         }
-        if (
-            len(layout_edge) < FURNITURE_MIN_SUPPORTING_ROLE_OCCURRENCES
-            or len(layout_edge_pages) < FURNITURE_MIN_SUPPORTING_ROLE_PAGES
+        edge_share = dominant_count / len(geometry) if geometry else 0
+        role_supported = (
+            len(geometry) >= FURNITURE_MIN_OCCURRENCES
+            and len(layout_occurrences) >= FURNITURE_MIN_SUPPORTING_ROLE_OCCURRENCES
+            and len(layout_pages) >= FURNITURE_MIN_SUPPORTING_ROLE_PAGES
+            and len(layout_occurrences) / occurrence_count >= FURNITURE_SUPPORTING_ROLE_MIN_SHARE
+            and len(geometry) / occurrence_count >= FURNITURE_GEOMETRY_MIN_SHARE
+            and edge_share >= FURNITURE_EDGE_MIN_SHARE
+            and len(layout_edge) >= FURNITURE_MIN_SUPPORTING_ROLE_OCCURRENCES
+            and len(layout_edge_pages) >= FURNITURE_MIN_SUPPORTING_ROLE_PAGES
+        )
+        if role_supported:
+            evidence_path = "role_supported"
+        elif (
+            len(key) <= RECURRENCE_EDGE_MAX_CHARACTERS
+            and len(key.split()) <= RECURRENCE_EDGE_MAX_WORDS
+            and len(pages) >= max(RECURRENCE_EDGE_MIN_PAGES, RECURRENCE_EDGE_MIN_PAGE_SHARE * len(physical_pages))
+            and len(pages) == occurrence_count
+            and pages <= physical_pages
+            and not any(element.get("original_role") in HEADING_ROLES for element in occurrences)
         ):
+            geometry = [
+                (element, band)
+                for element in occurrences
+                if (band := _edge_band(element, sizes, validate_frame=True)) is not None
+            ]
+            if not geometry:
+                continue
+            dominant_band, dominant_count = Counter(band for _, band in geometry).most_common(1)[0]
+            if dominant_count / occurrence_count < FURNITURE_EDGE_MIN_SHARE:
+                continue
+            evidence_path = "recurrence_edge_only"
+        else:
             continue
 
         furniture_group_count += 1
-        edge_share = dominant_count / len(geometry)
         for element, band in geometry:
             if band != dominant_band:
                 # A same-text occurrence outside the shared edge band is not
@@ -259,12 +289,13 @@ def classify_derived_furniture(document: dict[str, Any]) -> dict[str, Any]:
                 element,
                 key=key,
                 edge=band,
+                evidence_path=evidence_path,
                 occurrence_count=occurrence_count,
                 page_count=len(pages),
                 layout_count=len(layout_occurrences),
                 layout_page_count=len(layout_pages),
                 geometry_count=len(geometry),
-                edge_share=edge_share,
+                dominant_count=dominant_count,
             )
 
     return {
@@ -283,11 +314,43 @@ def classify_derived_furniture(document: dict[str, Any]) -> dict[str, Any]:
             "supporting_role_min_share": FURNITURE_SUPPORTING_ROLE_MIN_SHARE,
             "edge_band_ratio": FURNITURE_EDGE_BAND_RATIO,
             "edge_min_share": FURNITURE_EDGE_MIN_SHARE,
+            "recurrence_edge_min_pages": RECURRENCE_EDGE_MIN_PAGES,
+            "recurrence_edge_min_page_share": RECURRENCE_EDGE_MIN_PAGE_SHARE,
+            "recurrence_edge_max_characters": RECURRENCE_EDGE_MAX_CHARACTERS,
+            "recurrence_edge_max_words": RECURRENCE_EDGE_MAX_WORDS,
         },
         "limitations": [
             "derived_furniture_is_a_hypothesis_not_an_authoritative_role",
-            "requires_recurrence_supporting_layout_role_and_page_edge_geometry_together",
+            "requires_role_supported_or_recurrence_edge_only_evidence",
             "same_text_body_occurrences_outside_the_shared_edge_band_are_not_classified",
             "raw_roles_types_text_spans_and_ids_are_preserved_unchanged",
         ],
+    }
+
+
+def confirm_furniture_exclusions(
+    furniture: dict[str, Any], opposite: dict[str, Any],
+) -> dict[str, Any]:
+    """Confirm recurrence-only exclusions against derived furniture on the other side."""
+    opposite_keys = {
+        record["group_key"] for record in (opposite.get("by_element") or {}).values()
+        if record.get("group_key")
+    }
+    by_element = {
+        element_id: (
+            {**record, "exclusion_confirmed_by_other_document": record.get("group_key") in opposite_keys}
+            if record.get("evidence_path") == "recurrence_edge_only" else record
+        )
+        for element_id, record in (furniture.get("by_element") or {}).items()
+    }
+    return {**furniture, "by_element": by_element}
+
+
+def furniture_exclusion_ids(furniture: dict[str, Any]) -> set[str]:
+    """Only confirmed recurrence-only evidence is eligible for layout exclusion."""
+    records = furniture.get("by_element") or {}
+    return {
+        element_id for element_id in furniture.get("element_ids") or []
+        if records.get(element_id, {}).get("evidence_path") != "recurrence_edge_only"
+        or records[element_id].get("exclusion_confirmed_by_other_document") is True
     }

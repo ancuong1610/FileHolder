@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -35,10 +36,15 @@ from document_compare.phase1.contracts.semantic_assessment import (
     validate_semantic_assessment,
 )
 from document_compare.phase1.contracts.validation import require
+from document_compare.phase1.matching.element_types import type_change_fields
+from document_compare.phase1.matching.impact import IMPACT_VERSION, classify_impact, raw_glyph_signature
 from document_compare.phase1.matching.semantic_evidence import (
     independent_correspondence_verified,
     recompute_material_proof,
 )
+
+from document_compare.phase1.stages.s08_candidates import build_representation_diffs
+from document_compare.phase1.stages.s09_movement import previous_candidate_view
 
 STEP14_VERSION = "3.0.0-generic-canonical-result"
 
@@ -49,6 +55,7 @@ EXPECTED_STEP13_STAGE = "optional_llm_special_case_evaluation"
 
 # Step-11 deterministic case types whose diffs are proven non-semantic.
 DETERMINISTIC_SUPPRESSED = {
+    "glyph_or_invisible_char_artifact",
     "possible_extraction_word_split",
     "tokenization_neutral_difference",
     # A hyphen/whitespace-position-only diff is a formatting/OCR line-wrap
@@ -61,6 +68,8 @@ DETERMINISTIC_SUPPRESSED = {
 # (amendment margin markers like M5/C12).
 DETERMINISTIC_STRUCTURAL = {
     "possible_marker_or_version_marker_difference",
+    "paragraph_split",
+    "paragraph_merge",
 }
 
 # Review reasons that mark a tokenization-equivalent diff as carrying a hidden
@@ -171,7 +180,7 @@ def _resolve(
         status, needs_review = "non_semantic", False
     elif route_name == "SPECIAL_CASE_RULE":
         # Deterministic Step-11 rules proved these case types carry no semantic
-        # content (word split, tokenization-neutral, hyphen/wrap-only). A
+        # content (glyph fold, word split, tokenization-neutral, or wrap). A
         # stale route with a hidden semantic-signal reason is still kept in
         # review rather than suppressed.
         case_type = route["case_type"]
@@ -356,7 +365,7 @@ def _consumed_candidate_ids(
     """Every candidate/review id this stage resolves, in consumption order."""
     consumed: list[str] = []
     for group in ("modified", "modified_review", "deleted", "added",
-                  "duplicate_exact_review", "relocated"):
+                  "duplicate_exact_review", "relocated", "paragraph_resegmentation"):
         for item in movement.get(group) or []:
             cid = item.get("candidate_id")
             if cid:
@@ -401,6 +410,182 @@ def _validate_consumed_routed(
 # Canonical build
 # ---------------------------------------------------------------------------
 
+def _impact_text(element: dict[str, Any] | None) -> str | None:
+    element = element or {}
+    return element.get("normalized_text") or element.get("text")
+
+
+def _table_impact(record: dict[str, Any]) -> dict[str, Any]:
+    cells = record.get("cell_changes") or []
+    classification = record.get("classification")
+    old, new = record.get("old") or {}, record.get("new") or {}
+    row_alignment = record.get("row_alignment") or {}
+    structure_changed = (
+        classification == "STRUCTURE_CHANGED_REVIEW"
+        or bool(row_alignment.get("added_rows") or row_alignment.get("deleted_rows"))
+        or any(
+            old.get(field) is not None and new.get(field) is not None and old[field] != new[field]
+            for field in ("row_count", "column_count")
+        )
+        or any(
+            cell.get("structure_changed")
+            or cell.get("classification") in {"STRUCTURE_CHANGED_REVIEW", "ADDED", "DELETED"}
+            for cell in cells
+        )
+    )
+    if not structure_changed and classification in {"UNCHANGED", "LAYOUT_EQUIVALENT"}:
+        level, priority, kinds, signals = "non_content", "low", ["table_layout_equivalent"], []
+    else:
+        impacts = []
+        for cell in cells:
+            if cell.get("classification") == "UNCHANGED":
+                continue
+            old_text = _impact_text(cell.get("old"))
+            new_text = _impact_text(cell.get("new"))
+            if old_text is not None or new_text is not None:
+                impacts.append(classify_impact(old_text, new_text))
+        signals = sorted({signal for impact in impacts for signal in impact["signals"]})
+        if structure_changed:
+            level = "content"
+            priority = "high" if any(impact["priority"] == "high" for impact in impacts) else "normal"
+            kinds = ["table_structure_changed"]
+        elif impacts:
+            levels = ("non_content", "editorial", "content")
+            strongest = max(
+                impacts,
+                key=lambda impact: (levels.index(impact["level"]), impact["priority"] == "high"),
+            )
+            level, priority = strongest["level"], strongest["priority"]
+            kinds = sorted({kind for impact in impacts for kind in impact["kinds"]})
+        else:
+            level, priority, kinds = "content", "normal", ["table_change_unclassified"]
+
+    return {
+        "version": IMPACT_VERSION,
+        "level": level,
+        "priority": priority,
+        "kinds": kinds,
+        "signals": signals,
+        "basis": "deterministic_rule",
+        "language_profile": "de-en",
+    }
+
+
+def _paragraph_records(
+    movement: dict[str, Any], routes_by_candidate: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Resolve grouped display records and independently verify source conservation."""
+    groups = movement.get("paragraph_resegmentation") or []
+    if not groups:
+        return []
+    seen = {
+        side: {
+            element["element_id"]
+            for group in ("unchanged", "modified", "modified_review", "deleted", "added",
+                          "duplicate_exact_review", "relocated", "resegmentation_review")
+            for record in movement.get(group) or []
+            if (element := record.get(side)) and element.get("element_id")
+        }
+        for side in ("old", "new")
+    }
+    records = []
+    for group in groups:
+        cid = group["candidate_id"]
+        sizes = (len(group["old_elements"]), len(group["new_elements"]))
+        kind = "paragraph_split" if sizes[0] == 1 else "paragraph_merge"
+        require(
+            (sizes[0] == 1 and 2 <= sizes[1] <= 4)
+            or (sizes[1] == 1 and 2 <= sizes[0] <= 4),
+            "s14: invalid paragraph resegmentation cardinality",
+        )
+        record = {
+            "source_candidate_id": cid,
+            "source_group": "paragraph_resegmentation",
+            "change_type": "MODIFIED",
+            "provenance": {
+                "step9_candidate_id": cid,
+                "source_candidate_ids": group["source_candidate_ids"],
+                "matching_not_recomputed": True,
+            },
+        }
+        for side in ("old", "new"):
+            elements = [compact_element(item) for item in group[f"{side}_elements"]]
+            ids = [element["element_id"] for element in elements]
+            for element_id in ids:
+                require(element_id and element_id not in seen[side],
+                        f"s14: {side.upper()} paragraph element consumed more than once or missing")
+                seen[side].add(element_id)
+            record[f"{side}_elements"] = elements
+            record[f"{side}_element_ids"] = ids
+            # Use the first element as the display location. The source records
+            # and their individual raw texts are kept in the element list.
+            record[side] = {
+                **elements[0],
+                **{
+                    field: " ".join(element.get(field) or element["text"] for element in elements)
+                    for field in ("text", "normalized_text", "comparison_text")
+                },
+            }
+
+        impact = classify_impact(record["old"]["text"], record["new"]["text"])
+        resolution = _resolve(cid, routes_by_candidate, {})
+        require(
+            kind == group["kind"] and resolution["case_type"] == kind,
+            "s14: paragraph resegmentation evidence disagrees with its route",
+        )
+        if not resolution["needs_review"]:
+            status = "structural_only" if impact["level"] == "non_content" else "accepted"
+            require(
+                impact["level"] in {"non_content", "editorial"}
+                and impact["level"] == group["impact_level"] and resolution["status"] == status,
+                "s14: paragraph resegmentation evidence disagrees with its route",
+            )
+        if resolution["status"] == "structural_only":
+            impact["kinds"] = [kind]
+        else:
+            impact["kinds"] = sorted({kind, *impact["kinds"]})
+            record["token_diff"] = build_representation_diffs(record["old"], record["new"])
+        record["resolution"] = resolution
+        record["impact"] = impact
+        record["change_fingerprint"] = change_fingerprint("MODIFIED", record["old"], record["new"])
+        records.append(record)
+    return records
+
+
+def _canonical_moves(
+    movement: dict[str, Any], changes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    moves = movement.get("moves") or []
+    if not moves:
+        return []
+    pairs = {
+        (item["old"]["element_id"], item["new"]["element_id"]): item["candidate_id"]
+        for group in ("unchanged", "modified", "modified_review", "relocated")
+        for item in movement.get(group) or []
+        if item.get("old") and item.get("new")
+    }
+    moves_by_candidate = {}
+    seen_moves = set()
+    for move in moves:
+        move_id = move["move_id"]
+        require(move_id not in seen_moves, "s14: duplicate move_id")
+        seen_moves.add(move_id)
+        old_ids, new_ids = move["old_element_ids"], move["new_element_ids"]
+        require(len(old_ids) == len(new_ids) == move["element_count"] > 0,
+                "s14: move cardinality mismatch")
+        for old_id, new_id in zip(old_ids, new_ids):
+            cid = pairs.get((old_id, new_id))
+            require(cid is not None and cid not in moves_by_candidate,
+                    "s14: move must refer to a distinct matched pair")
+            moves_by_candidate[cid] = move_id
+
+    for change in changes:
+        move_id = moves_by_candidate.get(change["source_candidate_id"])
+        if move_id:
+            change["movement"] = {"move_id": move_id}
+    return moves
+
+
 def _build_changes(
     movement: dict[str, Any],
     tables: dict[str, Any],
@@ -440,6 +625,20 @@ def _build_changes(
         for item in movement.get(group) or []:
             cid = item["candidate_id"]
             resolution = _resolve(cid, routes_by_candidate, decisions_by_route)
+            if (
+                resolution["status"] == "suppressed_artifact"
+                and resolution["case_type"] == "glyph_or_invisible_char_artifact"
+                and raw_glyph_signature((item.get("old") or {}).get("text") or "")
+                != raw_glyph_signature((item.get("new") or {}).get("text") or "")
+            ):
+                resolution.update(
+                    status="review",
+                    needs_review=True,
+                    result_state="uncertain",
+                    review_reasons=sorted({
+                        *resolution["review_reasons"], "raw_glyph_signature_changed",
+                    }),
+                )
 
             # Stage 14 is the final deterministic owner: a semantic acceptance
             # nomination is only kept when the actual source revalidates it.
@@ -494,6 +693,22 @@ def _build_changes(
             record["change_fingerprint"] = change_fingerprint(
                 record["change_type"], record["old"], record["new"]
             )
+
+            impact = classify_impact(_impact_text(record["old"]), _impact_text(record["new"]))
+            if (
+                resolution["status"] in {"suppressed_artifact", "structural_only"}
+                and impact["level"] != "non_content"
+            ):
+                impact.update(
+                    level="non_content",
+                    priority="low",
+                    kinds=sorted({*impact["kinds"], "deterministic_artifact_rule"}),
+                )
+            type_evidence = type_change_fields(record["old"], record["new"])
+            if type_evidence:
+                record.update(type_evidence)
+                impact["kinds"] = sorted({*impact["kinds"], "element_type_changed"})
+            record["impact"] = impact
 
             if resolution["status"] == "suppressed_artifact":
                 non_semantic_events.append({**record, "event_type": "SUPPRESSED_ARTIFACT"})
@@ -600,6 +815,7 @@ def _build_changes(
             "source_candidate_id": item.get("candidate_id"),
             "old": compact_element(item.get("old")),
             "new": compact_element(item.get("new")),
+            **type_change_fields(item.get("old"), item.get("new")),
         })
 
     # Evidence-only review queues routed in Step 11 must reach the canonical
@@ -629,12 +845,14 @@ def _build_changes(
         cid = match["table_match_id"]
         resolution = _resolve(cid, routes_by_candidate, decisions_by_route)
         cls = match.get("classification")
+        impact = _table_impact(match)
 
         # Clean equivalent tables are intentionally omitted from canonical
         # changes.  Equivalent tables with routed uncertainty remain visible:
         # their review evidence is the change requiring user attention.
         if (
             cls in {"UNCHANGED", "LAYOUT_EQUIVALENT"}
+            and impact["level"] == "non_content"
             and resolution["status"] == "non_semantic"
             and not resolution["needs_review"]
         ):
@@ -651,6 +869,7 @@ def _build_changes(
             "resolution": resolution,
             "review_reasons": match.get("review_reasons") or [],
         }
+        record["impact"] = impact
 
         if resolution["status"] in {"suppressed_artifact", "structural_only"}:
             non_semantic_events.append({**record, "event_type": resolution["status"].upper()})
@@ -694,6 +913,7 @@ def _build_changes(
                     table.get("cell_content_status") or "unavailable",
                 "resolution": resolution,
             }
+            record["impact"] = _table_impact(record)
 
             if resolution["status"] in {"suppressed_artifact", "structural_only"}:
                 non_semantic_events.append({**record, "event_type": resolution["status"].upper()})
@@ -752,7 +972,92 @@ def _build_changes(
         if entry in review_queue and entry not in unresolved_table_reviews:
             unresolved_table_reviews.append(entry)
 
+    for record in _paragraph_records(movement, routes_by_candidate):
+        if record["resolution"]["status"] == "structural_only":
+            non_semantic_events.append({
+                **record,
+                "event_id": f"EVENT-{len(non_semantic_events)+1:06d}",
+                "event_type": "STRUCTURAL_ONLY",
+            })
+        else:
+            record["change_id"] = f"CHANGE-{len(changes)+1:06d}"
+            changes.append(record)
+            resolution = record["resolution"]
+            if resolution["needs_review"]:
+                queue_review({
+                    "review_id": f"REVIEW-{len(review_queue)+1:06d}",
+                    "source_kind": "non_table_change",
+                    "change_id": record["change_id"],
+                    "source_candidate_id": record["source_candidate_id"],
+                    "case_type": resolution["case_type"],
+                    "resolution": resolution,
+                })
+
     return changes, table_changes, review_queue, non_semantic_events, unresolved_table_reviews
+
+
+def _keep_previous_ids(
+    current: list[dict[str, Any]], previous: list[dict[str, Any]],
+    field: str, prefix: str, key: Callable[[dict[str, Any]], Any],
+) -> dict[str, str]:
+    previous_ids = {key(record): record[field] for record in previous if field in record}
+    slot = max((int(value.rsplit("-", 1)[1]) for value in previous_ids.values()), default=0) + 1
+    replacements = {}
+    for record in current:
+        if field not in record:
+            continue
+        record_id = previous_ids.get(key(record))
+        if record_id is None:
+            record_id = f"{prefix}-{slot:06d}"
+            slot += 1
+        replacements[record[field]] = record_id
+        record[field] = record_id
+    return replacements
+
+
+def _preserve_previous_identities(
+    movement: dict[str, Any], tables: dict[str, Any], routing: dict[str, Any],
+    changes: list[dict[str, Any]], reviews: list[dict[str, Any]], events: list[dict[str, Any]],
+) -> None:
+    if not movement.get("candidate_identity_history"):
+        return
+    previous_non_table_routes = routing.get("previous_non_table_routes")
+    require(isinstance(previous_non_table_routes, list),
+            "s14: paragraph identity history requires its Stage 11 routes")
+    previous_routes = previous_non_table_routes + [
+        route for route in _canonical_routes(routing)
+        if route["source_kind"] in {"table_match", "table_residual", "table_review_group"}
+    ]
+    previous_changes, _, previous_reviews, previous_events, _ = _build_changes(
+        previous_candidate_view(movement), tables,
+        {route["candidate_id"]: route for route in previous_routes}, {},
+    )
+
+    def candidate(record):
+        return record.get("source_candidate_id")
+
+    def review_identity(record):
+        return (
+            record["source_kind"], record["case_type"],
+            record.get("source_evidence_id") or candidate(record),
+        )
+
+    # Legacy artifact events may share an ordinal with a visible change. Only
+    # the visible change IDs can be targets of review links.
+    _keep_previous_ids(
+        events, previous_changes + previous_events, "change_id", "CHANGE", candidate,
+    )
+    replacements = _keep_previous_ids(
+        changes, previous_changes + previous_events, "change_id", "CHANGE", candidate,
+    )
+    _keep_previous_ids(reviews, previous_reviews, "review_id", "REVIEW", review_identity)
+    _keep_previous_ids(events, previous_events, "event_id", "EVENT", candidate)
+    for review in reviews:
+        if "change_id" in review:
+            review["change_id"] = replacements[review["change_id"]]
+        evidence = review.get("evidence") or {}
+        if review["source_kind"] == "residual_proposal_group":
+            evidence["change_ids"] = sorted(replacements[cid] for cid in evidence["change_ids"])
 
 
 def generic_projection(
@@ -828,6 +1133,8 @@ def build_comparison_result(
     changes, table_changes, review_queue, non_semantic_events, unresolved_table_reviews = (
         _build_changes(movement, tables, routes_by_candidate, decisions_by_route)
     )
+    _preserve_previous_identities(movement, tables, routing, changes, review_queue, non_semantic_events)
+    moves = _canonical_moves(movement, changes)
 
     canonical_items = changes + table_changes
     resolution_status_counts = dict(
@@ -868,15 +1175,22 @@ def build_comparison_result(
         },
         "statistics": {
             "changes": len(changes),
+            "moves": len(moves),
             "table_changes": len(table_changes),
             "review_queue": len(review_queue),
             "non_semantic_events": len(non_semantic_events),
             "change_type_counts": dict(Counter(x["change_type"] for x in changes)),
+            "impact_level_counts": dict(Counter(x["impact"]["level"] for x in changes)),
+            "impact_priority_counts": dict(Counter(x["impact"]["priority"] for x in changes)),
+            "table_impact_level_counts": dict(
+                Counter(x["impact"]["level"] for x in table_changes)
+            ),
             "resolution_status_counts": resolution_status_counts,
             "result_state_counts": result_states,
             "domain_status_counts": domain_status_counts,
         },
         "changes": changes,
+        "moves": moves,
         "table_changes": table_changes,
         "review_queue": review_queue,
         "non_semantic_events": non_semantic_events,

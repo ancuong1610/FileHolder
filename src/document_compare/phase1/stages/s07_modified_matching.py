@@ -9,6 +9,7 @@ guard runs for the CLI stage runner.
 from document_compare.shared.paths import find_project_root
 from document_compare.phase1.extraction.di_fields import get_page_number, set_page_number
 from document_compare.phase1.contracts.validation import require
+from document_compare.phase1.matching.element_types import matching_family, type_change_fields
 from document_compare.phase1.matching.semantic_evidence import assess_pair
 
 # ---- imports and configuration constants ----
@@ -168,14 +169,14 @@ def token_candidate_index(
     items: list[dict[str, Any]],
 ) -> tuple[dict[tuple[str, str], set[int]], set[tuple[str, str]]]:
     """
-    Rare-token fallback index, partitioned by element_type.
+    Rare-token fallback index, partitioned by matching family.
     """
     postings: dict[tuple[str, str], set[int]] = defaultdict(set)
 
     for index, item in enumerate(items):
-        element_type = str(item.get("element_type") or "")
+        family = matching_family(item)
         for token in tokens(matching_text(item)):
-            postings[(element_type, token)].add(index)
+            postings[(family, token)].add(index)
 
     maximum = max(1, int(len(items) * MAX_TOKEN_DOCUMENT_FRACTION))
 
@@ -200,9 +201,9 @@ def provisional_context_index(
     postings: dict[tuple[str, str], set[int]] = defaultdict(set)
 
     for index, item in enumerate(items):
-        element_type = str(item.get("element_type") or "")
+        family = matching_family(item)
         for key in context_keys(item):
-            postings[(element_type, key)].add(index)
+            postings[(family, key)].add(index)
 
     return postings
 
@@ -215,7 +216,7 @@ def context_candidate_locations(
     Collect NEW elements sharing provisional context, ranked by how many
     recent anchor keys they share with OLD.
     """
-    element_type = str(old.get("element_type") or "")
+    family = matching_family(old)
     old_keys = context_keys(old)
 
     if not old_keys:
@@ -224,7 +225,7 @@ def context_candidate_locations(
     votes: Counter[int] = Counter()
 
     for key in old_keys:
-        for location in postings.get((element_type, key), set()):
+        for location in postings.get((family, key), set()):
             votes[location] += 1
 
     return [
@@ -244,12 +245,12 @@ def token_candidate_locations(
     Rare-token fallback used only when provisional context does not produce
     usable candidates.
     """
-    element_type = str(old.get("element_type") or "")
+    family = matching_family(old)
     votes: Counter[int] = Counter()
 
     useful_tokens = []
     for token in tokens(matching_text(old)):
-        key = (element_type, token)
+        key = (family, token)
         if key in informative:
             useful_tokens.append(
                 (len(postings.get(key, set())), token)
@@ -259,7 +260,7 @@ def token_candidate_locations(
     useful_tokens.sort()
 
     for _, token in useful_tokens[:8]:
-        key = (element_type, token)
+        key = (family, token)
         for location in postings.get(key, set()):
             votes[location] += 1
 
@@ -284,7 +285,7 @@ def pre_rank_candidates(
     for new_index in locations:
         new = news[new_index]
 
-        if old.get("element_type") != new.get("element_type"):
+        if matching_family(old) != matching_family(new):
             continue
 
         ranked.append(
@@ -362,6 +363,7 @@ def compact_pair(
             "old_flags": old.get("normalization_flags", []),
             "new_flags": new.get("normalization_flags", []),
         },
+        **type_change_fields(old, new),
         "old": old,
         "new": new,
     }
@@ -640,6 +642,7 @@ def build_result(
                 ],
                 "context_is_authoritative_hierarchy": False,
                 "candidate_retrieval_method": retrieval_methods.get(old_index),
+                **type_change_fields(old, new),
                 "old": old,
                 "new": new,
             })
@@ -901,12 +904,17 @@ def validate_result(
         "s07: a NEW element was matched more than once",
     )
 
-    for item in modified_pairs:
+    for item in modified_pairs + duplicate_exact_pairs:
         require(
-            item["old"]["element_type"]
-            == item["new"]["element_type"],
-            "s07: modified match crosses element types",
+            matching_family(item["old"]) == matching_family(item["new"]),
+            "s07: candidate pair crosses matching families",
         )
+        require(
+            item.get("type_changed") == type_change_fields(item["old"], item["new"]).get("type_changed"),
+            "s07: candidate pair type-change evidence does not match source types",
+        )
+
+    for item in modified_pairs:
         require(
             item["similarity_evidence"]["reciprocal_best"]
             is True,
@@ -926,11 +934,6 @@ def validate_result(
         )
 
     for item in duplicate_exact_pairs:
-        require(
-            item["old"]["element_type"]
-            == item["new"]["element_type"],
-            "s07: duplicate-exact pair crosses element types",
-        )
         require(
             matching_text(item["old"])
             == matching_text(item["new"]),

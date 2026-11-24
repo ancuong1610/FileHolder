@@ -29,7 +29,10 @@ from document_compare.phase1.extraction.pdf_outline import (
     resolve_outline_evidence,
     sidecar_name as outline_sidecar_name,
 )
-from document_compare.phase1.structure.furniture import classify_derived_furniture
+from document_compare.phase1.structure.furniture import (
+    classify_derived_furniture,
+    confirm_furniture_exclusions,
+)
 from document_compare.phase1.structure.reconstruction import (
     STRUCTURE_EVIDENCE_VERSION,
     SUPPORTED_STRUCTURE_EVIDENCE_VERSIONS,
@@ -463,6 +466,7 @@ def reconstruct_provisional_context(
     source_model: dict[str, Any],
     *,
     pdf_outline: dict[str, Any] | None = None,
+    derived_furniture: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     result = copy.deepcopy(source_model)
     result["schema_version"] = OUTPUT_SCHEMA_VERSION
@@ -474,10 +478,10 @@ def reconstruct_provisional_context(
         detect_repeated_margin_marker_cohort(document)
     )
 
-    # Classify recurring page furniture exactly once from combined evidence
-    # (recurrence + supporting layout-role cohort + page-edge geometry) and
-    # reuse it for both anchor rejection and the additive structure evidence.
-    derived_furniture = classify_derived_furniture(document)
+    # Reuse pair-confirmed furniture when called by the stage runner. Standalone
+    # reconstruction can record recurrence evidence without excluding it.
+    if derived_furniture is None:
+        derived_furniture = classify_derived_furniture(document)
     furniture_ids = set(derived_furniture["by_element"])
 
     # Build structure evidence before anchors so supported native-outline links
@@ -802,11 +806,17 @@ def main() -> None:
             f"{len(document_from(model)['elements']):,} elements loaded"
         )
 
+    furniture = {
+        label: classify_derived_furniture(document_from(model))
+        for label, model in source_models.items()
+    }
     structured_models = {
         label: reconstruct_provisional_context(
-            model, pdf_outline=outline_evidence[label]
+            source_models[label],
+            pdf_outline=outline_evidence[label],
+            derived_furniture=confirm_furniture_exclusions(furniture[label], furniture[opposite]),
         )
-        for label, model in source_models.items()
+        for label, opposite in (("old", "new"), ("new", "old"))
     }
 
     for label in documents:

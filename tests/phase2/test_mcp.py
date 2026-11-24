@@ -35,5 +35,25 @@ class McpToolsTest(unittest.TestCase):
                 return {t.name for t in await client.list_tools()}
         self.assertEqual(asyncio.run(run()), TOOLS)
 
+    def test_reader_impact_schema_and_forwarding(self):
+        from document_compare.phase2.mcp import reader_server
+
+        async def run():
+            async with Client(reader_server.mcp) as client:
+                tools = {tool.name: tool.inputSchema for tool in await client.list_tools()}
+                self.assertEqual(set(tools), {"summarize", "search", "details"})
+                schema = tools["search"]
+                self.assertIn("impact", schema["properties"])
+                self.assertNotIn("impact", schema.get("required", []))
+                await client.call_tool("search", {"job_id": "a1b2c3d4e5f6", "kind": "move", "impact": "moved"})
+
+        with patch.object(reader_server.httpx, "get") as get:
+            get.return_value.status_code = 200
+            get.return_value.json.return_value = {"returned": []}
+            asyncio.run(run())
+            self.assertEqual(get.call_args.args[0], reader_server.API_BASE + "/jobs/a1b2c3d4e5f6/read/search")
+            self.assertEqual(get.call_args.kwargs["params"]["impact"], "moved")
+            self.assertEqual(get.call_args.kwargs["params"]["kind"], "move")
+
 if __name__ == "__main__":
     unittest.main()

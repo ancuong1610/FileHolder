@@ -50,8 +50,29 @@ TYPE_LABELS = {
     "DELETED": "Gelöscht",
     "MODIFIED": "Geändert",
     "REVIEW": "Prüfung",
+    "MOVED": "Verschoben",
 }
-KIND_LABELS = {"all": "Alle", "change": "Änderung", "table": "Tabelle"}
+KIND_LABELS = {"all": "Alle", "change": "Änderung", "table": "Tabelle", "move": "Verschiebung"}
+IMPACT_LABELS = {"all": "Alle", "content": "Inhalt", "editorial": "Redaktionell", "moved": "Verschoben"}
+IMPACT_FILTER = "Auswirkung"
+EXCLUDED_UNKNOWN_IMPACT = "{count} Befunde ohne Auswirkungsangabe sind ausgeblendet."
+LOCAL_REORDERS = "Lokale Umstellungen anzeigen"
+IMPORTANT = "Wichtig"
+IMPACT_SIGNALS = {
+    "modal": "Modalverb",
+    "negation": "Verneinung",
+    "qualifier": "Einschränkung",
+    "condition": "Bedingung",
+    "number": "Zahl",
+    "state_marker": "Statussymbol",
+    "date": "Datum",
+    "reference": "Verweis",
+    "added_text": "Text hinzugefügt",
+    "deleted_text": "Text entfernt",
+    "replaced_text": "Text ersetzt",
+}
+MOVE_LABEL = "{text} (aus {source} → {destination})"
+UNKNOWN_ANCHOR = "—"
 TABLE_CELLS_ONE = "{count} Zelle geändert"
 TABLE_CELLS_MANY = "{count} Zellen geändert"
 CHIP_LABELS = {
@@ -63,8 +84,10 @@ SIDE_LABELS = {"old": "Alt", "new": "Neu"}
 ORDER_LABELS = {"Document order": "Dokumentreihenfolge", "Section number": "Abschnittsnummer"}
 ORDER = "Reihenfolge"
 ORDER_NOTE = "Die Abschnitte stehen in der Reihenfolge des neuen Dokuments."
-LEGEND = ("Rot = gelöscht, Grün = hinzugefügt, Orange = geändert, violett gestrichelt = Prüfung erforderlich "
-          "(gestrichelte Umrandung = unsichere Zuordnung).")
+LEGEND = ("Rot = gelöscht, Grün = hinzugefügt, Orange = geändert oder verschoben, "
+          "violett gestrichelt = Prüfung erforderlich (gestrichelte Umrandung = unsichere Zuordnung). "
+          "Die Abzeichen Inhalt, Redaktionell und Verschoben zeigen die Auswirkung. "
+          "Wichtig markiert Inhaltsänderungen mit hoher Priorität.")
 PAGE_DISPLAY_FAILED = "Das Seitenbild konnte nicht angezeigt werden."
 PAGE_COUNT_ONE = " · {count} Seite"
 PAGE_COUNT_MANY = " · {count} Seiten"

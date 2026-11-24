@@ -13,8 +13,9 @@ Common rules for all three routes:
 
 - `job_id` is validated with the reader's validator; the job must be complete
   (otherwise 409 `not_ready`).
-- `kind` is `change`, `table` or `review`; `record_id` is that kind's ID from the
-  reader (`change_id`, `table_change_id`, `review_id`). An unknown record is 404.
+- `kind` is `change`, `table`, `review` or `move`. `record_id` is the matching
+  reader ID (`change_id`, `table_change_id`, `review_id`, `move_id`). An unknown
+  record is 404.
 - Errors use the reader's shape: `{"detail": {"error": "<code>", "message": "..."}}`.
   An invalid `side` or a non-integer `page` is rejected by FastAPI validation (422)
   in FastAPI's own detail shape.
@@ -47,9 +48,11 @@ Returns where one finding sits on each side.
   `unavailable`. A location is never guessed: an element ID missing from the
   document JSON, a missing document file or an unusable polygon degrades to
   `page_only` or `unavailable`.
-- Every region carries an additive `role`: `element` (change and review
+- Every region carries an additive `role`: `element` (change, review and move
   elements), `table` (the whole table: bounding regions of the table element,
   found by `represented_by_table_id` or the side's `source_table_ids`) or `cell`.
+- A paragraph split or merge returns regions for all saved member element IDs
+  on each side, including fragments on different pages.
 - `table` findings return one `table` region per table-element region plus one
   `cell` region per changed cell (`classification` not `UNCHANGED`, side has a cell
   with a polygon; inches normalized like any polygon). If nothing resolves but a
@@ -60,6 +63,9 @@ Returns where one finding sits on each side.
   when its `source_candidate_id` equals the record's). `location` is
   `polygon`/`page_only`, and `unavailable` only when nothing resolves.
   `change_type` is `null`.
+- `move` records resolve all member regions from `old_element_ids` and
+  `new_element_ids` in their respective document artifacts. `change_type`
+  is `null`. Each side's first resolved location supplies its primary page.
 - Top level also carries `needs_review` (the record's `resolution.status` is
   `review`, a review record, or a review record is linked to the change) and
   `review_reason` (plain words, `null` when none is recorded).
@@ -80,7 +86,8 @@ in it. Same job rules as above (404 unknown job, 409 `not_ready`).
                 "label": "first 90 characters of the change text...",
                 "page_old": 3, "page_new": 3, "context_old": false, "context_new": false,
                 "section_path": ["Section 4"],
-                "needs_review": false, "review_reason": null, "review_ids": []}]}
+                "needs_review": false, "review_reason": null, "review_ids": [],
+                "impact": {"level": "content", "priority": "high", "kinds": [], "signals": ["modal"]}}]}
   ],
   "unplaced": [],
   "review": [{"kind": "review", "record_id": "REVIEW-000001", "change_type": null,
@@ -110,6 +117,14 @@ in it. Same job rules as above (404 unknown job, 409 `not_ready`).
   equals its `logical_table_id`. Anything without a section (preamble, unknown
   element, missing structured artifact) is in `unplaced`. Each change/table
   appears exactly once in `sections` or `unplaced`.
+- Change, table and move items carry the reader's `impact` projection or
+  `null` for unknown impact. A move appears once, in the NEW section and
+  reading order of its first member, or in `unplaced` if NEW membership is
+  unavailable. Its `label` previews the member text and its `from_anchor` and
+  `to_anchor` provide heading labels when known. The UI combines these with the
+  `Verschoben` badge. The outline includes local reorders. Streamlit hides
+  them until `Lokale Umstellungen anzeigen` is selected, and its section
+  counts and summary chips follow the active filters.
 - `context_old` / `context_new` (boolean on every item): `true` when that side's
   page is a context page, i.e. the finding has no element on that side (ADDED has
   no old element, DELETED no new one) and `page_old` / `page_new` was filled in
@@ -144,7 +159,7 @@ in it. Same job rules as above (404 unknown job, 409 `not_ready`).
   `source_table_ids`); with no previous section it is `unplaced`.
 - `review` (kept for compatibility) lists ALL `review_queue` records, each with
   `linked_to` (change IDs it is linked to). `total` counts the items in `sections`
-  and `unplaced` (standalone review items included, linked ones not twice).
+  and `unplaced` (moves and standalone review items included, linked reviews counted once).
 - A missing structured artifact is not an error (`409 invalid_artifact` only for
   unparsable JSON). Sections are an evidence-based hypothesis, not legal structure.
 

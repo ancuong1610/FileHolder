@@ -21,6 +21,8 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from document_compare.phase1.matching.element_types import matching_family, type_change_fields
+
 POLICY_VERSION = "gateA-1"
 MAX_PROPOSALS_PER_RESIDUAL = 5
 MAX_PAIR_CHECKS = 1000
@@ -86,11 +88,11 @@ def _index(
     context_postings: dict[tuple[str, str], set[int]] = defaultdict(set)
     for index, candidate in enumerate(candidates):
         element = _side(candidate, side)
-        element_type = _element_type(element)
+        family = matching_family(element)
         for token in _tokens(element):
-            token_postings[(element_type, token)].add(index)
+            token_postings[(family, token)].add(index)
         for key in _context_keys(element):
-            context_postings[(element_type, key)].add(index)
+            context_postings[(family, key)].add(index)
     return token_postings, context_postings
 
 
@@ -164,20 +166,20 @@ def _pool(
 ) -> set[int]:
     """Bounded candidate locations from tokens, context and the interval."""
     locations: set[int] = set(interval)
-    element_type = _element_type(element)
+    family = matching_family(element)
     tokens = _tokens(element)
     # Rare tokens first: deterministic and avoids common-word flooding.
     ordered_tokens = sorted(
         tokens,
         key=lambda token: (
-            len(token_postings.get((element_type, token), set())),
+            len(token_postings.get((family, token), set())),
             token,
         ),
     )
     for token in ordered_tokens[:8]:
-        locations |= token_postings.get((element_type, token), set())
+        locations |= token_postings.get((family, token), set())
     for key in sorted(_context_keys(element)):
-        locations |= context_postings.get((element_type, key), set())
+        locations |= context_postings.get((family, key), set())
     return locations
 
 
@@ -307,7 +309,7 @@ def build_residual_proposals(
         compatible = [
             index
             for index, other in enumerate(opposite)
-            if _element_type(_side(other, opposite_element)) == _element_type(element)
+            if matching_family(_side(other, opposite_element)) == matching_family(element)
         ]
         compatible_set = set(compatible)
         if not compatible:
@@ -432,6 +434,7 @@ def build_residual_proposals(
                 "old_element_id": (_side(deleted_candidate, "old") or {}).get("element_id"),
                 "new_element_id": (_side(added_candidate, "new") or {}).get("element_id"),
                 "element_type": _element_type(_side(deleted_candidate, "old")),
+                **type_change_fields(_side(deleted_candidate, "old"), _side(added_candidate, "new")),
                 "score": None,
                 "shared_anchor_keys": sorted(
                     _context_keys(_side(deleted_candidate, "old"))
@@ -472,6 +475,7 @@ def build_residual_proposals(
                 "old_element_id": (_side(deleted_candidate, "old") or {}).get("element_id"),
                 "new_element_id": (_side(added_candidate, "new") or {}).get("element_id"),
                 "element_type": _element_type(_side(added_candidate, "new")),
+                **type_change_fields(_side(deleted_candidate, "old"), _side(added_candidate, "new")),
                 "score": score_cache[pair_key(deleted_candidate, added_candidate)],
                 "shared_anchor_keys": sorted(
                     _context_keys(_side(deleted_candidate, "old"))

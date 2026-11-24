@@ -621,6 +621,130 @@ class SummaryRecordCountsTest(unittest.TestCase):
         self.assertEqual(out["status"], "invalid_artifact")
 
 
+class ImpactAndMoveTest(unittest.TestCase):
+    def setUp(self):
+        self.canonical = sample_canonical()
+        self.content = {"level": "content", "priority": "high", "signals": ["modal"], "kinds": []}
+        self.editorial = {"level": "editorial", "priority": "low", "signals": [], "kinds": ["orthography"]}
+        self.moved = {"level": "moved", "priority": "normal", "signals": [], "kinds": ["paragraph_move"]}
+        self.canonical["changes"][0]["impact"] = {**self.content, "version": "1", "basis": "deterministic_rule"}
+        self.canonical["changes"][0]["movement"] = {"move_id": "MOVE-000001"}
+        self.canonical["table_changes"][0]["impact"] = self.editorial
+        self.canonical["statistics"]["impact_level_counts"] = {"content": 999}
+        self.canonical["moves"] = [{
+            "move_id": "MOVE-000001", "element_count": 5, "contains_modified": True,
+            "from_anchor": "Geltungsbereich", "to_anchor": "Fristen", "impact": self.moved,
+            **{
+                f"{side}_element_ids": [f"{side.upper()}-M{i}" for i in range(5)]
+                for side in ("old", "new")
+            },
+            **{
+                f"{side}_elements": [
+                    {"text": f"Versetzter Absatz {i}", "page": page, "reading_order": i, "element_type": "paragraph"}
+                    for i in range(5)
+                ]
+                for side, page in (("old", 2), ("new", 4))
+            },
+        }]
+
+    def test_impact_counts_and_projections(self):
+        counts = rr.summarize(JOB, "done", self.canonical)["counts"]
+        self.assertEqual(counts["impact_level_counts"], {"content": 1, "editorial": 1, "moved": 1})
+        self.assertEqual(counts["impact_priority_counts"], {"high": 1, "low": 1, "normal": 1})
+        self.assertEqual(counts["moves"], 1)
+        for kind, level, expected in (("change", "content", self.content), ("table", "editorial", self.editorial)):
+            hits = rr.search(JOB, self.canonical, impact=level)["returned"]
+            self.assertEqual([(hit["kind"], hit["impact"]) for hit in hits], [(kind, expected)])
+            detail = rr.details(JOB, self.canonical, kind=kind, record_id=hits[0]["record_id"])[kind]
+            self.assertEqual(detail["impact"], expected)
+            if kind == "change":
+                self.assertEqual(detail["movement"], {"move_id": "MOVE-000001"})
+        self.assertEqual(rr.search(JOB, self.canonical, kind="table", impact="content")["total_matches"], 0)
+        with self.assertRaises(rr.ReaderError) as ctx:
+            rr.search(JOB, self.canonical, impact="non_content")
+        self.assertEqual(ctx.exception.code, "invalid_arguments")
+
+    def test_impact_filter_is_carried_and_bound_by_cursor(self):
+        self.canonical["changes"][1]["impact"] = self.content
+        first = rr.search(JOB, self.canonical, impact="content", limit=1)
+        self.assertEqual(first["total_matches"], 2)
+        cursor = first["next_cursor"]
+        second = rr.search(JOB, self.canonical, cursor=cursor)
+        self.assertEqual(second["impact"], "content")
+        self.assertEqual(second["returned"][0]["record_id"], "CHANGE-000002")
+        with self.assertRaises(rr.ReaderError) as ctx:
+            rr.search(JOB, self.canonical, cursor=cursor, impact="editorial")
+        self.assertEqual(ctx.exception.code, "stale_cursor")
+
+    def test_move_search_and_paged_details(self):
+        hits = rr.search(JOB, self.canonical, query="Absatz 4", impact="moved")["returned"]
+        self.assertEqual(len(hits), 1)
+        hit = hits[0]
+        self.assertEqual((hit["kind"], hit["record_id"], hit["pages"]), ("move", "MOVE-000001", [2, 4]))
+        self.assertEqual(hit["impact"], self.moved)
+        self.assertFalse(hit["confirmed"] or hit["needs_review"])
+        args = {"kind": "move", "record_id": hit["record_id"], "text_limit": 12}
+        first = rr.details(JOB, self.canonical, **args)["move"]
+        self.assertEqual(first["impact"], self.moved)
+        self.assertEqual((first["from_anchor"], first["to_anchor"]), ("Geltungsbereich", "Fristen"))
+        self.assertTrue(first["contains_modified"])
+        self.assertEqual(first["element_count"], 5)
+        first_element = first["old_elements"][0]
+        self.assertEqual((first_element["element_id"], first_element["page"]), ("OLD-M0", 2))
+        self.assertEqual(first_element["text"], "Versetzter A")
+        self.assertEqual(first_element["text_next_offset"], 12)
+        self.assertTrue(first["sources_truncated"])
+        tail = rr.details(JOB, self.canonical, context_source_offset=first["next_source_offset"], **args)["move"]
+        self.assertEqual([element["element_id"] for element in tail["new_elements"]], ["NEW-M3", "NEW-M4"])
+        self.assertFalse(tail["sources_truncated"])
+        with self.assertRaises(rr.ReaderError) as ctx:
+            rr.details(JOB, self.canonical, kind="change", record_id=hit["record_id"])
+        self.assertEqual(ctx.exception.code, "not_found")
+
+    def test_editorial_split_exposes_bounded_member_pages_and_refs(self):
+        change = self.canonical["changes"][0]
+        change["new"].update(text="Eine Frist gilt.", primary_page=1)
+        change["new_elements"] = [
+            {**change["new"], "text": "Eine Frist gilt"},
+            {"element_id": "NEW-SPLIT", "text": ".", "primary_page": 2},
+        ]
+        change["new_element_ids"] = [item["element_id"] for item in change["new_elements"]]
+        change["impact"] = self.editorial
+        hit, = rr.search(JOB, self.canonical, kind="change", impact="editorial")["returned"]
+        self.assertEqual(hit["pages"], [1, 2])
+        detail = rr.details(JOB, self.canonical, kind="change", record_id=hit["record_id"])["change"]
+        self.assertEqual(detail["new"]["pages"], [1, 2])
+        self.assertEqual(detail["new"]["element_ids"], change["new_element_ids"])
+
+        change["new_elements"].extend({"primary_page": page} for page in range(3, rr.MAX_PAGES + 3))
+        detail = rr.details(JOB, self.canonical, kind="change", record_id=hit["record_id"])["change"]
+        self.assertEqual(detail["new"]["pages"], list(range(1, rr.MAX_PAGES + 1)))
+
+    def test_impact_filter_counts_legacy_deadline_changes_in_query_scope(self):
+        change = self.canonical["changes"][1]
+        change["impact"] = None
+        change.update(old={"text": "Die Frist beträgt 30 Tage."},
+                      new={"text": "Die Frist beträgt 60 Tage."})
+        filters = {"kind": "change", "query": "Frist"}
+        filtered = rr.search(JOB, self.canonical, impact="content", **filters)
+        self.assertEqual(filtered["total_matches"], 0)
+        self.assertEqual(filtered["excluded_unknown_impact"], 1)
+        unfiltered = rr.search(JOB, self.canonical, **filters)
+        self.assertEqual(unfiltered["total_matches"], 1)
+        self.assertNotIn("excluded_unknown_impact", unfiltered)
+
+    def test_legacy_result_has_unknown_impact_and_no_moves(self):
+        old_result = sample_canonical()
+        counts = rr.summarize(JOB, "done", old_result)["counts"]
+        self.assertEqual(counts["moves"], 0)
+        self.assertEqual(counts["impact_level_counts"], {})
+        hits = rr.search(JOB, old_result, kind="change")["returned"]
+        self.assertIsNone(hits[0]["impact"])
+        self.assertIsNone(rr.details(JOB, old_result, kind="change", record_id=hits[0]["record_id"])["change"]["impact"])
+        self.assertEqual(rr.search(JOB, old_result, kind="move")["total_matches"], 0)
+        self.assertEqual(rr.search(JOB, old_result, impact="content")["total_matches"], 0)
+
+
 class SearchStatusSemanticsTest(unittest.TestCase):
     def test_accepted_filter_excludes_needs_review(self):
         canonical = sample_canonical()

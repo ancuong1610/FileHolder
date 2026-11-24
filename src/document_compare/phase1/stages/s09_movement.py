@@ -3,19 +3,12 @@
 Input  : ``<root>/output/comparison_candidates.json`` (Step 8 candidate
          assembly result).
 
-Work   : Detects globally-unique exact residual relocations and
-         resegmentation reconciliations, contiguous structural block
-         movement (evidence-only), exact structural split/merge and short
-         structural-boundary fragments, and carries all paired candidates
-         forward unchanged.
+Work   : Reconciles residual relocations and paragraph splits/merges, detects
+         relative-order moves among established pairs, and retains ambiguous
+         structural evidence for review.
 
 Output : ``<root>/output/comparison_candidates_with_movement.json`` plus
          console summaries.
-
-Review : Every movement/split-merge/boundary detection is evidence-only
-         review: it never consumes or deletes a candidate and never
-         reclassifies a paired candidate. Final movement classification
-         stays deferred to later stages.
 
 The module is import-safe: importing it only defines the pure movement
 helpers and never resolves a workspace, reads or writes pipeline files,
@@ -25,7 +18,7 @@ stage runner.
 """
 from document_compare.shared.paths import find_project_root
 from document_compare.phase1.extraction.di_fields import get_page_number, set_page_number
-from document_compare.phase1.contracts.validation import require
+from document_compare.phase1.contracts.validation import extraction_validation_state, require
 
 # ---- imports and configuration constants ----
 
@@ -36,6 +29,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from document_compare.phase1.matching.element_types import matching_family, type_change_fields
+from document_compare.phase1.matching.impact import editorial_tokens, glyph_fold
+from document_compare.phase1.matching.moves import detect_moves, preceding_heading_order
 from document_compare.phase1.matching.reconciliation import reconcile_residuals
 from document_compare.phase1.matching.residual_proposals import (
     build_residual_proposals,
@@ -50,6 +46,7 @@ COMPARISON_CANDIDATES_FILENAME = "comparison_candidates.json"
 MOVEMENT_OUTPUT_FILENAME = "comparison_candidates_with_movement.json"
 
 STRUCTURAL_TYPES = {"heading", "title"}
+BODY_PARAGRAPH_TYPES = {"paragraph", "list_item"}
 SPACE_PATTERN = re.compile(r"\s+", re.UNICODE)
 TOKEN_PATTERN = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
@@ -115,7 +112,7 @@ def element_key(
     text = element_text(element)
     if not element_type or not text:
         return None
-    return str(element_type), text
+    return matching_family(element), text
 
 
 def reading_order(element: dict[str, Any] | None) -> int | None:
@@ -409,6 +406,286 @@ def ids_from_records(
     return output
 
 
+def load_structure_context(
+    output_dir: Path, side: str, elements: dict[str, dict[str, Any]],
+) -> tuple[set[str], dict[int, str]]:
+    """Reuse Stage 05 layout membership and provisional headings when available."""
+    path = output_dir / f"{side}_document_structured.json"
+    if not path.is_file():
+        # Also support Stage 09 replay from a standalone Stage 08 artifact.
+        return set(), {
+            order: element["text"]
+            for element in elements.values()
+            if element.get("element_type") in STRUCTURAL_TYPES and element.get("text")
+            and (order := reading_order(element)) is not None
+        }
+    document = load_json(path)["document"]
+    evidence = document.get("structure_evidence") or {}
+    membership = (evidence.get("membership") or {}).get("by_element") or {}
+    furniture = (evidence.get("furniture") or {}).get("by_element") or {}
+    # Recurrence-only evidence is provisional. Stage 06's comparable set
+    # reflects the actual pair, including replays of older Stage 05 artifacts.
+    comparable_recurrence_ids = {
+        element_id for element_id in elements
+        if furniture.get(element_id, {}).get("evidence_path") == "recurrence_edge_only"
+    }
+    layout_ids = (set(furniture) | {
+        element_id for element_id, member in membership.items()
+        if member["category"] == "layout"
+    }) - comparable_recurrence_ids
+    anchors = {
+        anchor["reading_order"]: anchor["text"]
+        for anchor in document.get("provisional_anchors") or []
+        if anchor.get("text") and reading_order(anchor) is not None
+        and anchor["element_id"] not in layout_ids
+    }
+    for element in document["elements"]:
+        if (
+            element.get("element_type") in STRUCTURAL_TYPES and element.get("text")
+            and (order := reading_order(element)) is not None
+            and element["element_id"] not in layout_ids
+        ):
+            anchors.setdefault(order, element["text"])
+    return layout_ids, anchors
+
+
+def detect_paragraph_resegmentation(
+    candidates: list[dict[str, Any]], layout_ids: dict[str, set[str]],
+    anchors: dict[str, dict[int, str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Find unambiguous 1:2–4 groups within one section and with usable extraction."""
+    by_order = {side: {} for side in ("old", "new")}
+    headings = {side: dict((anchors or {}).get(side, {})) for side in by_order}
+    for candidate in candidates:
+        for side in by_order:
+            element = candidate.get(side) or {}
+            order = reading_order(element)
+            if order is None or not (element.get("text") or "").strip():
+                continue
+            if element["element_id"] in layout_ids[side]:
+                continue
+            if element.get("element_type") in STRUCTURAL_TYPES:
+                headings[side].setdefault(order, element["text"])
+            elif (
+                element.get("element_type") in BODY_PARAGRAPH_TYPES
+                and extraction_validation_state(element) == "ok"
+            ):
+                by_order[side][order] = candidate
+
+    heading_orders = {side: sorted(headings[side]) for side in by_order}
+    heading_keys = {side: {} for side in by_order}
+    for side, orders in by_order.items():
+        for order, candidate in orders.items():
+            preceding = preceding_heading_order(heading_orders[side], order)
+            text = headings[side].get(preceding)
+            if not heading_orders[side]:
+                context = candidate[side].get("provisional_anchor_context") or {}
+                text = context.get("nearest_anchor_key")
+            heading_keys[side][order] = glyph_fold(text).casefold() if text else None
+
+    proposals = []
+    ambiguous_ids = set()
+    for whole_side, part_side, kind in (
+        ("old", "new", "paragraph_split"),
+        ("new", "old", "paragraph_merge"),
+    ):
+        lone_wholes = defaultdict(list)
+        whole_keys = {}
+        for order, candidate in by_order[whole_side].items():
+            tokens = tuple(editorial_tokens(candidate[whole_side]["text"]))
+            key = (tokens, heading_keys[whole_side][order])
+            whole_keys[candidate["candidate_id"]] = key
+            if not candidate.get(part_side):
+                lone_wholes[key].append(candidate)
+
+        # Keep at most one proposal per bucket. A second compatible assignment
+        # makes the bucket ambiguous and leaves all its sources available for review.
+        by_key = {}
+        blocked_whole_buckets = set()
+        for start, first in sorted(by_order[part_side].items()):
+            heading = heading_keys[part_side][start]
+            parts = [first]
+            first_page = first[part_side].get("primary_page")
+            for order in range(start + 1, start + 4):
+                part = by_order[part_side].get(order)
+                if part is None or heading_keys[part_side][order] != heading:
+                    break
+                page = part[part_side].get("primary_page")
+                if (
+                    isinstance(first_page, int)
+                    and isinstance(page, int)
+                    and abs(page - first_page) > 1
+                ):
+                    break
+                parts.append(part)
+                part_elements = [item[part_side] for item in parts]
+                joined = " ".join(element["text"] for element in part_elements)
+                key = (tuple(editorial_tokens(joined)), heading)
+                if not key[0]:
+                    continue
+
+                paired_parts = [item for item in parts if item.get(whole_side)]
+                if paired_parts:
+                    # Releasing a prior pair must account for both of its
+                    # elements, and its part must be at an end of the group.
+                    partner = paired_parts[0]
+                    if (
+                        len(paired_parts) != 1 or (partner is not parts[0] and partner is not parts[-1])
+                        or whole_keys.get(partner["candidate_id"]) != key
+                    ):
+                        continue
+                    wholes = [partner]
+                else:
+                    wholes = lone_wholes.get(key)
+                    if not wholes:
+                        continue
+
+                ids = {item["candidate_id"] for item in parts}
+                if key in by_key or len(wholes) > 1:
+                    previous = by_key.get(key)
+                    if previous is not None:
+                        ambiguous_ids.update(previous["source_candidate_ids"])
+                    by_key[key] = None
+                    ambiguous_ids.update(ids)
+                    if paired_parts:
+                        ambiguous_ids.add(wholes[0]["candidate_id"])
+                    elif key not in blocked_whole_buckets:
+                        ambiguous_ids.update(whole["candidate_id"] for whole in wholes)
+                        blocked_whole_buckets.add(key)
+                    continue
+
+                whole = wholes[0]
+                elements = {whole_side: [whole[whole_side]], part_side: part_elements}
+                by_key[key] = {
+                    "kind": kind,
+                    "old_elements": elements["old"],
+                    "new_elements": elements["new"],
+                    "source_candidate_ids": sorted({whole["candidate_id"], *ids}),
+                    "impact_level": (
+                        "non_content" if glyph_fold(whole[whole_side]["text"]) == glyph_fold(joined)
+                        else "editorial"
+                    ),
+                    "nearest_heading_keys": {
+                        side: [heading] * len(items) for side, items in elements.items()
+                    },
+                }
+        proposals.extend(item for item in by_key.values() if item is not None)
+
+    # Exact glyph equality takes precedence over editorial equivalence when
+    # otherwise unambiguous proposals overlap across different buckets.
+    groups = []
+    consumed = ambiguous_ids
+    for level in ("non_content", "editorial"):
+        eligible = [
+            item for item in proposals if item["impact_level"] == level
+            and consumed.isdisjoint(item["source_candidate_ids"])
+        ]
+        counts = Counter(cid for item in eligible for cid in item["source_candidate_ids"])
+        for item in eligible:
+            if all(counts[cid] == 1 for cid in item["source_candidate_ids"]):
+                groups.append({
+                    **item,
+                    "candidate_id": f"PARAGRAPH-RESEG-{len(groups) + 1:06d}",
+                })
+                consumed.update(item["source_candidate_ids"])
+    return groups
+
+
+def annotate_residuals(
+    remaining_deleted: list[dict[str, Any]],
+    remaining_added: list[dict[str, Any]],
+    matched_pairs: list[dict[str, Any]],
+    previous_groups: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Attach bounded proposal evidence without consuming candidates."""
+    proposal_result = build_residual_proposals(
+        remaining_deleted,
+        remaining_added,
+        matched_pairs=matched_pairs,
+    )
+    previous_ids = {
+        (tuple(group["deleted_candidate_ids"]), tuple(group["added_candidate_ids"])): group["group_id"]
+        for group in previous_groups
+    }
+    if previous_ids:
+        next_group_number = len(previous_ids) + 1
+        group_ids = {}
+        for group in proposal_result["groups"]:
+            members = (tuple(group["deleted_candidate_ids"]), tuple(group["added_candidate_ids"]))
+            group_id = previous_ids.get(members)
+            if group_id is None:
+                group_id = f"RESIDUAL-GROUP-{next_group_number:06d}"
+                next_group_number += 1
+            group_ids[group["group_id"]] = group_id
+            group["group_id"] = group_id
+        proposal_result["candidate_groups"] = {
+            candidate_id: group_ids[group_id]
+            for candidate_id, group_id in proposal_result["candidate_groups"].items()
+        }
+
+    proposals_by_deleted: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    proposals_by_added: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for proposal in proposal_result["proposals"]:
+        proposals_by_deleted[proposal["deleted_candidate_id"]].append(proposal)
+        proposals_by_added[proposal["added_candidate_id"]].append(proposal)
+
+    for side, candidates, proposal_index in (
+        ("deleted", remaining_deleted, proposals_by_deleted),
+        ("added", remaining_added, proposals_by_added),
+    ):
+        for candidate in candidates:
+            candidate_id = str(candidate.get("candidate_id") or "")
+            coverage = proposal_result["candidate_coverage"].get(
+                candidate_id,
+                {
+                    "status": "no_opposite",
+                    "examined": 0,
+                    "unsearched": 0,
+                    "opposite_residuals": 0,
+                    "budget_exhausted": False,
+                    "limitations": [],
+                },
+            )
+            proposals = sorted(
+                proposal_index.get(candidate_id, []),
+                key=lambda item: item["proposal_id"],
+            )
+            candidate["residual_counterpart_proposals"] = proposals
+            candidate["residual_proposal_coverage"] = coverage
+            group_id = proposal_result["candidate_groups"].get(candidate_id)
+            if group_id:
+                candidate["residual_proposal_group_id"] = group_id
+            if proposals:
+                correspondence = "proposed"
+            elif coverage["status"] == "partial":
+                correspondence = "unresolved"
+            else:
+                correspondence = "not_applicable"
+            element = candidate.get("old") if side == "deleted" else candidate.get("new")
+            candidate["semantic_assessment"] = reassess_residual(
+                element,
+                side="old" if side == "deleted" else "new",
+                correspondence=correspondence,
+                limitations=list(coverage.get("limitations") or []),
+            )
+    return proposal_result
+
+
+def previous_candidate_view(movement: dict[str, Any]) -> dict[str, Any]:
+    """Reconstruct the prior routing inputs for identity allocation only."""
+    replaced = movement.get("candidate_identity_history") or {}
+    prior = {
+        **movement,
+        "paragraph_resegmentation": [],
+        "candidate_identity_history": {},
+    }
+    for group, history in replaced.items():
+        candidates = {item["candidate_id"]: item for item in movement.get(group) or []}
+        candidates.update(history["replaced"])
+        prior[group] = [candidates[candidate_id] for candidate_id in history["order"]]
+    return prior
+
+
 # ---- stage entry point ----
 def main() -> None:
     """Run Stage 09 against the workspace and save the movement evidence."""
@@ -437,6 +714,10 @@ def main() -> None:
 
     print("Collected comparable elements:", len(all_old), "OLD /", len(all_new), "NEW")
 
+    layout_ids, anchors = {}, {}
+    for side, elements in (("old", all_old), ("new", all_new)):
+        layout_ids[side], anchors[side] = load_structure_context(output_dir, side, elements)
+
     old_global_counts = global_key_counts(all_old)
     new_global_counts = global_key_counts(all_new)
 
@@ -452,7 +733,7 @@ def main() -> None:
         new_candidates = added_index[key]
 
         # Hard safety rule:
-        # same type/text must be globally unique on BOTH complete documents.
+        # The family/text key must be globally unique on both documents.
         if old_global_counts[key] != 1 or new_global_counts[key] != 1:
             continue
 
@@ -474,12 +755,13 @@ def main() -> None:
             "candidate_type": "RELOCATED_UNCHANGED",
             "old": old,
             "new": new,
+            **type_change_fields(old, new),
             "needs_review": False,
             "review_reasons": [],
             "movement_classification": "RELOCATED_UNCHANGED",
             "movement_evidence": {
                 "evidence_type": "globally_unique_exact_residual_relocation",
-                "identical_element_type": True,
+                "identical_element_type": old.get("element_type") == new.get("element_type"),
                 "identical_comparison_text": True,
                 "globally_unique_old": True,
                 "globally_unique_new": True,
@@ -533,6 +815,13 @@ def main() -> None:
     # "Alpha beta" + "99") is swallowed as an equivalence because the tokenizer
     # drops short numeric tokens.  Structural split/merge evidence is
     # review-only: it never consumes a candidate.
+    paragraph_groups = detect_paragraph_resegmentation(
+        remaining_deleted + remaining_added
+        + comparison_candidates["modified"] + comparison_candidates["modified_review"],
+        layout_ids,
+        anchors,
+    )
+
     protected_deleted_ids = {
         candidate["candidate_id"]
         for candidate in remaining_deleted
@@ -564,90 +853,84 @@ def main() -> None:
     # Recombine in the original input order.  Protected structural residuals are
     # never consumed; the reconciler only owns non-structural candidates, so
     # the two owners stay non-overlapping and exactly-once accounting holds.
-    kept_deleted_ids = protected_deleted_ids | {
+    original_deleted_ids = protected_deleted_ids | {
         candidate["candidate_id"] for candidate in reconciled_leftover_deleted
     }
-    kept_added_ids = protected_added_ids | {
+    original_added_ids = protected_added_ids | {
         candidate["candidate_id"] for candidate in reconciled_leftover_added
     }
+    kept_deleted_ids = original_deleted_ids.copy()
+    kept_added_ids = original_added_ids.copy()
+
+    # Keep legacy candidate identities and slots for unaffected records. The
+    # approximate reconciliation is provisional: exact paragraph groups can
+    # release both its candidates or return an unconsumed partner to residuals.
+    modified = comparison_candidates["modified"]
+    modified_review = comparison_candidates["modified_review"]
+    previous = {}
+    if paragraph_groups:
+        previous = {
+            "modified": modified,
+            "modified_review": modified_review,
+            "deleted": [item.copy() for item in remaining_deleted
+                        if item["candidate_id"] in original_deleted_ids],
+            "added": [item.copy() for item in remaining_added
+                      if item["candidate_id"] in original_added_ids],
+            "resegmentation_review": resegmentation_pairs,
+        }
+        consumed = {cid for group in paragraph_groups for cid in group["source_candidate_ids"]}
+        modified = [item for item in modified if item["candidate_id"] not in consumed]
+        modified_review = [item for item in modified_review if item["candidate_id"] not in consumed]
+
+        kept_pairs = []
+        for pair in resegmentation_pairs:
+            deleted_id = pair["source_deleted_candidate_id"]
+            added_id = pair["source_added_candidate_id"]
+            if consumed.isdisjoint((deleted_id, added_id)):
+                kept_pairs.append(pair)
+            else:
+                kept_deleted_ids.add(deleted_id)
+                kept_added_ids.add(added_id)
+        resegmentation_pairs = kept_pairs
+        kept_deleted_ids.difference_update(consumed)
+        kept_added_ids.difference_update(consumed)
+
     remaining_deleted = [
-        candidate
-        for candidate in remaining_deleted
-        if candidate["candidate_id"] in kept_deleted_ids
+        item for item in remaining_deleted if item["candidate_id"] in kept_deleted_ids
     ]
     remaining_added = [
-        candidate
-        for candidate in remaining_added
-        if candidate["candidate_id"] in kept_added_ids
+        item for item in remaining_added if item["candidate_id"] in kept_added_ids
     ]
     print("Residual pairs reconciled as RESEGMENTATION_REVIEW:", len(resegmentation_pairs))
 
-    # ---- bounded residual counterpart proposals (evidence only) ----
-    # Unmatched is not proof of absence.  Retrieve bounded possible
-    # counterparts from existing lexical/context/neighbour evidence and attach
-    # explicit examined/unsearched coverage.  Nothing here consumes a candidate
-    # or becomes a committed match.
-    reliable_pairs = (
-        comparison_candidates["unchanged"]
-        + comparison_candidates["modified"]
-        + comparison_candidates["modified_review"]
-        + relocated
-        + resegmentation_pairs
+    # Issue counterpart proposals against the candidates that remain. When
+    # replacing a group, the old bounded proposal view is also needed to keep
+    # existing route and canonical IDs stable.
+    prior_groups = []
+    if previous:
+        prior_groups = annotate_residuals(
+            previous["deleted"], previous["added"],
+            comparison_candidates["unchanged"] + previous["modified"]
+            + previous["modified_review"] + relocated + previous["resegmentation_review"],
+            [],
+        )["groups"]
+    proposal_result = annotate_residuals(
+        remaining_deleted, remaining_added,
+        comparison_candidates["unchanged"] + modified + modified_review
+        + relocated + resegmentation_pairs,
+        prior_groups,
     )
-    proposal_result = build_residual_proposals(
-        remaining_deleted,
-        remaining_added,
-        matched_pairs=reliable_pairs,
-    )
-    proposals_by_deleted: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    proposals_by_added: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for proposal in proposal_result["proposals"]:
-        proposals_by_deleted[proposal["deleted_candidate_id"]].append(proposal)
-        proposals_by_added[proposal["added_candidate_id"]].append(proposal)
-
-    for side, candidates, proposal_index in (
-        ("deleted", remaining_deleted, proposals_by_deleted),
-        ("added", remaining_added, proposals_by_added),
-    ):
-        for candidate in candidates:
-            candidate_id = str(candidate.get("candidate_id") or "")
-            coverage = proposal_result["candidate_coverage"].get(
-                candidate_id,
-                {
-                    "status": "no_opposite",
-                    "examined": 0,
-                    "unsearched": 0,
-                    "opposite_residuals": 0,
-                    "budget_exhausted": False,
-                    "limitations": [],
-                },
-            )
-            proposals = sorted(
-                proposal_index.get(candidate_id, []),
-                key=lambda item: item["proposal_id"],
-            )
-            candidate["residual_counterpart_proposals"] = proposals
-            candidate["residual_proposal_coverage"] = coverage
-            group_id = proposal_result["candidate_groups"].get(candidate_id)
-            if group_id:
-                candidate["residual_proposal_group_id"] = group_id
-            if proposals:
-                correspondence = "proposed"
-            elif coverage["status"] == "partial":
-                correspondence = "unresolved"
-            else:
-                correspondence = "not_applicable"
-            element = candidate.get("old") if side == "deleted" else candidate.get("new")
-            candidate["semantic_assessment"] = reassess_residual(
-                element,
-                side="old" if side == "deleted" else "new",
-                correspondence=correspondence,
-                limitations=list(coverage.get("limitations") or []),
-            )
 
     print("Residual counterpart proposals:", len(proposal_result["proposals"]))
     print("Residual proposal groups:", len(proposal_result["groups"]))
     print("Residual proposal pair checks:", proposal_result["coverage"]["pair_checks"])
+
+    moves = detect_moves(
+        comparison_candidates["unchanged"] + modified + modified_review + relocated,
+        modified_ids={item["candidate_id"] for item in modified + modified_review},
+        layout_ids=layout_ids,
+        anchors=anchors,
+    )
 
     structural_pairs = paired_structural_candidates(comparison_candidates)
     structural_pairs.sort(key=lambda candidate: reading_order(candidate["old"]))
@@ -974,7 +1257,9 @@ def main() -> None:
             "exact_split_merge_review_enabled": True,
             "structural_boundary_review_enabled": True,
             "fuzzy_split_merge_enabled": False,
-            "final_movement_classification_performed": False,
+            "deterministic_relative_order_moves_enabled": True,
+            "paragraph_resegmentation_enabled": True,
+            "final_movement_classification_performed": True,
             "final_split_merge_resolution_performed": False,
             "residual_proposal_search_enabled": True,
             "residual_proposal_max_per_element": 5,
@@ -1007,17 +1292,17 @@ def main() -> None:
             "residual_proposal_budget_exhausted":
                 proposal_result["coverage"]["budget_exhausted"],
         },
-        # Existing paired candidates are carried forward unchanged.
         "unchanged": copy.deepcopy(comparison_candidates["unchanged"]),
-        "modified": copy.deepcopy(comparison_candidates["modified"]),
-        "modified_review":
-            copy.deepcopy(comparison_candidates["modified_review"]),
+        "modified": copy.deepcopy(modified),
+        "modified_review": copy.deepcopy(modified_review),
         "duplicate_exact_review":
             copy.deepcopy(comparison_candidates["duplicate_exact_review"]),
         # Exact residual relocation consumes only the two corresponding
         # provisional add/delete candidates.
         "relocated": relocated,
         "resegmentation_review": resegmentation_pairs,
+        "paragraph_resegmentation": paragraph_groups,
+        "moves": moves,
         "deleted": copy.deepcopy(remaining_deleted),
         "added": copy.deepcopy(remaining_added),
         # Evidence-only residual counterpart proposals and explicit coverage.
@@ -1029,6 +1314,24 @@ def main() -> None:
         "structural_split_merge_review": split_merge_review,
         "structural_boundary_review": structural_boundary_review,
     }
+
+    if previous:
+        # Persist only the ordered IDs and changed inputs. These are historical
+        # routing inputs, outside the current element conservation partition.
+        history = {}
+        for group, candidates in previous.items():
+            if candidates == result[group]:
+                continue
+            current = {item["candidate_id"]: item for item in result[group]}
+            history[group] = {
+                "order": [item["candidate_id"] for item in candidates],
+                "replaced": {
+                    item["candidate_id"]: item for item in candidates
+                    if item != current.get(item["candidate_id"])
+                },
+            }
+        if history:
+            result["candidate_identity_history"] = history
 
     print(json.dumps(result["statistics"], ensure_ascii=False, indent=2))
 
@@ -1044,6 +1347,10 @@ def main() -> None:
     old_ids = ids_from_records(paired_forward + result["deleted"], "old")
     new_ids = ids_from_records(paired_forward + result["added"], "new")
 
+    for group in paragraph_groups:
+        old_ids.extend(element["element_id"] for element in group["old_elements"])
+        new_ids.extend(element["element_id"] for element in group["new_elements"])
+
     require(len(old_ids) == len(all_old), "s09: OLD conservation count failed")
     require(len(new_ids) == len(all_new), "s09: NEW conservation count failed")
 
@@ -1055,6 +1362,10 @@ def main() -> None:
 
     for item in result["relocated"]:
         require(element_key(item["old"]) == element_key(item["new"]), "s09: relocated key mismatch")
+        require(
+            item.get("type_changed") == type_change_fields(item["old"], item["new"]).get("type_changed"),
+            "s09: relocation type-change evidence does not match source types",
+        )
         key = element_key(item["old"])
         require(key is not None, "s09: relocated item has no element key")
         require(old_global_counts[key] == 1, "s09: relocated OLD key is not globally unique")

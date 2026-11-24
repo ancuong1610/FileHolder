@@ -1,6 +1,7 @@
 """API tests for the finding-location, page-image and chat routes (offline)."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -54,6 +55,35 @@ class ViewApiTest(_Base):
         body = r.json()
         self.assertEqual(body["record_id"], "CHANGE-000001")
         self.assertEqual(set(body["sides"]), {"old", "new"})
+
+    def test_move_search_details_and_highlight_routes(self):
+        root = f"/jobs/{self.job_id}"
+        path = self.root / self.job_id / "output" / "comparison_result.json"
+        original = path.read_text(encoding="utf-8")
+        canonical = json.loads(original)
+        change = next(row for row in canonical["changes"] if row["change_id"] == REC["record_id"])
+        move_id = "MOVE-000001"
+        canonical["moves"] = [{
+            "move_id": move_id,
+            "impact": {"level": "moved", "priority": "normal", "signals": [], "kinds": ["paragraph_move"]},
+            **{f"{side}_element_ids": [change[side]["element_id"]] for side in ("old", "new")},
+            **{f"{side}_elements": [{"page": 3, "text": change[side]["text"]}] for side in ("old", "new")},
+        }]
+        self.addCleanup(path.write_text, original, encoding="utf-8")
+        path.write_text(json.dumps(canonical), encoding="utf-8")
+        hits = self.client.get(f"{root}/read/search", params={"impact": "moved"}).json()["returned"]
+        self.assertEqual([(h["kind"], h["record_id"]) for h in hits], [("move", move_id)])
+        ref = {"kind": "move", "record_id": move_id}
+        detail = self.client.get(f"{root}/read/details", params=ref)
+        self.assertEqual(detail.status_code, 200, detail.text)
+        self.assertEqual(detail.json()["move"]["move_id"], move_id)
+        for side in ("old", "new"):
+            with self.subTest(side=side):
+                plain = self._page(side=side)
+                highlighted = self._page(side=side, **ref)
+                self.assertEqual(highlighted.status_code, 200)
+                self.assertTrue(highlighted.content.startswith(PNG))
+                self.assertNotEqual(highlighted.content, plain.content)
 
     def test_outline_ok(self):
         r = self.client.get(f"/jobs/{self.job_id}/view/outline")

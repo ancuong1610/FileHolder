@@ -73,18 +73,18 @@ than the immediately previous artifact.
 | --- | --- | --- | --- | --- |
 | s01 | `s01_extract.py` | Turn PDFs into machine-readable text, tables and locations; cache chunks so extraction can resume without repeating successful provider work. Collects optional, source-bound native outline sidecars before DI. | two PDFs / DI cache or API | raw DI JSON + outline sidecars + extraction warnings |
 | s02 | `s02_validate_extraction.py` | Detect broken page/span/table/geometry/confidence evidence before treating extraction noise as document changes; optionally cross-check native PDF text. | raw DI JSON | validation JSON |
-| s03 | `s03_internal_schema.py` | Isolate downstream comparison from the DI response shape using stable element IDs while preserving source text, locations and validation evidence. Carries the Stage-1 extraction source identity. | DI + validation | neutral internal document JSON |
+| s03 | `s03_internal_schema.py` | Preserve source text, locations, validation and extraction identity behind stable element IDs. Keep German dotted abbreviations in paragraph text when identifying list markers. | DI + validation | neutral internal document JSON |
 | s04 | `s04_normalize.py` | Reduce conservative Unicode/whitespace/wrap noise without rewriting raw text or meaningful quantitative differences. | document JSON | normalized JSON |
-| s05 | `s05_anchors.py` | Supply provisional heading context and additive TOC/outline/section evidence, distinguishing recurring page furniture from body content. Verified native outline links are preferred evidence; absence or staleness falls back to reconstruction. These are hypotheses, not authoritative hierarchy. | normalized JSON + outline sidecars | structured JSON + `structure_evidence` |
-| s06 | `s06_exact_matching.py` | Remove confidently unchanged pairs first; use provisional context to disambiguate repeated identical text where supported. | structured pair | exact matches |
-| s07 | `s07_modified_matching.py` | Find supported modified pairs among residuals rather than reporting every edit as unrelated deletion/addition. Attach only complete deterministic source witnesses; a short-text-only review may be nominated for clearing later. | structured pair + exact-match residuals | bounded modified matches + optional `semantic_assessment` |
+| s05 | `s05_anchors.py` | Supply provisional heading context and TOC/outline/section evidence. Classify recurring page furniture and confirm recurrence-only exclusions across the document pair. Prefer verified native outline links and fall back to reconstruction when needed. | normalized JSON + outline sidecars | structured JSON + `structure_evidence` |
+| s06 | `s06_exact_matching.py` | Exclude eligible furniture and match unchanged content by matching family and comparison text. Use provisional anchor context to disambiguate repeated identical text. | structured pair | exact matches |
+| s07 | `s07_modified_matching.py` | Retrieve and pair residuals within the same matching family using bounded similarity. Record differing source types and attach complete deterministic source witnesses when available. | structured pair + exact-match residuals | bounded modified matches + optional `semantic_assessment` |
 | s08 | `s08_candidates.py` | Assemble paired/unpaired candidates and token diffs while conserving all old/new elements and keeping uncertain duplicate matches visible. | exact + modified matches | candidate/change list |
-| s09 | `s09_movement.py` | Distinguish relocation and split/merge/resegmentation evidence from ordinary edits, without hiding genuine content changes. Record bounded plausible residual counterparts and explicit examined/unsearched coverage; proposals never consume candidates. | candidates | movement-resegmented candidates + `residual_proposals`/groups/coverage |
+| s09 | `s09_movement.py` | Reconcile evidence-backed paragraph splits and merges, and detect moves from relative reading order and changes in the preceding matched section. Record bounded plausible residual counterparts and explicit examined/unsearched coverage; proposals never consume candidates. | candidates | movement-resegmented candidates + `paragraph_resegmentation`, `moves`, `residual_proposals`/groups/coverage |
 | s10 | `s10_tables.py` | Compare logical tables across physical page continuations and align rows/cells. Exact matching remains first; bounded header/body/context/shape retrieval limits expensive fuzzy scoring while preserving unresolved table evidence. | structured pair + movement candidates | table comparison records |
-| s11 | `s11_routing.py` | Decide deterministically which cases are supported and which remain uncertain or eligible for optional advisory evaluation; no domain-specific verifier. Plausible residual counterparts or incomplete search coverage block absence-based add/delete acceptance. | candidates + tables | routing with `UNCERTAIN_RESULT` |
+| s11 | `s11_routing.py` | Decide deterministically which cases are supported and which remain uncertain or eligible for optional advisory evaluation; no domain-specific verifier. Route glyph-equivalent paragraph resegmentation as structural-only and editorial resegmentation as a deterministic change. Plausible residual counterparts or incomplete search coverage block absence-based add/delete acceptance. | candidates + tables | routing with `UNCERTAIN_RESULT` |
 | s12 | `s12_packets.py` | Package only eligible cases into bounded old/new evidence for optional evaluation, not an unbounded document upload. | eligible routes + evidence | bounded review packets |
 | s13 | `s13_llm_evaluator.py` | Obtain optional advisory `REAL_CHANGE` / `ARTIFACT` / `UNCERTAIN` recommendations with traceability; mock mode exercises the contract without model calls. | packets | disabled/mock/real decisions + trace |
-| s14 | `s14_canonical_result.py` | Produce the single canonical result using deterministic resolution rules; preserve LLM advice without letting it approve or suppress changes. Independently revalidates semantic witnesses and emits one grouped explanation for a residual proposal group while keeping every member record. Adds normalized `result_state` while retaining legacy status fields. | routing + candidate/table/evaluation evidence | canonical result + review queue |
+| s14 | `s14_canonical_result.py` | Produce the single canonical result using deterministic resolution rules; preserve LLM advice without letting it approve or suppress changes. Independently revalidates semantic witnesses and emits one grouped explanation for a residual proposal group while keeping every member record. Adds normalized `result_state`, deterministic impact for changes and tables, and typed moves with links from moved modifications. Keeps glyph-only and structural-only events in `non_semantic_events`. | routing + candidate/table/evaluation evidence | canonical result + review queue |
 | s15 | `s15_serve.py` | Present/export the canonical result for human inspection and downstream reading without recomputing matching; primary HTML/PDF use canonical records, not an accepted-only projection. | canonical + structured artifacts | complete HTML/PDF/CSV/manifest/index bundle |
 
 Stage 15 is Phase 1 reporting, not Phase 2 logic. Its generated
@@ -99,13 +99,16 @@ links, sections, uncertainty, and one membership category per element (`toc`,
 `layout`, `section`, `preamble`, `uncertain`). Neither layer grants authoritative
 semantic hierarchy or changes raw extraction roles, text or IDs.
 
-**Derived furniture** means recurring headers/footers supported jointly by
-repeated text, layout-role occurrences on multiple pages, and page-edge geometry.
-A single DI role or repetition alone is insufficient. The same classification
-is shared by anchor and structure reconstruction. Furniture is excluded from
-TOC heading/entry/table-source detection and skipped while scanning between TOC
-pages; it must not terminate continuation or create a fake heading. Its membership
-is always `layout`. The validator still rejects contradictory evidence.
+**Derived furniture** covers recurring headers and footers supported by repeated
+text, page-edge geometry and a DI layout-role cohort. The classifier can also
+use short text appearing once per page across enough physical pages, with at
+least 90% of occurrences at the same edge and no DI heading role in the group.
+Anchor and structure reconstruction share this classification. Furniture evidence
+is excluded from TOC heading, entry and table-source detection and skipped while
+scanning between TOC pages. Recurrence-only evidence needs valid geometry and a
+matching furniture key in the other document to count as `layout` for comparison.
+Unconfirmed recurrence stays comparable. The validator still rejects contradictory
+evidence.
 
 This matters for the reported EBA STEP2 failure: the old TOC-first membership
 could classify a recurring `Contents` header as `toc`, contradicting the furniture

@@ -10,8 +10,14 @@ ordinary document content and never activates a specialized domain.
 """
 from document_compare.shared.paths import find_project_root
 from document_compare.phase1.extraction.di_fields import get_page_number, set_page_number
-from document_compare.phase1.contracts.validation import require
+from document_compare.phase1.contracts.validation import extraction_validation_state, require
 from document_compare.phase1.pipeline.mode import parse_domain_mode, resolve_domain_profile
+from document_compare.phase1.matching.impact import (
+    STATE_MARKERS,
+    classify_impact,
+    glyph_fold,
+    raw_glyph_signature,
+)
 from document_compare.phase1.matching.language import SUSPENDED_HYPHEN_STOPWORDS
 from document_compare.phase1.matching.semantic_evidence import (
     independent_correspondence_verified,
@@ -20,6 +26,7 @@ from document_compare.phase1.contracts.semantic_assessment import (
     is_deterministic_material_proof,
 )
 from document_compare.phase1.contracts.review_identity import structural_route_identity
+from document_compare.phase1.stages.s09_movement import previous_candidate_view
 
 # ---- cell 1 ----
 import json, os, re
@@ -55,15 +62,6 @@ LIST_LABEL_RE = re.compile(
 # simply end earlier). Reading-order slots.
 FRONTIER_MARGIN = 12
 
-# ---- cell 2 ----
-PROJECT_ROOT = find_project_root()
-OUTPUT_DIR = PROJECT_ROOT / "output"
-
-STEP9_PATH = OUTPUT_DIR / "comparison_candidates_with_movement.json"
-STEP10_PATH = OUTPUT_DIR / "table_comparison_result.json"
-OUTPUT_PATH = OUTPUT_DIR / "review_routing.json"
-
-
 def load_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         value = json.load(f)
@@ -95,21 +93,6 @@ def token_changes(candidate: dict[str, Any]) -> list[dict[str, Any]]:
     return comparison.get("changes") or []
 
 
-def extraction_validation_state(element: dict[str, Any] | None) -> str:
-    """Classify an element's extraction metadata: 'requires_review', 'unknown', or 'ok'.
-
-    Absent or malformed metadata is 'unknown' (never safe): only an explicit
-    boolean ``requires_extraction_review`` counts as a valid verdict.
-    """
-    if not isinstance(element, dict):
-        return "unknown"
-    validation = element.get("extraction_validation")
-    if not isinstance(validation, dict):
-        return "unknown"
-    flag = validation.get("requires_extraction_review")
-    if not isinstance(flag, bool):
-        return "unknown"
-    return "requires_review" if flag else "ok"
 
 # Reasons emitted by the hyphen/wrap rule. A hyphen/space-only diff may be
 # suppressed as a deterministic artifact ONLY when the raw source proves a real
@@ -177,6 +160,13 @@ def wrap_artifact_like(candidate: dict[str, Any]) -> bool:
     return bool(old_join) and old_join == new_join
 
 
+def _wrap_join(match: re.Match) -> str | None:
+    left, right = match.group(1), match.group(2)
+    if right[:1].islower() and right.casefold() not in SUSPENDED_HYPHEN_STOPWORDS:
+        return left + right
+    return None
+
+
 def _line_break_hyphen_joins(raw: str) -> set[str]:
     """Joined words from real lowercase, non-stopword ``-\\n`` breaks in raw.
 
@@ -184,13 +174,10 @@ def _line_break_hyphen_joins(raw: str) -> set[str]:
     suspended-hyphen function word is a real line-wrap. Uppercase/digit
     continuations and stopwords are never proof.
     """
-    joined: set[str] = set()
-    for match in _SOURCE_LINE_BREAK_HYPHEN_RE.finditer(raw):
-        left, right = match.group(1), match.group(2)
-        if not right[:1].islower() or right.casefold() in SUSPENDED_HYPHEN_STOPWORDS:
-            continue
-        joined.add(left + right)
-    return joined
+    return {
+        joined for match in _SOURCE_LINE_BREAK_HYPHEN_RE.finditer(raw)
+        if (joined := _wrap_join(match)) is not None
+    }
 
 
 def source_proven_line_wrap(candidate: dict[str, Any]) -> bool:
@@ -467,7 +454,15 @@ def route_non_table(
     # Deterministic special-case rules
     # ------------------------------------------------------------
 
-    if not extraction_forces_review:
+    raw_texts = [element.get("text") or "" for element in present]
+    raw_signatures = [raw_glyph_signature(text) for text in raw_texts]
+    raw_glyphs_agree = len(present) != 2 or raw_signatures[0] == raw_signatures[1]
+    states_changed = len(present) == 2 and (
+        [char for char in raw_signatures[0] if char in STATE_MARKERS]
+        != [char for char in raw_signatures[1] if char in STATE_MARKERS]
+    )
+
+    if not extraction_forces_review and not states_changed:
         # Hyphenation/wrap-position-only differences are artifact nominations;
         # they are checked before the single-op word-split rule because this
         # covers multi-operation diffs.
@@ -510,6 +505,21 @@ def route_non_table(
                 sorted(set(reasons)),
             )
 
+        if (
+            len(present) == 2 and all(raw_texts) and raw_glyphs_agree
+            and glyph_fold(raw_texts[0]) == glyph_fold(raw_texts[1])
+            and not representation_semantic_signal_tokens(candidate)
+        ):
+            old_text = old.get("normalized_text") or old.get("text")
+            new_text = new.get("normalized_text") or new.get("text")
+            if classify_impact(old_text, new_text)["level"] == "non_content":
+                reasons.append("impact_non_content_glyph_fold_equal")
+                return (
+                    "SPECIAL_CASE_RULE",
+                    "glyph_or_invisible_char_artifact",
+                    sorted(set(reasons)),
+                )
+
         if marker_only_like(candidate):
             reasons.append("possible_marker_only_difference")
             return (
@@ -540,7 +550,17 @@ def route_non_table(
             # still live in the source/normalized representation; routing it
             # to review is required because suppression would silently drop
             # it from changes, export and redline.
-            if representation_semantic_signal_tokens(candidate):
+            # Genuine source line wraps can erase a hyphen in the comparison
+            # representation. Require the rest of the raw text to agree.
+            raw_wraps_only = not raw_glyphs_agree and len({
+                _SOURCE_LINE_BREAK_HYPHEN_RE.sub(
+                    lambda match: _wrap_join(match) or match[0], raw
+                ) for raw in raw_texts
+            }) == 1
+            if (
+                (not raw_glyphs_agree and not raw_wraps_only)
+                or representation_semantic_signal_tokens(candidate)
+            ):
                 reasons.append(
                     "comparison_token_equivalent_with_semantic_signal"
                 )
@@ -725,7 +745,15 @@ def route_table_match(match: dict[str, Any]) -> tuple[str,str,list[str]]:
     return "UNCERTAIN_RESULT", "unclassified_table_match", reasons
 
 
-def build_generic_routing(
+STRUCTURAL_ROUTES = (
+    ("resegmentation_review", "resegmentation_suspect", "SPECIAL_CASE_RULE", True),
+    ("movement_review", "movement_block_review", "UNCERTAIN_RESULT", False),
+    ("structural_split_merge_review", "structural_split_merge", "SPECIAL_CASE_RULE", False),
+    ("structural_boundary_review", "structural_boundary", "SPECIAL_CASE_RULE", False),
+)
+
+
+def _build_generic_routing(
     movement: dict[str, Any], tables: dict[str, Any]
 ) -> dict[str, Any]:
     """Pure deterministic generic routing; no authorization, no file access.
@@ -779,12 +807,7 @@ def build_generic_routing(
     # Each evidence record carries its own identity (``review_id`` preferred);
     # the original candidate link, when present, is preserved separately so
     # evidence never collides with the candidate route it refers to.
-    for group, case_type, route, include_similarity in (
-        ("resegmentation_review", "resegmentation_suspect", "SPECIAL_CASE_RULE", True),
-        ("movement_review", "movement_block_review", "UNCERTAIN_RESULT", False),
-        ("structural_split_merge_review", "structural_split_merge", "SPECIAL_CASE_RULE", False),
-        ("structural_boundary_review", "structural_boundary", "SPECIAL_CASE_RULE", False),
-    ):
+    for group, case_type, route, include_similarity in STRUCTURAL_ROUTES:
         for item in movement.get(group) or []:
             identity = structural_route_identity(item)
             evidence_route = {
@@ -801,6 +824,37 @@ def build_generic_routing(
             if identity.get("source_candidate_id") is not None:
                 evidence_route["source_candidate_id"] = identity["source_candidate_id"]
             non_table_routes.append(evidence_route)
+
+    for item in movement.get("paragraph_resegmentation") or []:
+        members = {side: item[f"{side}_elements"] for side in ("old", "new")}
+        reasons = []
+        states = {extraction_validation_state(member) for group in members.values() for member in group}
+        if "requires_review" in states:
+            reasons.append("source_extraction_requires_review")
+        if "unknown" in states:
+            reasons.append("source_extraction_validation_unknown")
+        stored_keys = item.get("nearest_heading_keys")
+        heading_keys = stored_keys if isinstance(stored_keys, dict) else {}
+        old_keys, new_keys = heading_keys.get("old"), heading_keys.get("new")
+        if not (
+            isinstance(old_keys, list) and old_keys and len(old_keys) == len(members["old"])
+            and isinstance(new_keys, list) and len(new_keys) == len(members["new"])
+            and all(key == old_keys[0] for key in old_keys + new_keys)
+        ):
+            reasons.append("paragraph_resegmentation_heading_context_unverified")
+        non_table_routes.append({
+            "route_id": f"NT-{len(non_table_routes)+1:06d}",
+            "source_kind": "non_table",
+            "source_group": "paragraph_resegmentation",
+            "candidate_id": item["candidate_id"],
+            "route": (
+                "UNCERTAIN_RESULT" if reasons else
+                "SPECIAL_CASE_RULE" if item["impact_level"] == "non_content" else
+                "ACCEPT_DETERMINISTIC"
+            ),
+            "case_type": item["kind"],
+            "review_reasons": reasons,
+        })
 
     table_routes = []
     for match in tables.get("table_matches") or []:
@@ -857,6 +911,26 @@ def build_generic_routing(
         "table_routes": table_routes,
     }
 
+def build_generic_routing(
+    movement: dict[str, Any], tables: dict[str, Any],
+) -> dict[str, Any]:
+    """Route current candidates while preserving earlier route identities."""
+    routing = _build_generic_routing(movement, tables)
+    if movement.get("candidate_identity_history"):
+        previous = _build_generic_routing(previous_candidate_view(movement), tables)
+        previous_routes = previous["non_table_routes"]
+        previous_by_candidate = {route["candidate_id"]: route["route_id"] for route in previous_routes}
+        next_slot = len(previous_routes) + 1
+        for route in routing["non_table_routes"]:
+            route_id = previous_by_candidate.get(route["candidate_id"])
+            if route_id is None:
+                route_id = f"NT-{next_slot:06d}"
+                next_slot += 1
+            route["route_id"] = route_id
+        routing["previous_non_table_routes"] = previous_routes
+    return routing
+
+
 # ---- cell 5 ----
 def build_domain_verification_records(
     routes: list[dict[str, Any]],
@@ -888,8 +962,12 @@ def build_domain_verification_review(
 
 
 def main() -> None:
-    movement = load_json(STEP9_PATH)
-    tables = load_json(STEP10_PATH)
+    output_dir = find_project_root() / "output"
+    step9_path = output_dir / "comparison_candidates_with_movement.json"
+    step10_path = output_dir / "table_comparison_result.json"
+    output_path = output_dir / "review_routing.json"
+    movement = load_json(step9_path)
+    tables = load_json(step10_path)
 
     if movement.get("comparison_stage") != EXPECTED_STEP9_STAGE:
         raise ValueError("Step 11 v2 requires the current Step 9 result.")
@@ -933,8 +1011,8 @@ def main() -> None:
         "schema_version": "1.0.0",
         "comparison_stage": "deterministic_review_routing",
         "source_files": {
-            "step9": STEP9_PATH.name,
-            "step10": STEP10_PATH.name,
+            "step9": step9_path.name,
+            "step10": step10_path.name,
         },
         "processing": {
             "version": STEP11_VERSION,
@@ -961,15 +1039,17 @@ def main() -> None:
         "domain_verification_review": domain_verification_review,
         "non_table_routes": generic["non_table_routes"],
         "table_routes": generic["table_routes"],
+        **({"previous_non_table_routes": generic["previous_non_table_routes"]}
+           if "previous_non_table_routes" in generic else {}),
     }
 
     # Every route_id must be unique.
     route_ids = [x["route_id"] for x in routes]
     require(len(route_ids) == len(set(route_ids)), "s11: duplicate route_id")
 
-    save_json(result, OUTPUT_PATH)
+    save_json(result, output_path)
     print(json.dumps(result["statistics"], ensure_ascii=False, indent=2))
-    print("Saved:", OUTPUT_PATH)
+    print("Saved:", output_path)
 
     # ---- cell 6 ----
     print("\n=== LLM-OPTIONAL CASE TYPES ===")

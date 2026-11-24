@@ -97,12 +97,13 @@ class SeededJobTests(unittest.TestCase):
     def tearDownClass(cls):
         cls._tmp.cleanup()
 
-    def test_every_change_and_table_appears_exactly_once(self):
+    def test_every_change_table_and_move_appears_exactly_once(self):
         placed = [i["record_id"] for n in _walk(self.outline["sections"]) for i in n["items"]]
         placed += [i["record_id"] for i in self.outline["unplaced"]]
         placed = [i for i in placed if not i.startswith("REVIEW-")]  # standalone review items are extra
         expected = [c["change_id"] for c in self.canonical["changes"]] + \
-                   [t["table_change_id"] for t in self.canonical["table_changes"]]
+                   [t["table_change_id"] for t in self.canonical["table_changes"]] + \
+                   [m["move_id"] for m in self.canonical["moves"]]
         self.assertTrue(expected)
         self.assertEqual(sorted(placed), sorted(expected))
 
@@ -118,14 +119,14 @@ class SeededJobTests(unittest.TestCase):
         self.assertEqual(sorted(standalone), sorted(i["record_id"] for i in self.outline["review"]
                                                     if not i["linked_to"]))
         self.assertEqual(self.outline["total"], len(self.canonical["changes"]) + len(self.canonical["table_changes"])
-                         + len(standalone))
+                         + len(self.canonical["moves"]) + len(standalone))
 
     def test_documents_pages_and_item_shape(self):
         self.assertEqual(self.outline["documents"], {"old": {"page_count": 3}, "new": {"page_count": 3}})
-        item = next(i for n in _walk(self.outline["sections"]) for i in n["items"])
+        item = next(i for n in _walk(self.outline["sections"]) for i in n["items"] if i["kind"] == "change")
         self.assertEqual(set(item), {"kind", "record_id", "change_type", "label", "page_old", "page_new",
                                     "context_old", "context_new", "section_path", "needs_review", "review_reason",
-                                    "review_ids", "llm_opinion"})
+                                    "review_ids", "llm_opinion", "impact"})
         self.assertTrue(item["section_path"])
         self.assertEqual([n["side"] for n in self.outline["sections"]], ["new"] * len(self.outline["sections"]))
 
@@ -375,6 +376,32 @@ class HandMadeTests(unittest.TestCase):
         first["new"]["reading_order"], second["new"]["reading_order"] = 9, 2
         result = build_outline(self.out, {"changes": [first, second]})
         self.assertEqual([i["record_id"] for i in result["sections"][0]["items"]], ["C2", "C1"])
+
+    def test_move_uses_new_section_and_reading_order(self):
+        _write(self.out, "old", _structured([_section("O1", "Früher")], {"OE": "O1"}))
+        _write(self.out, "new", _structured([_section("N1", "Jetzt")], {"NE": "N1", "CE": "N1"}))
+        change = _change("C1", "ADDED", new="CE")
+        change["new"]["reading_order"] = 8
+        move = {
+            "move_id": "MOVE-000001", "old_element_ids": ["OE"], "new_element_ids": ["NE"],
+            "old_elements": [{"text": "Absatz", "page": 1, "reading_order": 12}],
+            "new_elements": [{"text": "Verschobener Absatz", "page": 2, "reading_order": 5}],
+            "from_anchor": "Früher", "to_anchor": "Jetzt",
+            "impact": {"level": "moved", "priority": "normal", "kinds": ["paragraph_move"], "signals": []},
+        }
+        result = build_outline(self.out, {"changes": [change], "moves": [move]})
+        destination, source = result["sections"]
+        self.assertEqual(destination["change_count"], 2)
+        self.assertEqual(source["items"], [])
+        moved, legacy = destination["items"]
+        self.assertEqual((moved["kind"], moved["record_id"]), ("move", "MOVE-000001"))
+        self.assertEqual(moved["section_path"], ["Jetzt"])
+        self.assertEqual(moved["label"], "Verschobener Absatz")
+        self.assertEqual(moved["impact"], move["impact"])
+        self.assertEqual((moved["from_anchor"], moved["to_anchor"]), ("Früher", "Jetzt"))
+        self.assertEqual((moved["page_old"], moved["page_new"]), (1, 2))
+        self.assertFalse(moved["context_old"] or moved["context_new"])
+        self.assertIsNone(legacy["impact"])
 
 
 class ContextPageTests(unittest.TestCase):

@@ -452,6 +452,7 @@ def read_search(
     change_type: str | None = None,
     cursor: str | None = None,
     limit: int | None = None,
+    impact: str | None = None,
 ) -> dict:
     _validate_read_job_id(job_id)
     job_status = _read_status(job_id)
@@ -466,6 +467,7 @@ def read_search(
             change_type=change_type,
             cursor=cursor,
             limit=limit,
+            impact=impact,
         )
     except reader.ReaderError as exc:
         raise _reader_http(exc) from exc

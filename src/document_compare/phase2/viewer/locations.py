@@ -16,7 +16,7 @@ from typing import Any
 from document_compare.phase2.reader.result_reader import ID_FIELDS, ReaderError
 
 SIDES = ("old", "new")
-_CONTAINERS = {"change": "changes", "table": "table_changes", "review": "review_queue"}
+_CONTAINERS = {"change": "changes", "table": "table_changes", "review": "review_queue", "move": "moves"}
 _MAX_DOC_BYTES = 256 * 1024 * 1024
 
 
@@ -125,8 +125,15 @@ def _page_of(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def member_element_ids(record: dict[str, Any], side: str) -> list[str]:
+    ids = record.get(f"{side}_element_ids")
+    return [eid for eid in ids if isinstance(eid, str) and eid] if isinstance(ids, list) else []
+
+
 def record_side_ref(kind: str, record: dict[str, Any], side: str) -> str | None:
-    """The per-side reference of a record: its element ID (change) or logical table ID (table)."""
+    """The per-side element or logical table reference used for placement."""
+    if kind == "move":
+        return next(iter(member_element_ids(record, side)), None)
     part = record.get(side) if isinstance(record, dict) else None
     key = "logical_table_id" if kind == "table" else "element_id"
     if kind == "review" or not _present(part, key):
@@ -217,7 +224,7 @@ def _change_side(side: Any, doc: _Doc) -> dict[str, Any]:
 
 
 def _elements_side(ids: list[str], doc: _Doc) -> dict[str, Any]:
-    """One side of a review record: the union of the regions of the named elements."""
+    """One side of a multi-element record, using the regions of the named elements."""
     if not ids:
         return _side("none", "unavailable", doc)
     if not doc.ok:
@@ -251,7 +258,10 @@ def _review_ids(record: dict[str, Any], canonical: dict[str, Any]) -> dict[str, 
     for change in changes:
         if isinstance(change, dict) and change.get("change_id") in wanted:
             for side in SIDES:
-                if _present(change.get(side), "element_id"):
+                members = member_element_ids(change, side)
+                if members:
+                    ids[side].extend(members)
+                elif _present(change.get(side), "element_id"):
                     ids[side].append(change[side]["element_id"])
     return ids
 
@@ -312,10 +322,19 @@ def resolve_locations(output_dir: Path, canonical: dict, kind: str, record_id: s
     result: dict[str, Any] = {"kind": kind, "record_id": record_id}
     if kind == "change":
         result["change_type"] = record.get("change_type")
-        sides = {s: _change_side(record.get(s), docs[s]) for s in SIDES}
+        sides = {}
+        for side in SIDES:
+            ids = member_element_ids(record, side)
+            sides[side] = (
+                _elements_side(ids, docs[side]) if len(ids) > 1
+                else _change_side(record.get(side), docs[side])
+            )
     elif kind == "table":
         result["change_type"] = record.get("change_type")
         sides = {s: _table_side(record, s, docs[s]) for s in SIDES}
+    elif kind == "move":
+        result["change_type"] = None
+        sides = {s: _elements_side(member_element_ids(record, s), docs[s]) for s in SIDES}
     else:
         result["change_type"] = None
         ids = _review_ids(record, canonical)

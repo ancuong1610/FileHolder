@@ -236,9 +236,9 @@ class DemoEndToEndTest(unittest.TestCase):
             self.assertEqual(canonical["statistics"]["table_changes"], 1)
             # Two review entries are intentional: the pre-existing ambiguous
             # short pair plus one grouped residual-proposal uncertainty.  The
-            # legacy completions deletion and the new Embeddings paragraph are
-            # plausible counterparts under the same section, so neither may be
-            # independently accepted as an absence-based add/delete.
+            # legacy completions deletion and the new Embeddings heading and
+            # paragraph share a residual group now that headings and paragraphs
+            # are compatible. The group proposes counterparts without pairing them.
             self.assertEqual(canonical["statistics"]["review_queue"], 2)
             grouped = [
                 item for item in canonical["review_queue"]
@@ -248,10 +248,10 @@ class DemoEndToEndTest(unittest.TestCase):
             evidence = grouped[0]["evidence"]
             self.assertEqual(
                 set(evidence["candidate_ids"]),
-                {"DELETED-CANDIDATE-000001", "ADDED-CANDIDATE-000002"},
+                {"DELETED-CANDIDATE-000001", "ADDED-CANDIDATE-000001", "ADDED-CANDIDATE-000002"},
             )
             self.assertEqual(evidence["old_element_ids"], ["OLD-P00006"])
-            self.assertEqual(evidence["new_element_ids"], ["NEW-P00008"])
+            self.assertEqual(evidence["new_element_ids"], ["NEW-P00007", "NEW-P00008"])
             self.assertIs(evidence["consumes_candidates"], False)
 
 
