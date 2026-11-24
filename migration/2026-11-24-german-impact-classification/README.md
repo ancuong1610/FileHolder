@@ -24,6 +24,8 @@ additive fields/parameters: `impact`, `moves`, `change_blocks`, search
 - `files/` — the **full new version** (at `bbc17b5`) of every added/modified file, same paths as the repo.
 - `combined-c2e3717..bbc17b5.diff` — the whole change as one diff (**preferred**).
 - `000{1..4}-*.patch` — the four commits separately.
+- `base/` — the `c2e3717` version of every modified file (3-way merge ancestor).
+- `apply_migration.py` — per-file 3-way merge onto a work repo without shared history (Method 0).
 
 Verified off-site: on a clean `c2e3717`, each of the three methods (combined
 diff, the four patches with `git am --keep-cr --3way`, copying `files/`)
@@ -42,7 +44,43 @@ Commit or stash local work first, then work on a new branch:
 
 Many files are **CRLF**. Never let an editor or tool convert line endings.
 
-## Method 1 — apply the combined diff (preferred: keeps work-PC changes)
+## Method 0 — `apply_migration.py` (recommended on the work PC)
+
+`git apply --3way` cannot work on the work PC: the ZIP has no git history, so
+the base blobs are missing ("missing base blobs"), and without `--3way` every
+file the work PC changed locally fails (seen: `three-tool-reader.md`,
+`agent/{gateway,prompts,tools}.py`, `mcp/reader_server.py`,
+`reader/result_reader.py`, `tests/phase2/test_mcp.py`). This package therefore
+also ships `base/` = the `c2e3717` version of every modified file, and a
+script that does the 3-way merge per file with `git merge-file`:
+
+```bash
+git status                     # must be clean (commit/stash first), on a new branch
+python <unzipped>/migration/2026-11-24-german-impact-classification/apply_migration.py --repo .
+python <unzipped>/migration/2026-11-24-german-impact-classification/apply_migration.py --repo . --apply
+```
+
+The first call is a dry run that lists, per file: `replaced` (work copy equals
+`c2e3717`), `added`, `already_applied`, `merged_clean` (work-PC edits kept),
+`merged_with_conflicts`. Line endings: files are compared ignoring CRLF/LF and
+each written file keeps the work file's line ending style.
+
+For `merged_with_conflicts`, open the file, search `<<<<<<< work-pc`, and
+combine both sides: keep the work-PC code and add this package's change
+(`files/<path>` is the target version, `base/<path>` the common ancestor).
+Never delete a work-PC feature to make a hunk fit. Then `git diff` to review
+and run Verify.
+
+Verified off-site on a simulated work PC (Windows-style CRLF on LF files,
+local edits in `gateway.py`, `result_reader.py`, and an overlapping edit in
+`prompts.py`): 34 replaced, 8 added, 2 merged clean with local edits kept,
+1 conflict marked; after resolving, everything else equals `bbc17b5` and the
+suite shows only the 7 known failures.
+
+If you already ran `git apply --reject`/partial applies, first restore the
+touched files (`git checkout -- .` and delete `*.rej`), then use Method 0.
+
+## Method 1 — apply the combined diff (only if the work copy equals `c2e3717`)
 
 From the work repo root:
 
