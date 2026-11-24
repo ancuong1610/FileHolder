@@ -16,7 +16,7 @@ from typing import Any
 from document_compare.phase2.reader.result_reader import ID_FIELDS, ReaderError
 
 SIDES = ("old", "new")
-_CONTAINERS = {"change": "changes", "table": "table_changes", "review": "review_queue", "move": "moves"}
+_CONTAINERS = {"change": "changes", "table": "table_changes", "review": "review_queue", "move": "moves", "block": "change_blocks"}
 _MAX_DOC_BYTES = 256 * 1024 * 1024
 
 
@@ -178,6 +178,8 @@ def linked_change_ids(review: dict[str, Any], changes: list[Any]) -> list[str]:
     existing = {c["change_id"]: c for c in changes if isinstance(c, dict) and isinstance(c.get("change_id"), str)}
     evidence = review.get("evidence") if isinstance(review.get("evidence"), dict) else {}
     named = [i for i in evidence.get("change_ids") or [] if isinstance(i, str)] + [review.get("change_id")]
+    if review.get("block_id"):
+        named.extend(i for i in review.get("change_ids") or [] if isinstance(i, str))
     out = [i for i in named if isinstance(i, str) and i in existing]
     candidate = review.get("source_candidate_id")
     if isinstance(candidate, str) and candidate:
@@ -254,9 +256,13 @@ def _review_ids(record: dict[str, Any], canonical: dict[str, Any]) -> dict[str, 
     if any(ids.values()):
         return ids
     changes = canonical.get("changes") if isinstance(canonical.get("changes"), list) else []
-    wanted = set(linked_change_ids(record, changes))
-    for change in changes:
-        if isinstance(change, dict) and change.get("change_id") in wanted:
+    by_id = {change.get("change_id"): change for change in changes if isinstance(change, dict)}
+    linked = linked_change_ids(record, changes)
+    if not record.get("block_id"):
+        wanted = set(linked)
+        linked = [cid for cid in by_id if cid in wanted]
+    for cid in linked:
+        if change := by_id.get(cid):
             for side in SIDES:
                 members = member_element_ids(change, side)
                 if members:
@@ -336,7 +342,7 @@ def resolve_locations(output_dir: Path, canonical: dict, kind: str, record_id: s
         result["change_type"] = None
         sides = {s: _elements_side(member_element_ids(record, s), docs[s]) for s in SIDES}
     else:
-        result["change_type"] = None
+        result["change_type"] = record.get("change_type") if kind == "block" else None
         ids = _review_ids(record, canonical)
         sides = {s: _elements_side(ids[s], docs[s]) for s in SIDES}
     result["sides"] = sides
@@ -345,6 +351,12 @@ def resolve_locations(output_dir: Path, canonical: dict, kind: str, record_id: s
         linked = reviews_by_change(canonical).get(record_id, [])
     elif kind == "review":
         linked = [record]
+    elif kind == "block":
+        member_ids = set(record.get("change_ids") or [])
+        linked = [
+            change for change in canonical.get("changes") or []
+            if isinstance(change, dict) and change.get("change_id") in member_ids and needs_review_status(change)
+        ]
     result["needs_review"] = kind == "review" or needs_review_status(record) or bool(linked)
     reason = review_reason(record) if kind == "review" or needs_review_status(record) else None
     for review in linked:

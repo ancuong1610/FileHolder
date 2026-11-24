@@ -44,7 +44,14 @@ from document_compare.phase1.matching.semantic_evidence import (
 )
 
 from document_compare.phase1.stages.s08_candidates import build_representation_diffs
-from document_compare.phase1.stages.s09_movement import previous_candidate_view
+from document_compare.phase1.stages.s09_movement import (
+    collect_document_elements,
+    load_structure_context,
+    previous_candidate_view,
+    reading_order,
+    STRUCTURAL_TYPES,
+)
+from document_compare.phase1.structure.reconstruction import is_layout
 
 STEP14_VERSION = "3.0.0-generic-canonical-result"
 
@@ -1060,6 +1067,193 @@ def _preserve_previous_identities(
             evidence["change_ids"] = sorted(replacements[cid] for cid in evidence["change_ids"])
 
 
+def _block_source(movement: dict[str, Any], side: str, structure_dir: Path | None):
+    comparable = collect_document_elements({
+        group: movement.get(group) or []
+        for group in ("unchanged", "modified", "modified_review", "duplicate_exact_review", "deleted", "added")
+    }, side)
+    for group in ("relocated", "resegmentation_review"):
+        for candidate in movement.get(group) or []:
+            element = candidate.get(side) or {}
+            if element.get("element_id"):
+                comparable[element["element_id"]] = element
+    for group in movement.get("paragraph_resegmentation") or []:
+        for element in group.get(f"{side}_elements") or []:
+            comparable[element["element_id"]] = element
+
+    if structure_dir is not None:
+        path = structure_dir / f"{side}_document_structured.json"
+        if path.is_file():
+            elements = load_json(path)["document"]["elements"]
+            layout, anchors = load_structure_context(structure_dir, side, comparable)
+            return elements, layout, anchors
+    return comparable.values(), set(), {
+        order: element["text"]
+        for element in comparable.values()
+        if element.get("element_type") in STRUCTURAL_TYPES and element.get("text")
+        and not is_layout(element) and (order := reading_order(element)) is not None
+    }
+
+
+def _build_change_blocks(
+    changes: list[dict[str, Any]], movement: dict[str, Any], structure_dir: Path | None,
+) -> list[dict[str, Any]]:
+    blocks = []
+
+    def add_block(run, anchor, contains_heading, side, change_type):
+        if len(run) < 3:
+            return
+        block_id = f"BLOCK-{len(blocks)+1:06d}"
+        noun = "section" if contains_heading else "block"
+        suffix = "deleted" if change_type == "DELETED" else "added"
+        blocks.append({
+            "block_id": block_id,
+            "change_type": change_type,
+            "side": side,
+            "change_ids": [item["change_id"] for item in run],
+            "element_count": len(run),
+            "pages": sorted({
+                page for item in run if isinstance(page := item[side].get("primary_page"), int)
+            }),
+            "anchor": anchor,
+            "contains_heading": contains_heading,
+            "impact": {
+                "version": IMPACT_VERSION,
+                "level": "content",
+                "priority": "normal",
+                "kinds": [f"{noun}_{suffix}"],
+                "signals": sorted({signal for item in run for signal in item["impact"]["signals"]}),
+                "basis": "deterministic_rule",
+                "language_profile": "de-en",
+            },
+        })
+        for item in run:
+            item["block_id"] = block_id
+            item["impact"].update(
+                priority="normal", kinds=sorted({*item["impact"]["kinds"], "block_member"}),
+            )
+
+    for side, change_type in (("old", "DELETED"), ("new", "ADDED")):
+        by_element = {
+            item[side]["element_id"]: item
+            for item in changes if item["change_type"] == change_type and item.get(side)
+        }
+        if len(by_element) < 3:
+            continue
+        elements, layout, headings = _block_source(movement, side, structure_dir)
+        ordered = sorted(
+            (element for element in elements if reading_order(element) is not None),
+            key=reading_order,
+        )
+        run = []
+        heading = anchor = None
+        contains_heading = False
+        for element in ordered:
+            element_id = element["element_id"]
+            if element_id in layout or is_layout(element):
+                continue
+            heading_text = headings.get(reading_order(element))
+            item = by_element.get(element_id)
+            if item is None or element.get("element_type") == "table":
+                add_block(run, anchor, contains_heading, side, change_type)
+                run = []
+                contains_heading = False
+            else:
+                if not run:
+                    anchor = heading
+                run.append(item)
+                contains_heading |= bool(heading_text) or element.get("element_type") in STRUCTURAL_TYPES
+            heading = heading_text or heading
+        add_block(run, anchor, contains_heading, side, change_type)
+    return blocks
+
+
+def _collapse_block_reviews(
+    reviews: list[dict[str, Any]], blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not blocks:
+        return reviews
+    by_change = {
+        review["change_id"]: review for review in reviews
+        if review["source_kind"] == "non_table_change"
+    }
+    block_by_change = {cid: block["block_id"] for block in blocks for cid in block["change_ids"]}
+    # A residual group with no counterpart proposal and all members inside one
+    # block says only "no counterpart found" for each member; the block entry
+    # carries the same uncertainty once. Groups with proposals stay separate.
+    absorbed_groups: dict[str, list[dict[str, Any]]] = {}
+    for review in reviews:
+        evidence = review.get("evidence") or {}
+        member_ids = evidence.get("change_ids") or []
+        owners = {block_by_change.get(cid) for cid in member_ids}
+        if (
+            review["source_kind"] == "residual_proposal_group"
+            and member_ids and not evidence.get("proposal_ids")
+            and len(owners) == 1 and None not in owners
+        ):
+            absorbed_groups.setdefault(owners.pop(), []).append(review)
+    replacements = {}
+    for block in blocks:
+        block_id = block["block_id"]
+        members = [by_change[cid] for cid in block["change_ids"] if cid in by_change]
+        group_reviews = absorbed_groups.get(block_id, [])
+        for review in group_reviews:
+            members.append({
+                **review,
+                "change_id": None,
+                "_group_change_ids": review["evidence"]["change_ids"],
+            })
+        if not members:
+            continue
+        case_types = {review["case_type"] for review in members}
+        case_type = members[0]["case_type"] if len(case_types) == 1 else "change_block"
+        entry = {
+            "source_kind": "change_block",
+            "block_id": block_id,
+            "change_ids": [
+                cid for review in members
+                for cid in (review.get("_group_change_ids") or [review["change_id"]])
+            ],
+            "proposal_group_ids": [review["proposal_group_id"] for review in group_reviews],
+            "case_type": case_type,
+            "resolution": {
+                "route": "UNCERTAIN_RESULT",
+                "case_type": case_type,
+                "method": "deterministic",
+                "status": "review",
+                "needs_review": True,
+                "result_state": "uncertain",
+                "review_reasons": sorted({
+                    reason for review in members
+                    for reason in review["resolution"].get("review_reasons") or []
+                }),
+            },
+        }
+        replacements.update(
+            (("change", review["change_id"]), entry) for review in members if review["change_id"]
+        )
+        replacements.update(
+            (("group", review["proposal_group_id"]), entry) for review in group_reviews
+        )
+    queue = []
+    queued = set()
+    for review in reviews:
+        key = (
+            ("group", review.get("proposal_group_id"))
+            if review["source_kind"] == "residual_proposal_group"
+            else ("change", review.get("change_id"))
+        )
+        entry = replacements.get(key, review)
+        block_id = entry.get("block_id")
+        if block_id:
+            if block_id in queued:
+                continue
+            queued.add(block_id)
+        entry["review_id"] = f"REVIEW-{len(queue)+1:06d}"
+        queue.append(entry)
+    return queue
+
+
 def generic_projection(
     result: dict[str, Any], *, _in_packet_decision: bool = False
 ) -> dict[str, Any]:
@@ -1100,6 +1294,8 @@ def build_comparison_result(
     routing: dict[str, Any],
     decisions: dict[str, Any] | None = None,
     baseline: dict[str, Any] | None = None,
+    *,
+    structure_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Canonical generic result; domain verification is retired and never gates.
 
@@ -1135,6 +1331,14 @@ def build_comparison_result(
     )
     _preserve_previous_identities(movement, tables, routing, changes, review_queue, non_semantic_events)
     moves = _canonical_moves(movement, changes)
+    change_blocks = _build_change_blocks(changes, movement, structure_dir)
+    review_queue = _collapse_block_reviews(review_queue, change_blocks)
+    change_ids = {item["change_id"] for item in changes}
+    block_member_ids = [cid for block in change_blocks for cid in block["change_ids"]]
+    require(
+        len(set(block_member_ids)) == len(block_member_ids) and set(block_member_ids) <= change_ids,
+        "s14: change block members must be unique and refer to visible changes.",
+    )
 
     canonical_items = changes + table_changes
     resolution_status_counts = dict(
@@ -1176,6 +1380,8 @@ def build_comparison_result(
         "statistics": {
             "changes": len(changes),
             "moves": len(moves),
+            "change_blocks": len(change_blocks),
+            "changes_in_blocks": len(block_member_ids),
             "table_changes": len(table_changes),
             "review_queue": len(review_queue),
             "non_semantic_events": len(non_semantic_events),
@@ -1191,6 +1397,7 @@ def build_comparison_result(
         },
         "changes": changes,
         "moves": moves,
+        "change_blocks": change_blocks,
         "table_changes": table_changes,
         "review_queue": review_queue,
         "non_semantic_events": non_semantic_events,
@@ -1252,7 +1459,7 @@ def main() -> None:
     decisions = load_json(decisions_path) if decisions_path.exists() else {}
 
     result = build_comparison_result(
-        movement, tables, routing, decisions, baseline=_load_baseline_metrics()
+        movement, tables, routing, decisions, baseline=_load_baseline_metrics(), structure_dir=out
     )
 
     final_path = out / "comparison_result.json"

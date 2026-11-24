@@ -118,14 +118,18 @@ class ApiClient:
     def search(self, job_id: str, **filters: Any) -> dict:
         return self._json("GET", f"/jobs/{_job(job_id)}/read/search", params=_clean(filters))
 
-    def details(self, job_id: str, kind: str, record_id: str) -> dict:
-        return self._json("GET", f"/jobs/{_job(job_id)}/read/details", params={"kind": kind, "record_id": record_id})
+    def details(self, job_id: str, kind: str, record_id: str, **options: Any) -> dict:
+        return self._json("GET", f"/jobs/{_job(job_id)}/read/details",
+                          params=_clean({"kind": kind, "record_id": record_id, **options}))
 
     def locations(self, job_id: str, kind: str, record_id: str) -> dict:
         return self._json("GET", f"/jobs/{_job(job_id)}/view/locations", params={"kind": kind, "record_id": record_id})
 
-    def outline(self, job_id: str) -> dict:
-        return self._json("GET", f"/jobs/{_job(job_id)}/view/outline")
+    def outline(self, job_id: str, *, expand_blocks: bool = False) -> dict:
+        path = f"/jobs/{_job(job_id)}/view/outline"
+        if expand_blocks:
+            return self._json("GET", path, params={"expand_blocks": True})
+        return self._json("GET", path)
 
     def page_png(self, job_id: str, side: str, page: int, kind: str | None = None,
                  record_id: str | None = None, uncertain: bool = False) -> bytes | None:

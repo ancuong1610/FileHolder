@@ -57,6 +57,12 @@ IMPACT_LABELS = {"all": "Alle", "content": "Inhalt", "editorial": "Redaktionell"
 IMPACT_FILTER = "Auswirkung"
 EXCLUDED_UNKNOWN_IMPACT = "{count} Befunde ohne Auswirkungsangabe sind ausgeblendet."
 LOCAL_REORDERS = "Lokale Umstellungen anzeigen"
+EXPAND_BLOCKS = "Einzeln anzeigen"
+BLOCK_SECTION = {"ADDED": "Abschnitt hinzugefügt", "DELETED": "Abschnitt gelöscht"}
+BLOCK_PARAGRAPHS = {"ADDED": "{count} Absätze hinzugefügt", "DELETED": "{count} Absätze gelöscht"}
+BLOCK_MEMBERS = "Änderungen im Block"
+BLOCK_PAGES = "Seiten {pages}"
+BLOCK_PAGE = "Seite im Block"
 IMPORTANT = "Wichtig"
 IMPACT_SIGNALS = {
     "modal": "Modalverb",

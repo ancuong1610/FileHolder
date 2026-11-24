@@ -72,8 +72,10 @@ def search(
     cursor: str | None = None,
     limit: int = 10,
     impact: str | None = None,
+    priority: str | None = None,
+    expand_blocks: bool = False,
 ) -> dict:
-    """Search changes, table cells, review records and moves. Impact may be content, editorial or moved."""
+    """Search changes, blocks, table cells, reviews and moves. Expand blocks to return individual changes."""
     return _get(
         f"/jobs/{_job_id(job_id)}/read/search",
         {
@@ -84,6 +86,8 @@ def search(
             "cursor": cursor,
             "limit": limit,
             "impact": impact,
+            "priority": priority,
+            **({"expand_blocks": True} if expand_blocks else {}),
         },
     )
 
@@ -104,7 +108,7 @@ def details(
     Long text/cells/context are returned in an explicit offset/limit window with
     ``text_next_offset`` as the continuation pointer when more text remains. For
     a review record, ``context`` groups bounded neighbour text by source anchor
-    id and pages anchors with ``context_source_offset``.
+    id and pages anchors with ``context_source_offset``. For a block, that offset pages members.
     """
     return _get(
         f"/jobs/{_job_id(job_id)}/read/details",

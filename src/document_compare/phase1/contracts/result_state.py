@@ -95,6 +95,11 @@ def uncertainty_key(record: Any, *, kind: str | None = None) -> tuple[str, str]:
                 proposal_group = value
     if isinstance(proposal_group, str) and proposal_group:
         return ("proposal_group", proposal_group)
+    block_id = record.get("block_id")
+    if isinstance(block_id, str) and block_id and (
+        kind == "change" or (kind == "review" and record.get("source_kind") == "change_block")
+    ):
+        return ("change_block", block_id)
     if kind == "review":
         change_id = record.get("change_id")
         if isinstance(change_id, str) and change_id:

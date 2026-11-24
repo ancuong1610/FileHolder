@@ -71,6 +71,9 @@ class StdioReaderGateway:
         change_type: str = "",
         cursor: str | None = None,
         limit: int = 10,
+        impact: str | None = None,
+        priority: str | None = None,
+        expand_blocks: bool = False,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {
             "job_id": job_id,
@@ -82,6 +85,12 @@ class StdioReaderGateway:
         }
         if cursor is not None:
             arguments["cursor"] = cursor
+        if impact is not None:
+            arguments["impact"] = impact
+        if priority is not None:
+            arguments["priority"] = priority
+        if expand_blocks:
+            arguments["expand_blocks"] = True
         return self._call_sync("search", arguments)
 
     def details(

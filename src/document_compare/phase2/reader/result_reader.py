@@ -69,9 +69,11 @@ BUDGET_HINT = "Reduce text_limit/cell_limit/context_window"
 
 ID_FIELDS = {
     "change": "change_id", "table": "table_change_id", "review": "review_id", "move": "move_id",
+    "block": "block_id",
 }
 _RECORD_LISTS = {
     "change": "changes", "table": "table_changes", "review": "review_queue", "move": "moves",
+    "block": "change_blocks",
 }
 CANONICAL_ARTIFACT = "comparison_result.json"
 
@@ -224,6 +226,10 @@ def _decode_cursor(cursor: str) -> dict[str, Any]:
         raise ReaderError("invalid_cursor", "cursor change_type is invalid")
     if payload.get("impact") not in (None, *SEARCH_IMPACTS):
         raise ReaderError("invalid_cursor", "cursor impact is invalid")
+    if payload.get("priority") not in (None, *_IMPACT_PRIORITIES):
+        raise ReaderError("invalid_cursor", "cursor priority is invalid")
+    if not isinstance(payload.get("expand_blocks", False), bool):
+        raise ReaderError("invalid_cursor", "cursor block expansion is invalid")
     offset = payload.get("offset")
     if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0 or offset > MAX_OFFSET:
         raise ReaderError("invalid_cursor", "cursor offset is invalid")
@@ -659,9 +665,74 @@ def _searchable(record: dict[str, Any]) -> str:
     return _flatten(record.get("fields"))
 
 
-def _build_search_records(canonical: dict[str, Any]) -> list[dict[str, Any]]:
+def _block_members(
+    block: dict[str, Any], index: dict[tuple[str, str], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    members = []
+    for change_id in _string_list(block.get("change_ids"), "change_ids"):
+        member = index.get(("change", change_id))
+        if member is None:
+            raise ReaderError("invalid_artifact", "block links to an unknown change id")
+        members.append(member)
+    return members
+
+
+def project_change_block(block: dict[str, Any]) -> dict[str, Any]:
+    """Expose bounded block metadata without loading member text."""
+    anchor = block.get("anchor")
+    change_ids = _as_list(block.get("change_ids"))
+    return {
+        "block_id": _record_id(block, "block"),
+        "change_type": block.get("change_type"),
+        "side": block.get("side"),
+        "anchor": anchor[:MAX_METADATA_TEXT] if isinstance(anchor, str) else None,
+        "element_count": block.get("element_count"),
+        "contains_heading": block.get("contains_heading") is True,
+        "pages": sorted({p for p in _as_list(block.get("pages")) if type(p) is int})[:MAX_PAGES],
+        "impact": project_impact(block),
+        "change_ids": change_ids[:MAX_METADATA_ITEMS],
+        "change_ids_truncated": len(change_ids) > MAX_METADATA_ITEMS,
+    }
+
+
+def _build_search_records(canonical: dict[str, Any], expand_blocks: bool) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    for (kind, record_id), item in _typed_index(canonical).items():
+    index = _typed_index(canonical)
+    grouped = {
+        cid for (kind, _), item in index.items() if kind == "block"
+        for cid in _string_list(item.get("change_ids"), "change_ids")
+    } if not expand_blocks else set()
+    for (kind, record_id), item in index.items():
+        if kind == "change" and record_id in grouped:
+            continue
+        if kind == "block":
+            if expand_blocks:
+                continue
+            members = _block_members(item, index)
+            metadata = project_change_block(item)
+            needs_review = any(_needs_review(member, "change") for member in members)
+            confirmed = bool(members) and all(_confirmed(member, "change") for member in members)
+            records.append({
+                **metadata,
+                "kind": kind,
+                "record_id": record_id,
+                "status": "review" if needs_review else "accepted" if confirmed else "unresolved",
+                "result_state": "supported" if confirmed else "uncertain",
+                "needs_review": needs_review,
+                "confirmed": confirmed,
+                "fields": {
+                    "record_id": record_id,
+                    "anchor": metadata["anchor"],
+                    "change_ids": [member["change_id"] for member in members],
+                    "change_type": metadata["change_type"],
+                    "member_text": [
+                        _as_dict(member.get(item.get("side"))).get("text")
+                        or _as_dict(member.get(item.get("side"))).get("comparison_text")
+                        for member in members
+                    ],
+                },
+            })
+            continue
         fields = _record_fields(item, kind)
         needs_review = kind != "move" and _needs_review(item, kind)
         if kind == "change":
@@ -764,6 +835,8 @@ def search(
     cursor: str | None = None,
     limit: int | None = None,
     impact: str | None = None,
+    priority: str | None = None,
+    expand_blocks: bool = False,
 ) -> dict[str, Any]:
     job_id = validate_job_id(job_id)
     if not isinstance(canonical, dict):
@@ -775,6 +848,10 @@ def search(
     resolved_status = _validate_choice(status if status is not None else "all", STATUSES, "status")
     resolved_change_type = _validate_change_type(change_type)
     resolved_impact = _validate_choice(impact, SEARCH_IMPACTS, "impact") if impact is not None else None
+    resolved_priority = _validate_choice(priority, _IMPACT_PRIORITIES, "priority") if priority is not None else None
+    if not isinstance(expand_blocks, bool):
+        raise ReaderError("invalid_arguments", "expand_blocks must be a boolean")
+    resolved_expand = expand_blocks
     resolved_limit = _validate_int(limit if limit is not None else DEFAULT_LIMIT, "limit", 1, MAX_LIMIT)
     offset = 0
 
@@ -794,18 +871,27 @@ def search(
             raise ReaderError("stale_cursor", "cursor does not match this change_type filter")
         if impact is not None and impact != payload.get("impact"):
             raise ReaderError("stale_cursor", "cursor does not match this impact filter")
+        if priority is not None and priority != payload.get("priority"):
+            raise ReaderError("stale_cursor", "cursor does not match this priority filter")
+        if expand_blocks and not payload.get("expand_blocks", False):
+            raise ReaderError("stale_cursor", "cursor does not match block expansion")
         resolved_query = payload.get("query") or ""
         resolved_kind = str(payload.get("kind") or "all")
         resolved_status = str(payload.get("status") or "all")
         resolved_change_type = str(payload.get("change_type") or "")
         resolved_impact = payload.get("impact")
+        resolved_priority = payload.get("priority")
+        resolved_expand = payload.get("expand_blocks", False)
         offset = payload["offset"]
 
     terms = _terms(resolved_query)
     matched: list[dict[str, Any]] = []
     excluded_unknown_impact = 0
-    for record in _build_search_records(canonical):
-        if resolved_kind != "all" and record["kind"] != resolved_kind:
+    for record in _build_search_records(canonical, resolved_expand):
+        visible_kind = record["kind"]
+        if resolved_kind == "change" and visible_kind == "block":
+            visible_kind = "change"
+        if resolved_kind != "all" and visible_kind != resolved_kind:
             continue
         if resolved_status == "accepted" and not record["confirmed"]:
             continue
@@ -815,9 +901,15 @@ def search(
             continue
         if not _match(record, terms):
             continue
-        record_impact = _as_dict(record.get("impact")).get("level")
-        if resolved_impact is not None and record_impact != resolved_impact:
-            if record_impact is None:
+        record_impact = _as_dict(record.get("impact"))
+        if (
+            (resolved_impact is not None and record_impact.get("level") != resolved_impact)
+            or (resolved_priority is not None and record_impact.get("priority") != resolved_priority)
+        ):
+            if (
+                (resolved_impact is not None and record_impact.get("level") is None)
+                or (resolved_priority is not None and record_impact.get("priority") is None)
+            ):
                 excluded_unknown_impact += 1
             continue
         snippet, source = _best_snippet(record, terms)
@@ -832,6 +924,12 @@ def search(
                 "confirmed": record["confirmed"],
                 "pages": record["pages"],
                 **({"impact": record["impact"]} if "impact" in record else {}),
+                **({
+                    key: record[key] for key in (
+                        "block_id", "side", "anchor", "element_count", "contains_heading",
+                        "change_ids", "change_ids_truncated",
+                    )
+                } if record["kind"] == "block" else {}),
                 "snippet": snippet,
                 "snippet_source": source,
             }
@@ -851,11 +949,14 @@ def search(
                 "status": resolved_status,
                 "change_type": resolved_change_type,
                 **({"impact": resolved_impact} if resolved_impact is not None else {}),
+                **({"priority": resolved_priority} if resolved_priority is not None else {}),
+                **({"expand_blocks": True} if resolved_expand else {}),
                 "fingerprint": fingerprint,
                 "offset": next_offset,
             }
         )
-    coverage = _search_coverage(canonical, resolved_kind) if resolved_impact is None else None
+    filtered_impact = resolved_impact is not None or resolved_priority is not None
+    coverage = None if filtered_impact else _search_coverage(canonical, resolved_kind)
     warnings: list[str] = []
     if coverage and coverage.get("warning"):
         warnings.append(str(coverage["warning"]))
@@ -867,7 +968,9 @@ def search(
         "status": resolved_status,
         "change_type": resolved_change_type,
         "impact": resolved_impact,
-        **({"excluded_unknown_impact": excluded_unknown_impact} if resolved_impact is not None else {}),
+        **({"excluded_unknown_impact": excluded_unknown_impact} if filtered_impact else {}),
+        **({"priority": resolved_priority} if resolved_priority is not None else {}),
+        **({"expand_blocks": True} if resolved_expand else {}),
         "total_matches": total,
         "returned": page,
         "offset": offset,
@@ -1095,6 +1198,7 @@ def _change_projection(record: dict[str, Any], text_offset: int, text_limit: int
     move_id = _as_dict(record.get("movement")).get("move_id")
     return {
         "change_id": record.get("change_id"),
+        **({"block_id": record["block_id"]} if record.get("block_id") else {}),
         "change_type": record.get("change_type"),
         "impact": project_impact(record),
         **({"movement": {"move_id": move_id}} if _is_move_id(move_id) else {}),
@@ -1171,12 +1275,20 @@ def _review_anchor_sources(
     _append_anchor(new, evidence.get("new_element_id"))
 
     linked_refs: list[dict[str, Any]] = []
-    change_id = review.get("change_id")
-    if isinstance(change_id, str) and change_id:
+    change_ids = _string_list(review.get("change_ids"), "review.change_ids")
+    _append_anchor(change_ids, review.get("change_id"))
+    block_id = review.get("block_id")
+    if block_id:
+        block = index.get(("block", block_id))
+        if block is None:
+            raise ReaderError("invalid_artifact", "review links to an unknown block id")
+        linked_refs.append(_linked_ref("block", block_id, block))
+    for change_id in change_ids:
         change = index.get(("change", change_id))
         if change is None:
             raise ReaderError("invalid_artifact", "review links to an unknown change id")
-        linked_refs.append(_linked_ref("change", change_id, change))
+        if not block_id:
+            linked_refs.append(_linked_ref("change", change_id, change))
         _append_anchor(old, _as_dict(change.get("old")).get("element_id"))
         _append_anchor(new, _as_dict(change.get("new")).get("element_id"))
     table_id = review.get("table_change_id")
@@ -1446,6 +1558,26 @@ def details(
         }
     elif kind == "move":
         out["move"] = _move_projection(record, context_source_offset, text_offset, text_limit)
+    elif kind == "block":
+        members = _block_members(record, index)
+        end = context_source_offset + MAX_CONTEXT_SOURCES
+        member_page = []
+        for member in members[context_source_offset:end]:
+            source = _as_dict(member.get(record.get("side")))
+            member_page.append({
+                "change_id": member["change_id"],
+                "primary_page": source.get("primary_page"),
+                "needs_review": _needs_review(member, "change"),
+                **_bounded_text(source.get("text"), text_offset, text_limit),
+            })
+        out["block"] = {
+            **project_change_block(record),
+            "needs_review": any(_needs_review(member, "change") for member in members),
+            "members": member_page,
+            "source_offset": context_source_offset,
+            "source_limit": MAX_CONTEXT_SOURCES,
+            "next_source_offset": end if end < len(members) else None,
+        }
     else:
         evidence, evidence_clipped = _bounded_json(record.get("evidence"))
         resolution, resolution_clipped = _bounded_json(_resolution(record))
@@ -1465,6 +1597,11 @@ def details(
             "source_kind": record.get("source_kind"),
             "change_id": record.get("change_id"),
             "table_change_id": record.get("table_change_id"),
+            **({
+                "block_id": record["block_id"],
+                "change_ids": _as_list(record.get("change_ids"))[:MAX_METADATA_ITEMS],
+                "change_ids_truncated": len(_as_list(record.get("change_ids"))) > MAX_METADATA_ITEMS,
+            } if record.get("block_id") else {}),
             "case_type": record.get("case_type"),
             "result_state": "uncertain",
             "needs_review": True,

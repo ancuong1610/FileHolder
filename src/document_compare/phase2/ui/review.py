@@ -80,13 +80,14 @@ def _key(client) -> str:
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def _outline(_client, cache_key: str, job_id: str) -> dict:
-    return _client.outline(job_id)
+def _outline(_client, cache_key: str, job_id: str, expand_blocks: bool = False) -> dict:
+    return _client.outline(job_id, expand_blocks=True) if expand_blocks else _client.outline(job_id)
 
 
 @st.cache_data(show_spinner=False, max_entries=256)
-def _details(_client, cache_key: str, job_id: str, kind: str, record_id: str) -> dict:
-    return _client.details(job_id, kind, record_id)
+def _details(_client, cache_key: str, job_id: str, kind: str, record_id: str, source_offset: int = 0) -> dict:
+    options = {"context_source_offset": source_offset} if source_offset else {}
+    return _client.details(job_id, kind, record_id, **options)
 
 
 @st.cache_data(show_spinner=False, max_entries=256)
@@ -154,7 +155,7 @@ def _matches(item: dict, query: str) -> bool:
     title on its section path. Punctuation a chat answer wraps around an ID is ignored."""
     record_id = _fold(item.get("record_id"))
     bare = query.strip(" `'\"()[].,;:")
-    if record_id and bare and bare in record_id:
+    if bare and (bare in record_id or any(bare in _fold(cid) for cid in item.get("change_ids") or [])):
         return True
     label = _move_label(item) if item.get("kind") == "move" else item.get("label")
     return query in _fold(label) or any(query in _fold(t) for t in item.get("section_path") or [])
@@ -195,9 +196,9 @@ def filter_outline(outline: dict, kind: str = "all", ctype: str = "all", query: 
         nonlocal excluded_unknown_impact
         item_kind = item.get("kind")
         item_impact = _impact(item)
-        if item_kind not in ("change", "table", "review", "move"):
+        if item_kind not in ("change", "table", "review", "move", "block"):
             return False
-        if kind != "all" and item_kind != kind:
+        if kind != "all" and item_kind != kind and (kind, item_kind) != ("change", "block"):
             return False
         if flagged_only and not _is_flagged(item):
             return False
@@ -307,9 +308,9 @@ def flatten(outline: dict) -> list[dict]:
 
 def chip_counts(outline: dict) -> dict[str, int]:
     visible = flatten(outline)
-    items = [i for i in visible if i.get("kind") in ("change", "table")]
+    items = [i for i in visible if i.get("kind") in ("change", "table", "block")]
     return {
-        "Changes": sum(1 for i in items if i["kind"] == "change"),
+        "Changes": sum(1 for i in items if i["kind"] in ("change", "block")),
         "Tables": sum(1 for i in items if i["kind"] == "table"),
         "Added": sum(1 for i in items if bucket(i) == "ADDED"),
         "Deleted": sum(1 for i in items if bucket(i) == "DELETED"),
@@ -425,11 +426,20 @@ def _move_label(item: dict) -> str:
     )
 
 
+def _block_label(item: dict) -> str:
+    ctype = item["change_type"]
+    if item.get("contains_heading"):
+        return texts.BLOCK_SECTION[ctype]
+    return texts.BLOCK_PARAGRAPHS[ctype].format(count=item["element_count"])
+
+
 def _row(item: dict, selected: dict | None) -> None:
     page = _item_page(item)
     label = item.get("label") or item.get("record_id")
     if item.get("kind") == "review":
         label = texts.REVIEW_REASONS.get(label, label)
+    elif item.get("kind") == "block":
+        label = " · ".join(filter(None, (_block_label(item), item.get("anchor"))))
     elif item.get("kind") == "table" and (match := _TABLE_LABEL.fullmatch(label)):
         table_page, cells = match.groups()
         parts = [texts.KIND_LABELS["table"]]
@@ -564,6 +574,28 @@ def _llm_opinion(opinion: Any) -> None:
         st.caption(_plain(" · ".join(meta)))
 
 
+def _show_block_members(client, job_id: str, record_id: str, payload: dict) -> None:
+    key = f"block_members::{job_id}::{record_id}"
+    with st.expander(texts.BLOCK_MEMBERS):
+        offset = st.session_state.get(key, 0)
+        if offset:
+            try:
+                payload = _details(client, _key(client), job_id, "block", record_id, offset)["block"]
+            except ApiError as exc:
+                st.error(texts.DETAILS_FAILED.format(error=texts.api_error(exc.code, exc.status)))
+                return
+        for member in payload["members"]:
+            st.markdown(f"**{_plain(member['change_id'])}** · {_plain(member['text'])}")
+        next_offset = payload.get("next_source_offset")
+        if offset or next_offset is not None:
+            prev, nxt = st.columns(2)
+            prev.button(texts.PREVIOUS, key=f"{key}::prev", disabled=offset == 0,
+                        on_click=st.session_state.__setitem__,
+                        args=(key, max(0, offset - payload["source_limit"])))
+            nxt.button(texts.NEXT, key=f"{key}::next", disabled=next_offset is None,
+                       on_click=st.session_state.__setitem__, args=(key, next_offset))
+
+
 def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
     kind, record_id, ck = item["kind"], item["record_id"], _key(client)
     st.markdown(_breadcrumb(item))
@@ -585,6 +617,13 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
         st.error(texts.DETAILS_FAILED.format(error=texts.api_error(exc.code, exc.status)))
         return
     payload = details.get(kind) or {}
+    if kind == "block":
+        st.markdown(f"**{_block_label(payload)}**")
+        if payload.get("anchor"):
+            st.caption(_plain(payload["anchor"]))
+        if payload.get("pages"):
+            st.caption(texts.BLOCK_PAGES.format(pages=", ".join(map(str, payload["pages"]))))
+        _show_block_members(client, job_id, record_id, payload)
     try:
         located = _locations(client, ck, job_id, kind, record_id)
     except ApiError as exc:
@@ -606,6 +645,11 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
             targets[name] = page
         else:
             targets[name] = target_page(infos[name], other_of[name])
+
+    if kind == "block" and len(payload.get("pages") or []) > 1:
+        targets[payload["side"]] = st.selectbox(
+            texts.BLOCK_PAGE, payload["pages"], key=f"block_page::{job_id}::{record_id}",
+        )
 
     images: dict[str, bytes | None] = {}
     source_missing = False
@@ -731,8 +775,9 @@ def _splitter() -> None:
 
 
 def render(client, job_id: str, status: dict | None = None) -> None:
+    expand_blocks = st.checkbox(texts.EXPAND_BLOCKS, key="f_expand_blocks", value=False)
     try:
-        outline = _outline(client, _key(client), job_id)
+        outline = _outline(client, _key(client), job_id, expand_blocks)
     except ApiError as exc:
         st.error(texts.RESULT_FAILED.format(job_id=job_id, error=texts.api_error(exc.code, exc.status)))
         return

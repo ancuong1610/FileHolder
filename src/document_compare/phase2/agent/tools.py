@@ -28,11 +28,15 @@ def build_tools(gateway: ReaderGateway, *, result_limit: int = 10) -> dict[str, 
         status: str = "all",
         change_type: str = "",
         cursor: str | None = None,
+        impact: str | None = None,
+        priority: str | None = None,
+        expand_blocks: bool = False,
     ) -> dict[str, Any]:
-        """Literal/token search over changes, tables (cell text), review records and moves.
+        """Search changes, blocks, table cells, review records and moves.
 
-        kind is all/change/table/review/move; status is all/accepted/review; default
-        scope includes unresolved review. When the response is truncated, call
+        kind is all/change/table/review/move/block; status is all/accepted/review; default
+        scope includes unresolved review. Use expand_blocks to list individual changes.
+        Impact filters the level and priority filters high/normal/low. When truncated, call
         again with the returned next_cursor (and no other changed filter).
         """
         return gateway.search(
@@ -43,6 +47,9 @@ def build_tools(gateway: ReaderGateway, *, result_limit: int = 10) -> dict[str, 
             change_type=change_type,
             cursor=cursor,
             limit=result_limit,
+            **({"impact": impact} if impact is not None else {}),
+            **({"priority": priority} if priority is not None else {}),
+            **({"expand_blocks": True} if expand_blocks else {}),
         )
 
     def details(
@@ -58,13 +65,13 @@ def build_tools(gateway: ReaderGateway, *, result_limit: int = 10) -> dict[str, 
     ) -> dict[str, Any]:
         """Canonical old/new values, evidence and bounded surrounding context.
 
-        kind is change/table/review/move. Long cells/text are returned in an explicit
+        kind is change/table/review/move/block. Long cells/text are returned in an explicit
         offset/limit window; text_next_offset is the continuation pointer when
         more text remains. For tables, page cell changes with cell_offset/
         cell_limit and follow next_offset until cell_changes_truncated is false.
         For a review, context groups neighbour text by source anchor id and
         context_source_offset pages those anchors (old and new share the offset).
-        For a move, context_source_offset pages the saved old/new block members.
+        For a move or block, context_source_offset pages its members.
         Missing source context for changes, tables and reviews is reported.
         """
         return gateway.details(

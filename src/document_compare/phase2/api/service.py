@@ -453,6 +453,8 @@ def read_search(
     cursor: str | None = None,
     limit: int | None = None,
     impact: str | None = None,
+    priority: str | None = None,
+    expand_blocks: bool = False,
 ) -> dict:
     _validate_read_job_id(job_id)
     job_status = _read_status(job_id)
@@ -468,6 +470,8 @@ def read_search(
             cursor=cursor,
             limit=limit,
             impact=impact,
+            priority=priority,
+            expand_blocks=expand_blocks,
         )
     except reader.ReaderError as exc:
         raise _reader_http(exc) from exc
@@ -527,12 +531,12 @@ def view_locations(job_id: str, kind: str, record_id: str) -> dict:
 
 
 @app.get("/jobs/{job_id}/view/outline")
-def view_outline(job_id: str) -> dict:
+def view_outline(job_id: str, expand_blocks: bool = False) -> dict:
     _validate_read_job_id(job_id)
     job_status = _read_status(job_id)
     canonical = _reader_canonical(job_id, job_status)
     try:
-        return build_outline(_job_dir(job_id) / "output", canonical)
+        return build_outline(_job_dir(job_id) / "output", canonical, expand_blocks=expand_blocks)
     except reader.ReaderError as exc:
         raise _reader_http(exc) from exc
 

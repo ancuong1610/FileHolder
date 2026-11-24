@@ -395,6 +395,9 @@ def _review_entry(
 ) -> dict[str, Any]:
     review = item.get("record") or {}
     evidence = review.get("evidence") if isinstance(review.get("evidence"), dict) else {}
+    is_block = review.get("source_kind") == "change_block"
+    if is_block:
+        evidence = {**evidence, "block_id": review.get("block_id"), "change_ids": review.get("change_ids") or []}
     linked_kind = None
     linked_id = None
     if isinstance(linked, dict):
@@ -469,6 +472,8 @@ def _review_entry(
             or []
         ),
     })
+    if is_block and base["unpaired_sources"]:
+        base["unpaired_sources"]["notice"] = "Source passages in this change block."
     if "semantic_assessment" not in base:
         base.update(_semantic_fields(
             review, old_element=None, new_element=None, source_state=UNCERTAIN

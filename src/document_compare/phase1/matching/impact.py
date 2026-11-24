@@ -84,6 +84,7 @@ _REFERENCE_WORDS = frozenset(
      "anlage kapitel abschnitt tz textziffer rn randnummer article paragraph section "
      "annex chapter").split()
 )
+_ONE_SIDED_PRIORITY_SIGNALS = {"modal", "negation", "condition", "number", "date", "reference"}
 _OPCODE_SIGNALS = {
     "insert": "added_text",
     "delete": "deleted_text",
@@ -324,6 +325,12 @@ def classify_impact(old_text: str | None, new_text: str | None) -> dict:
         tokens = new_tokens if new_present else old_tokens
         signals = _changed_signals(tokens, 0, len(tokens))
         signals.add("added_text" if new_present else "deleted_text")
+        word_count = sum(
+            bool(re.search(_WORD, match[0]))
+            for match in _TOKEN.finditer(new_folded if new_present else old_folded)
+        )
+        priority = "high" if word_count <= 40 and signals & _ONE_SIDED_PRIORITY_SIGNALS else "normal"
+        return _result("content", priority, signals=signals)
     elif old_tokens == new_tokens:
         kinds = _editorial_kinds(old_parts, new_parts, old, new)
         return _result("editorial", "low", kinds=kinds)

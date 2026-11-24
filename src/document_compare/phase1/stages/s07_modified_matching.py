@@ -29,6 +29,9 @@ INPUT_STAGE = "exact_element_matching_with_provisional_context"
 MIN_TOKEN_LENGTH = 3
 MAX_TOKEN_DOCUMENT_FRACTION = 0.03
 MIN_REVIEW_SCORE = 0.72
+MIN_CONTAINMENT_TOKENS = 8
+MIN_TOKEN_CONTAINMENT = 0.90
+MAX_CONTAINMENT_LENGTH_RATIO = 3
 MIN_AUTOMATIC_SCORE = 0.86
 MIN_AUTOMATIC_MARGIN = 0.10
 SHORT_TEXT_REVIEW_CHARACTERS = 40
@@ -79,6 +82,19 @@ def tokens(text: str) -> set[str]:
         for token in TOKEN_PATTERN.findall(text)
         if len(token) >= MIN_TOKEN_LENGTH
     }
+
+
+def token_containment(old: dict[str, Any], new: dict[str, Any]) -> float:
+    if matching_family(old) != matching_family(new):
+        return 0.0
+    old_tokens = TOKEN_PATTERN.findall(matching_text(old).casefold())
+    new_tokens = TOKEN_PATTERN.findall(matching_text(new).casefold())
+    shorter = min(len(old_tokens), len(new_tokens))
+    longer = max(len(old_tokens), len(new_tokens))
+    if shorter < MIN_CONTAINMENT_TOKENS or longer > MAX_CONTAINMENT_LENGTH_RATIO * shorter:
+        return 0.0
+    blocks = SequenceMatcher(None, old_tokens, new_tokens, autojunk=False).get_matching_blocks()
+    return sum(block.size for block in blocks) / shorter
 
 
 def context_keys(item: dict[str, Any]) -> set[str]:
@@ -401,6 +417,18 @@ def build_result(
     ] = defaultdict(list)
 
     retrieval_methods: dict[int, str] = {}
+    containment_by_old: dict[int, dict[int, tuple[dict[str, Any], str]]] = defaultdict(dict)
+    containment_by_new: dict[int, set[int]] = defaultdict(set)
+
+    def consider_containment(old_index, new_index, evidence, method):
+        if new_index in containment_by_old[old_index]:
+            return
+        containment = token_containment(olds[old_index], news[new_index])
+        if containment >= MIN_TOKEN_CONTAINMENT:
+            containment_by_old[old_index][new_index] = (
+                {**evidence, "token_containment": containment}, method,
+            )
+            containment_by_new[new_index].add(old_index)
 
     expensive_pairs_scored = 0
     context_retrievals = 0
@@ -481,6 +509,7 @@ def build_result(
             )
 
             if evidence["score"] < MIN_REVIEW_SCORE:
+                consider_containment(old_index, new_index, evidence, retrieval_method)
                 continue
 
             ranked.append(
@@ -544,6 +573,7 @@ def build_result(
                         passed_review_floor=evidence["score"] >= MIN_REVIEW_SCORE,
                     )
                     if evidence["score"] < MIN_REVIEW_SCORE:
+                        consider_containment(old_index, new_index, evidence, "rare_token_fallback")
                         continue
                     ranked.append((new_index, evidence))
                     new_rankings[new_index].append((old_index, evidence))
@@ -750,6 +780,40 @@ def build_result(
         matched_old.add(old_index)
         matched_new.add(new_index)
 
+    for old_index, candidates in containment_by_old.items():
+        if old_index in matched_old or len(candidates) != 1:
+            continue
+        new_index, (evidence, retrieval_method) = next(iter(candidates.items()))
+        if new_index in matched_new or len(containment_by_new[new_index]) != 1:
+            continue
+
+        old, new = olds[old_index], news[new_index]
+        short = min(len(matching_text(old)), len(matching_text(new))) < SHORT_TEXT_REVIEW_CHARACTERS
+        reasons = ["clause_containment"]
+        if short:
+            reasons.append("short_text_similarity_pair")
+        pair = compact_pair(
+            old,
+            new,
+            {**evidence, "reciprocal_best": True},
+            classification="modified_alignment_review" if short else "modified_alignment_candidate",
+            reasons=reasons,
+            retrieval_method=retrieval_method,
+        )
+        (review_pairs if short else accepted).append(pair)
+        matched_old.add(old_index)
+        matched_new.add(new_index)
+        _record_diagnostic(
+            diagnostics,
+            stage="classified",
+            old=old,
+            new=new,
+            retrieval_method=retrieval_method,
+            disposition=pair["match_type"],
+            needs_review=pair["needs_review"],
+            review_reasons=list(pair["review_reasons"]),
+        )
+
     accepted.sort(
         key=lambda x: x["old"].get(
             "reading_order",
@@ -915,6 +979,13 @@ def validate_result(
         )
 
     for item in modified_pairs:
+        if "clause_containment" in item["review_reasons"]:
+            evidence = item["similarity_evidence"]
+            require(
+                evidence["score"] < MIN_REVIEW_SCORE
+                and MIN_TOKEN_CONTAINMENT <= evidence.get("token_containment", 0.0) <= 1.0,
+                "s07: invalid clause containment evidence",
+            )
         require(
             item["similarity_evidence"]["reciprocal_best"]
             is True,

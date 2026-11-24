@@ -13,7 +13,9 @@ import re
 from pathlib import Path
 from typing import Any
 
-from document_compare.phase2.reader.result_reader import ID_FIELDS, ReaderError, project_impact
+from document_compare.phase2.reader.result_reader import (
+    ID_FIELDS, ReaderError, project_change_block, project_impact,
+)
 from document_compare.phase2.viewer.locations import (
     SIDES, _CONTAINERS, _load_document, linked_change_ids, needs_review_status, record_side_ref, review_reason,
 )
@@ -428,7 +430,7 @@ def _review_pages(item: dict[str, Any], record: dict[str, Any], sides: dict[str,
         item[f"page_{side}"] = _int(element.get("primary_page")) if element else None
 
 
-def build_outline(output_dir: Path, canonical: dict) -> dict:
+def build_outline(output_dir: Path, canonical: dict, *, expand_blocks: bool = False) -> dict:
     """Section tree (NEW document first, OLD-only sections appended) with findings placed in it."""
     sides = {side: _Side(_load_structured(output_dir, side)) for side in SIDES}
     roots, index = _build_tree(sides)
@@ -451,17 +453,45 @@ def build_outline(output_dir: Path, canonical: dict) -> dict:
             node.items.append((_order_of(kind, record, sides, pref, position), item))
             placed_items.append((node, item))
 
+    blocks = {}
+    if not expand_blocks:
+        for block in canonical.get("change_blocks") or []:
+            if isinstance(block, dict):
+                blocks.update((cid, block) for cid in block.get("change_ids") or [])
+
+    changes = canonical.get("changes") if isinstance(canonical.get("changes"), list) else []
+    change_rows = {r["change_id"]: r for r in changes if isinstance(r, dict) and "change_id" in r}
+    block_items = {}
     for kind in ("change", "table", "move"):
         rows = canonical.get(_CONTAINERS[kind])
         for position, record in enumerate(rows if isinstance(rows, list) else []):
             if not isinstance(record, dict) or not isinstance(record.get(ID_FIELDS[kind]), str):
+                continue
+            record_id = record[ID_FIELDS[kind]]
+            if kind == "change" and record_id in blocks:
+                block = blocks[record_id]
+                block_id = block["block_id"]
+                if block_id not in block_items:
+                    members = [change_rows.get(cid) for cid in block["change_ids"]]
+                    if any(member is None for member in members):
+                        raise ReaderError("invalid_artifact", "block links to an unknown change id")
+                    first = members[0]
+                    item = _item("change", first, sides)
+                    flagged = next((member for member in members if needs_review_status(member)), None)
+                    if flagged:
+                        item.update(needs_review=True, review_reason=review_reason(flagged))
+                    item.update(project_change_block(block), kind="block", record_id=block_id)
+                    item["label"] = item.get("anchor") or ""
+                    item["llm_opinion"] = None
+                    block_items[block_id] = item
+                    put(kind, first, item, position)
+                by_id[record_id] = block_items[block_id]
                 continue
             item = _item(kind, record, sides)
             if kind != "move":
                 by_id[record[ID_FIELDS[kind]]] = item
             put(kind, record, item, position)
 
-    changes = canonical.get("changes") if isinstance(canonical.get("changes"), list) else []
     rows = canonical.get(_CONTAINERS["review"])
     for position, record in enumerate(rows if isinstance(rows, list) else []):
         if not isinstance(record, dict) or not isinstance(record.get(ID_FIELDS["review"]), str):

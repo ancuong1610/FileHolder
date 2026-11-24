@@ -32,6 +32,22 @@ they are the existing defaults and were deliberately not retuned. Gate A adds
 evidence and guarded routing; it does not lower these global thresholds or
 change provider authority. Existing result fields stay compatible.
 
+## Clause containment
+
+Stage 07 also considers same-family pairs from the existing shortlists whose
+normal similarity score is below the review floor. Ordered containment is the
+sum of matching-block sizes from `SequenceMatcher` on casefolded
+`matching_text` word tokens, divided by the shorter token count. The shorter
+text must have at least eight tokens, containment must be at least 0.90, and
+the longer text may have at most three times as many tokens.
+
+The pair must be the only containment candidate for both elements, and both
+elements must remain unmatched by the normal similarity path. The pair records
+`clause_containment` and `similarity_evidence.token_containment`. It is a
+`modified_alignment_review` when either text has fewer than 40 characters
+and a `modified_alignment_candidate` otherwise. Existing retrieval caps,
+similarity weights and thresholds apply as before.
+
 ## Text family and page furniture
 
 Stages 06 and 07 use one matching family for `paragraph`, `heading`,
@@ -119,7 +135,7 @@ review status.
 
 | Level | Deterministic rule |
 | --- | --- |
-| `content` | Text is added or deleted, or the old and new lexical tokens differ. A changed material signal gives `high` priority. Other insertions, deletions or replacements have `normal` priority. |
+| `content` | Text is added or deleted, or the old and new lexical tokens differ. For paired modifications, a changed material signal gives `high` priority. An isolated addition or deletion is `high` only with at most 40 word tokens and at least one of `modal`, `negation`, `condition`, `number`, `date` or `reference`. Other content findings have `normal` priority. |
 | `editorial` | Tokens match after editorial normalization. Examples include punctuation, letter case, certain German gender forms and equivalent number formats. German `ß` folds to `ss` at the end of a word or before a consonant. These findings have `low` priority and remain visible. |
 | `non_content` | Text is identical or equal after glyph folding. Folding covers whitespace, ligatures, Unicode composition, invisible characters and selected quote, dash and bullet variants. Deterministically resolved glyph-only differences are kept as low-priority `non_semantic_events` and omitted from the findings list. |
 | `moved` | A paired element or block changed relative reading order or a body element crossed a matched section boundary. Moves are separate records with their own priorities. |
@@ -168,6 +184,31 @@ Stage 14 statistics expose `moves`, `impact_level_counts`,
 This is deterministic lexical and reading-order evidence. Editorial equivalence,
 materiality and movement can depend on context or extraction quality. Verification
 for these rules is limited to synthetic probes and regression fixtures.
+
+## Change blocks
+
+Stage 14 records maximal runs of at least three visible additions on the NEW
+side or deletions on the OLD side. Layout and furniture are skipped. An
+intervening body element outside the run, including a surviving heading or a
+table, ends the run. Blocks record the preceding heading, member IDs in reading
+order, page numbers and whether the run includes a heading. The
+`changes` list retains every member with its original identity and an additive
+`block_id`.
+
+Blocks carry `content` impact at `normal` priority. Their impact kind is
+`section_added` or `section_deleted` if they include a heading and
+`block_added` or `block_deleted` otherwise. Member impact keeps its signals
+and uses `normal` priority and the `block_member` kind. The block's signals
+are the union of its members' signals. Statistics report `change_blocks` and
+`changes_in_blocks`.
+
+The review queue uses one `change_block` entry for members that need review.
+A residual proposal group whose members all lie in one block and that carries
+no counterpart proposal only says "no counterpart found"; it is absorbed into
+the block entry (listed in `proposal_group_ids`). A residual group with at
+least one counterpart proposal, or spanning several blocks, keeps its own
+review entry. Member change records are never removed. Change disposition still comes from Stage 14's deterministic
+rules, and Stage 13 remains advisory.
 
 ## Known limits
 
