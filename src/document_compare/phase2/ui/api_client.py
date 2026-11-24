@@ -146,6 +146,13 @@ class ApiClient:
                 return None
             raise
 
-    def chat(self, job_id: str, question: str) -> dict:
-        return self._json("POST", f"/jobs/{_job(job_id)}/chat", json={"question": question},
-                          timeout=CHAT_TIMEOUT_SECONDS)
+    def chat(
+        self, job_id: str, question: str, *, history: list[dict[str, str]] | None = None,
+        context: dict[str, str] | None = None,
+    ) -> dict:
+        body: dict[str, Any] = {"question": question}
+        if history is not None:
+            body["history"] = history
+        if context is not None:
+            body["context"] = context
+        return self._json("POST", f"/jobs/{_job(job_id)}/chat", json=body, timeout=CHAT_TIMEOUT_SECONDS)

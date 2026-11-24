@@ -380,7 +380,7 @@ EXPECTED = {
         "other_marker_present": False,
     },
     "forbidden_action": {"unknown_action": True, "gateway_calls": 0, "write_calls": 0},
-    "step_budget_bounded": {"error_type": "RuntimeError", "steps": 3},
+    "step_budget_bounded": {"error_type": "RuntimeError", "steps": 2},
 }
 
 
@@ -856,7 +856,7 @@ async def _run_scenario(scenario: Scenario, gateway: StdioReaderGateway) -> dict
     answer: str | None = None
     error: str | None = None
     try:
-        answer = await asyncio.to_thread(agent.ask, scenario.question, scenario.job_id)
+        answer = await asyncio.to_thread(agent.ask_text, scenario.question, scenario.job_id)
     except RuntimeError as exc:
         error = f"{type(exc).__name__}: {exc}"
     observed = scenario.observe(answer, planner.seen_observations, tracing.calls, error)

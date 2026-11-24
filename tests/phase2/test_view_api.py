@@ -256,8 +256,8 @@ class CreateJobNamesTest(unittest.TestCase):
 
 
 class ChatApiTest(_Base):
-    def _chat(self, question="What changed?"):
-        return self.client.post(f"/jobs/{self.job_id}/chat", json={"question": question})
+    def _chat(self, question="What changed?", **kwargs):
+        return self.client.post(f"/jobs/{self.job_id}/chat", json={"question": question, **kwargs})
 
     @staticmethod
     def _planner(strategy):
@@ -286,6 +286,61 @@ class ChatApiTest(_Base):
         self.assertEqual(body["job_id"], self.job_id)
         self.assertEqual(body["answer"], "Three changes were found.")
         self.assertIsInstance(body["limitations"], list)
+        self.assertEqual(body["cited"], [])
+        self.assertEqual(body["unverified_ids"], [])
+
+    def test_chat_forwards_history_and_context_and_returns_citations(self):
+        history = [{"role": "user", "content": "Was war anders?"},
+                   {"role": "assistant", "content": "Siehe CHANGE-999999."}]
+        context = {"selected_kind": "change", "selected_record_id": "CHANGE-000001",
+                   "preset": "review", "section": "Anwendungsbereich"}
+        planner = self._planner(lambda obs: {
+            "action": "final", "answer": "CHANGE-000001 und CHANGE-999999",
+        })
+        with patch.object(service, "_chat_client", return_value=planner), \
+                patch.object(planner, "invoke", wraps=planner.invoke) as invoke:
+            response = self._chat("Diese Änderung?", history=history, context=context)
+        self.assertEqual(response.status_code, 200, response.text)
+        prompt = invoke.call_args.args[0]
+        self.assertIn("CONVERSATION_HISTORY_JSON:\n" + json.dumps(history, ensure_ascii=False), prompt)
+        self.assertIn("UI_CONTEXT_JSON:\n" + json.dumps(context, ensure_ascii=False), prompt)
+        payload = response.json()
+        self.assertEqual(payload["cited"], [REC])
+        self.assertEqual(payload["unverified_ids"], ["CHANGE-999999"])
+        self.assertIn("unverified_citation", payload["limitations"])
+        self.assertNotIn("partial_answer", payload["limitations"])
+
+    def test_chat_rejects_invalid_history_and_context(self):
+        turn = {"role": "user", "content": "a"}
+        cases = (
+            {"history": [{"role": "system", "content": "a"}]},
+            {"history": [turn] * 7},
+            {"history": [dict(turn, content="")]},
+            {"history": [dict(turn, content="a" * 4001)]},
+            {"history": [dict(turn, content="a" * 4000)] * 3 + [turn]},
+            {"context": {"selected_kind": "unknown"}},
+            {"context": {"selected_record_id": "TABLE-CHANGE-000001"}},
+            {"context": {"preset": "unsupported"}},
+            {"context": {"section": "a" * 201}},
+        )
+        with patch.object(service, "_chat_client") as chat_client:
+            for index, data in enumerate(cases):
+                with self.subTest(index=index):
+                    response = self._chat(**data)
+                    self.assertEqual(response.status_code, 422)
+                    self.assertIsInstance(response.json()["detail"], list)
+            chat_client.assert_not_called()
+
+    def test_chat_marks_answer_on_final_step_as_partial(self):
+        def strategy(observations):
+            if len(observations) < 9:
+                return {"action": "summarize"}
+            return {"action": "final", "answer": "Das wurde bisher geprüft."}
+
+        with patch.object(service, "_chat_client", return_value=self._planner(strategy)):
+            response = self._chat()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("partial_answer", response.json()["limitations"])
 
     def test_chat_uses_only_reader_tools(self):
         from document_compare.phase2.workflow import saved_workspace

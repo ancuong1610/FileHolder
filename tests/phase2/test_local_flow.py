@@ -194,10 +194,10 @@ class ChatIntegrationTest(unittest.TestCase):
                      MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
                      MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
                      mock_agent = MagicMock()
-                     mock_agent.ask = MagicMock(return_value="nothing important")
+                     mock_agent.ask_text = MagicMock(return_value="nothing important")
                      MockAgent.return_value = mock_agent
                      await main(root)
-                     mock_agent.ask.assert_called_once_with("what changed?", "a1b2c3d4e5f6")
+                     mock_agent.ask_text.assert_called_once_with("what changed?", "a1b2c3d4e5f6")
                      mock_proc.terminate.assert_called_once()
         asyncio.run(run())
 

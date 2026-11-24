@@ -52,15 +52,19 @@ TYPE_LABELS = {
     "REVIEW": "Prüfung",
     "MOVED": "Verschoben",
 }
-KIND_LABELS = {"all": "Alle", "change": "Änderung", "table": "Tabelle", "move": "Verschiebung"}
 IMPACT_LABELS = {
-    "all": "Alle", "important": "Wichtig (Inhalt, hohe Priorität)", "content": "Inhalt",
-    "editorial": "Redaktionell", "moved": "Verschoben",
+    "content": "Inhalt", "editorial": "Redaktionell", "moved": "Verschoben",
 }
-IMPACT_FILTER = "Auswirkung"
-EXCLUDED_UNKNOWN_IMPACT = "{count} Befunde ohne Auswirkungsangabe sind ausgeblendet."
-LOCAL_REORDERS = "Lokale Umstellungen anzeigen"
-EXPAND_BLOCKS = "Einzeln anzeigen"
+PRESET = "Ansicht"
+TABLE_LABEL = "Tabelle"
+PRESET_LABELS = {
+    "important": "Wichtige Änderungen",
+    "content": "Alle inhaltlichen Änderungen",
+    "review": "Offene Prüffälle",
+    "all": "Alles",
+}
+EXCLUDED_UNKNOWN_IMPACT = "{count} Prüffälle ohne Auswirkungsangabe – siehe „Offene Prüffälle“."
+EXCLUDED_LOCAL_REORDERS = "{count} vermutliche Umstellungen durch die Lesereihenfolge ausgeblendet."
 BLOCK_SECTION = {"ADDED": "Abschnitt hinzugefügt", "DELETED": "Abschnitt gelöscht"}
 BLOCK_PARAGRAPHS = {"ADDED": "{count} Absätze hinzugefügt", "DELETED": "{count} Absätze gelöscht"}
 BLOCK_MEMBERS = "Änderungen im Block"
@@ -101,10 +105,8 @@ PAGE_DISPLAY_FAILED = "Das Seitenbild konnte nicht angezeigt werden."
 PAGE_COUNT_ONE = " · {count} Seite"
 PAGE_COUNT_MANY = " · {count} Seiten"
 TYPE_FILTER = "Änderungstyp"
-KIND_FILTER = "Kategorie"
 SEARCH = "Suche"
 SEARCH_HINT = "Änderungen, Abschnitte oder IDs suchen"
-FLAGGED_ONLY = "Nur mit Prüfbedarf"
 PAGE_SHORT = "S. {page}"
 UNTITLED = "(ohne Titel)"
 STRUCTURE = "Gliederung"
@@ -159,6 +161,9 @@ NO_FINDINGS = "Dieses Ergebnis enthält keine Befunde."
 AGENT_NOT_CONFIGURED = "Der Assistent ist auf diesem Rechner nicht konfiguriert."
 CHAT_HINT = "Frage zum Vergleich stellen (Textauszüge werden an das Modell gesendet)"
 CHAT_PENDING = "Die Anfrage wird verarbeitet …"
+CHAT_OPEN_CITATION = "Im Viewer öffnen"
+CHAT_PARTIAL_ANSWER = "Teilantwort – nicht alles wurde geprüft."
+CHAT_UNVERIFIED_IDS = "Nicht belegte IDs: {ids}"
 LIMITATIONS = "Einschränkungen: {items}"
 LIMITATION_LABELS = {
     "job_not_done": "Auftrag läuft noch",

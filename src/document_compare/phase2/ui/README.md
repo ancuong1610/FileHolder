@@ -23,9 +23,12 @@ from the new document or, when absent, the old document, then by natural label
 (e.g. `AT 1` before `AT 4.3` before `BT 1`). Unlabelled sections follow in
 reading order. A caption appears in document order when the alternative would
 reorder sections.
-Filters are "Änderungstyp", "Kategorie", "Suche" over item labels, IDs and section
-titles, and "Nur mit Prüfbedarf". Filters apply client-side. The badges show
-unfiltered totals, and "Zurück" and "Weiter" follow the filtered set.
+Filters are one preset ("Wichtige Änderungen", "Alle inhaltlichen Änderungen",
+"Offene Prüffälle", "Alles"), "Änderungstyp" and "Suche" over item labels, IDs
+and section titles. Presets apply client-side; probable reading-order moves are
+always hidden and counted. Block members remain grouped and searchable by member
+change ID, and are shown in the "Änderungen im Block" expander. The badges show
+counts for the active preset, and "Zurück" and "Weiter" follow the filtered set.
 Items flagged for review show a purple "Prüfung" tag after the type dot and a
 `Prüfung erforderlich — <reason>` line under the breadcrumb. Review records that match no change
 are tree items of their own (purple dot). Their page highlights are purple and dashed.
@@ -36,9 +39,19 @@ the same section ("Abschnittskontext", no highlight) from the outline's `context
 in tree order is selected when a job opens. Sections are an evidence-based structure
 hypothesis; the outline view is not a statement about legal meaning.
 
+The Vergleichsassistent answers usage questions and uses the current selection,
+preset, section title when available, and up to six previous messages to resolve
+follow-up questions. Comparison answers use reader results fetched for the
+current question. The assistant responds in the question's language, with
+German as the default. Assistant messages support short Markdown.
+Each verified finding ID has an „Im Viewer öffnen“ button, including when
+filters hide the finding. A grouped member opens its block. Captions flag
+partial answers and IDs that could not be verified. Chat history is scoped to
+the open job and stored in the Streamlit session.
+
 Input/output: talks only to the local HTTP API at `CRR_API_BASE` (loopback http,
 default `http://127.0.0.1:8321`). Reads results; writes nothing into a job.
-Session state keys: `job_id`, `selected`, `tree_open`, `tree_synced`, `root_open`, `tree_order`, `chat_history`, `chat_error`.
+Session state keys: `job_id`, `selected`, `citation_selection`, `tree_open`, `tree_synced`, `root_open`, `tree_order`, `chat_history`, `chat_error`.
 
 Dependencies: `streamlit` (optional extra `ui`) and `httpx`. Phase 1 is never
 imported. No result text, question, answer or image bytes is logged. The only

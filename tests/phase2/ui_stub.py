@@ -97,6 +97,9 @@ class StubClient:
                     "review": {"review_id": record_id, "result_state": "uncertain",
                                "resolution": {"review_reasons": ["needs a human"]},
                                "evidence": {}}}
+        if kind == "block":
+            return {"kind": kind, "record_id": record_id,
+                    "block": {"change_type": "DELETED", "contains_heading": True, "members": []}}
         return {"kind": kind, "record_id": record_id, "change": change}
 
     def locations(self, job_id, kind, record_id):
@@ -113,8 +116,8 @@ class StubClient:
         self._maybe_raise("page_png")
         return self.png
 
-    def chat(self, job_id, question):
-        self.calls.append(("chat", job_id, question))
+    def chat(self, job_id, question, *, history=None, context=None):
+        self.calls.append(("chat", job_id, question, history, context))
         self._maybe_raise("chat")
         return self.chat_value
 

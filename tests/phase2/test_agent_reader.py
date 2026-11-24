@@ -147,6 +147,113 @@ class AgentToolsContractTest(unittest.TestCase):
         self.assertEqual(arguments["cell_limit"], 20)
 
 
+class CapturePlanner(mr.ScriptedPlanner):
+    def __init__(self, strategy):
+        super().__init__(strategy)
+        self.prompts = []
+
+    def invoke(self, prompt, system_message):
+        self.prompts.append((prompt, system_message))
+        return super().invoke(prompt, system_message)
+
+
+class AgentChatTest(unittest.TestCase):
+    def test_agent_help_context_and_history_in_prompt_without_tools(self):
+        from document_compare.phase2.agent.controller import TiaComparisonAgent
+        from document_compare.phase2.agent.help_de import HELP_DE
+
+        history = [{"role": "user", "content": "Wie öffne ich einen Auftrag?"},
+                   {"role": "assistant", "content": "Verwenden Sie die Auftrags-ID."}]
+        context = {"selected_kind": "change", "selected_record_id": "CHANGE-000001", "preset": "content"}
+        planner = CapturePlanner(lambda obs: {"action": "final", "answer": "Nutzen Sie die Suche."})
+        gateway = _RecordingGateway()
+        result = TiaComparisonAgent(planner, gateway).ask(
+            "Wie benutze ich die Suche?", JOB, history=history, ui_context=context,
+        )
+
+        prompt, system = planner.prompts[0]
+        self.assertIn("CONVERSATION_HISTORY_JSON:\n" + json.dumps(history, ensure_ascii=False), prompt)
+        self.assertIn("UI_CONTEXT_JSON:\n" + json.dumps(context, ensure_ascii=False), prompt)
+        self.assertIn("FINAL_STEP: false", prompt)
+        self.assertIn(HELP_DE, system)
+        self.assertLessEqual(len(HELP_DE), 3500)
+        self.assertEqual(result.answer, "Nutzen Sie die Suche.")
+        self.assertFalse(result.partial)
+        self.assertEqual(gateway.calls, [])
+
+    def test_agent_reserves_last_step_for_partial_final_and_binds_job(self):
+        from document_compare.phase2.agent.controller import TiaComparisonAgent
+
+        def strategy(observations):
+            if observations:
+                return {"action": "final", "answer": "Teilantwort zu CHANGE-000001."}
+            return {"action": "details", "arguments": {
+                "kind": "change", "record_id": "CHANGE-000001", "job_id": mr.JOB_OTHER,
+            }}
+
+        planner = CapturePlanner(strategy)
+        gateway = _RecordingGateway()
+        result = TiaComparisonAgent(planner, gateway, max_steps=2).ask("Was bedeutet das?", JOB)
+        self.assertIn("FINAL_STEP: false", planner.prompts[0][0])
+        self.assertIn("FINAL_STEP: true", planner.prompts[1][0])
+        self.assertEqual(len(gateway.calls), 1)
+        self.assertEqual(gateway.calls[0][1]["job_id"], JOB)
+        self.assertTrue(result.partial)
+        self.assertEqual(result.cited, [{"kind": "change", "record_id": "CHANGE-000001"}])
+
+    def test_agent_does_not_execute_tool_when_final_is_required(self):
+        from document_compare.phase2.agent.controller import TiaComparisonAgent
+
+        planner = CapturePlanner(lambda obs: {"action": "summarize"})
+        gateway = _RecordingGateway()
+        with self.assertRaisesRegex(RuntimeError, "step limit"):
+            TiaComparisonAgent(planner, gateway, max_steps=2).ask("Was ist anders?", JOB)
+        self.assertIn("FINAL_STEP: true", planner.prompts[-1][0])
+        self.assertEqual(gateway.calls, [("summarize", {"job_id": JOB})])
+
+    def test_agent_compacts_old_results_and_keeps_latest_and_citation_evidence(self):
+        from document_compare.phase2.agent.controller import TiaComparisonAgent
+
+        ids = [f"CHANGE-{i:06d}" for i in reversed(range(1, 62))]
+        results = [
+            {"ids": ids, "text": "x" * 40_000},
+            {"record_id": "MOVE-000001", "text": "y" * 34_000},
+            {"record_id": "TABLE-CHANGE-00001", "text": "z" * 29_000},
+        ]
+
+        class Gateway(_RecordingGateway):
+            def search(self, job_id, **filters):
+                return results[int(filters["query"])]
+
+        answer = ("  REVIEW-000007, CHANGE-000061, TABLE-CHANGE-00001, BLOCK-000008, "
+                  "MOVE-000001, CHANGE-000061, REVIEW-000007, CHANGE-999999.  ")
+
+        def strategy(observations):
+            if len(observations) < 3:
+                return {"action": "search", "arguments": {"query": str(len(observations))}}
+            return {"action": "final", "answer": answer}
+
+        planner = CapturePlanner(strategy)
+        result = TiaComparisonAgent(planner, Gateway()).ask(
+            "What changed?", JOB,
+            history=[{"role": "assistant", "content": "CHANGE-999999"}],
+            ui_context={"selected_record_id": "BLOCK-000008"},
+        )
+        observations = planner.seen_observations
+        self.assertLessEqual(len(json.dumps(observations)), 60_000)
+        self.assertEqual(observations[0]["result"], {"compacted": True, "record_ids": sorted(ids)[:50]})
+        self.assertEqual(observations[1]["result"], {"compacted": True, "record_ids": ["MOVE-000001"]})
+        self.assertEqual(observations[2]["result"], results[2])
+        self.assertEqual(result.answer, answer)
+        self.assertEqual(result.cited, [
+            {"kind": "change", "record_id": "CHANGE-000061"},
+            {"kind": "table", "record_id": "TABLE-CHANGE-00001"},
+            {"kind": "block", "record_id": "BLOCK-000008"},
+            {"kind": "move", "record_id": "MOVE-000001"},
+        ])
+        self.assertEqual(result.unverified_ids, ["REVIEW-000007", "CHANGE-999999"])
+
+
 class ReaderGatewayTransportTest(unittest.TestCase):
     def test_stdio_reader_gateway_exact_names_and_arguments(self):
         async def run():
@@ -304,7 +411,7 @@ class ReaderMockEndToEndTest(unittest.TestCase):
     def test_step_budget_is_bounded(self):
         scenario = self._scenario("step_budget_bounded")
         self.assertIn("RuntimeError", scenario["error"])
-        self.assertEqual(len([c for c in scenario["trace"]]), 3)
+        self.assertEqual(len(scenario["trace"]), 2)
 
     def test_owned_service_port_released_after_run(self):
         port = self.report["service"]["port"]

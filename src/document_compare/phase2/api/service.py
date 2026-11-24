@@ -39,7 +39,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, PlainTextResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from document_compare.phase2.reader import result_reader as reader
 from document_compare.shared.paths import REPO_ROOT
@@ -586,8 +586,31 @@ def view_page_png(
 # Chat endpoint: the existing agent over the three bounded reader tools.
 # ---------------------------------------------------------------------------
 
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class ChatContext(BaseModel):
+    selected_kind: Literal["change", "block", "move", "table", "review"] | None = None
+    selected_record_id: str | None = Field(
+        default=None, pattern=r"^(CHANGE-\d{6}|BLOCK-\d{6}|MOVE-\d{6}|TABLE-CHANGE-\d{5}|REVIEW-\d{6})$",
+    )
+    preset: Literal["important", "content", "review", "all"] | None = None
+    section: str | None = Field(default=None, max_length=200)
+
+
 class ChatRequest(BaseModel):
     question: str
+    history: list[ChatTurn] = Field(default_factory=list, max_length=6)
+    context: ChatContext | None = None
+
+    @field_validator("history")
+    @classmethod
+    def check_history_size(cls, turns: list[ChatTurn]) -> list[ChatTurn]:
+        if sum(len(turn.content) for turn in turns) > 12_000:
+            raise ValueError("history content must total at most 12000 characters")
+        return turns
 
 
 MAX_QUESTION_CHARS = 2000
@@ -627,10 +650,20 @@ def chat(job_id: str, body: ChatRequest) -> dict:
     if gateway.job_id != job_id:
         raise _reader_http(reader.ReaderError("invalid_artifact", "job status does not match this job"))
     try:
-        answer = TiaComparisonAgent(client, gateway, max_steps=10, result_limit=8).ask(question, job_id)
+        result = TiaComparisonAgent(client, gateway, max_steps=10, result_limit=8).ask(
+            question, job_id, history=[turn.model_dump() for turn in body.history],
+            ui_context=body.context.model_dump(exclude_none=True) if body.context is not None else None,
+        )
         limitations = gateway.summarize(job_id).get("limitations") or []
     except reader.ReaderError as exc:
         raise _reader_http(exc) from exc
     except Exception as exc:  # planner/SDK failure: never echo model or provider text
         raise _coded(502, "chat_failed", "The assistant could not produce an answer.") from exc
-    return {"job_id": job_id, "answer": answer, "limitations": limitations}
+    if result.partial:
+        limitations.append("partial_answer")
+    if result.unverified_ids:
+        limitations.append("unverified_citation")
+    return {
+        "job_id": job_id, "answer": result.answer, "limitations": limitations,
+        "cited": result.cited, "unverified_ids": result.unverified_ids,
+    }

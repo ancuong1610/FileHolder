@@ -183,16 +183,34 @@ or crop boxes is not verified.
 
 ## `POST /jobs/{job_id}/chat`
 
-Body `{"question": "..."}`, 1-2000 characters after trimming. Returns
-`{"job_id": "...", "answer": "...", "limitations": ["..."]}`.
+The request requires `question`, 1–2,000 characters after trimming.
+
+- `history` defaults to an empty list. Send up to six earlier turns as
+  `{"role": "user" | "assistant", "content": "..."}`, in chronological order.
+  Each turn contains 1–4,000 characters and all turns together contain at most
+  12,000 characters.
+- `context` is optional and each field is optional. `selected_kind` accepts
+  `change`, `block`, `move`, `table` or `review`. `selected_record_id` accepts
+  `CHANGE-`, `BLOCK-`, `MOVE-` or `REVIEW-` followed by six digits, or
+  `TABLE-CHANGE-` followed by five digits. `preset` accepts `important`,
+  `content`, `review` or `all`. `section` accepts up to 200 characters.
+- Invalid history or context returns HTTP 422 with FastAPI validation details.
+
+The response includes `job_id`, `answer`, `limitations`, `cited` and
+`unverified_ids`. Each entry in `cited` is a `{kind, record_id}` object.
+The list contains unique IDs in answer order that appeared in reader results
+from this turn or matched the selected ID. `unverified_ids` lists other IDs
+found in the answer and adds `unverified_citation` to `limitations` when
+nonempty. An answer from the last allowed planner call adds `partial_answer`.
 
 - Uses the existing agent over `SavedWorkspaceGateway` for that job, so it can
-  call only `summarize`, `search` and `details`; the ten-step budget applies.
+  call only `summarize`, `search` and `details`. The tenth planner call is
+  reserved for the answer. Failure to produce it returns `chat_failed`.
 - Works only through the internal hub client, and is configured when both
   `TIA_API_KEY` and `LLM_MODEL` are set. `openai_compatible` is not wired into
   chat. No new environment key exists.
-- A question sends bounded reader output to the configured model. Provider and
-  model text is never echoed in errors.
+- A question sends the supplied history and context and bounded reader output
+  to the configured model. Provider and model text is never echoed in errors.
 
 ## Job status file names
 

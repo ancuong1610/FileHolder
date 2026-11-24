@@ -139,14 +139,14 @@ class SavedWorkspaceTest(unittest.TestCase):
 
     def test_saved_chat_uses_selected_identity_without_extraction_credentials(self):
         agent = MagicMock()
-        agent.ask.return_value = "bounded answer"
+        agent.ask_text.return_value = "bounded answer"
         with patch.dict(os.environ, {"TIA_API_KEY": "test", "LLM_MODEL": "test"}, clear=True), \
              patch.object(workflow, "TiaTextClient"), \
              patch.object(workflow, "TiaComparisonAgent", return_value=agent), \
              patch("builtins.input", side_effect=["what changed?", "quit"]), \
              redirect_stdout(io.StringIO()):
             asyncio.run(workflow.run_selected_phase("phase2", self.root))
-        self.assertEqual(agent.ask.call_args.args, ("what changed?", self.load().job_id))
+        self.assertEqual(agent.ask_text.call_args.args, ("what changed?", self.load().job_id))
 
 
 class PhaseSelectionTest(unittest.TestCase):

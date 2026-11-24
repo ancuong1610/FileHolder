@@ -153,12 +153,13 @@ class BlockIntegrationTests(unittest.TestCase):
             self.assertEqual(result["total_matches"], 4)
             self.assertEqual({hit["kind"] for hit in result["returned"]}, {"change"})
 
-    def test_streamlit_block_expander_and_individual_toggle(self):
+    def test_streamlit_block_expander_keeps_outline_grouped(self):
         from tests.phase2.test_ui_smoke import make_app, open_job, structure_text
         from tests.phase2.ui_stub import StubClient
 
         class BlockClient(StubClient):
             def outline(self, job_id, *, expand_blocks=False):
+                self.calls.append(("outline", job_id, expand_blocks))
                 return build_outline(Path(folder), canonical, expand_blocks=expand_blocks)
 
             def details(self, job_id, kind, record_id, **options):
@@ -166,16 +167,16 @@ class BlockIntegrationTests(unittest.TestCase):
 
         canonical = _canonical()
         with tempfile.TemporaryDirectory() as folder:
-            app = open_job(make_app(BlockClient()))
+            client = BlockClient()
+            app = open_job(make_app(client))
             self.assertFalse(app.exception)
             self.assertIn("Abschnitt gelöscht", structure_text(app))
             self.assertIn("Geltungsbereich", structure_text(app))
             self.assertEqual(app.main.expander[0].label, "Änderungen im Block")
             self.assertIn("Meldung 3", structure_text(app))
+            self.assertEqual(app.session_state["selected"]["kind"], "block")
+            self.assertTrue(any(call == ("outline", "job1", False) for call in client.calls))
             app.main.button(key=f"block_members::job1::{BLOCK_ID}::next").click().run()
             self.assertFalse(app.exception)
             self.assertIn("Meldung 4", structure_text(app))
-            app.main.checkbox(key="f_expand_blocks").set_value(True).run()
-            self.assertFalse(app.exception)
-            self.assertNotIn("Abschnitt gelöscht", structure_text(app))
-            self.assertEqual(app.session_state["selected"]["kind"], "change")
+            self.assertTrue(all(c[0] != "outline" or c[2] is False for c in client.calls))

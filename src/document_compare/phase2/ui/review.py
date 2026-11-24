@@ -20,7 +20,6 @@ from document_compare.phase2.ui import texts
 from document_compare.phase2.ui.api_client import ApiError
 
 TYPE_OPTIONS = {"All": "all", "Added": "ADDED", "Deleted": "DELETED", "Modified": "MODIFIED", "Review": "REVIEW"}
-KIND_OPTIONS = {"All": "all", "Change": "change", "Table": "table", "Move": "move"}
 TYPE_COLORS = {"ADDED": "green", "DELETED": "red", "MODIFIED": "orange", "REVIEW": "violet", "MOVED": "orange"}
 IMPACT_COLORS = {"content": "blue", "editorial": "gray", "moved": "orange"}
 TREE_CSS = (
@@ -80,8 +79,8 @@ def _key(client) -> str:
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def _outline(_client, cache_key: str, job_id: str, expand_blocks: bool = False) -> dict:
-    return _client.outline(job_id, expand_blocks=True) if expand_blocks else _client.outline(job_id)
+def _outline(_client, cache_key: str, job_id: str) -> dict:
+    return _client.outline(job_id)
 
 
 @st.cache_data(show_spinner=False, max_entries=256)
@@ -183,8 +182,7 @@ def _filter_node(node: dict, passes: Callable[[dict], bool], query: str, inherit
                 change_count=len(items) + sum(c["change_count"] for c in children))
 
 
-def filter_outline(outline: dict, kind: str = "all", ctype: str = "all", query: str = "",
-                   flagged_only: bool = False, impact: str = "all", show_local_reorders: bool = False) -> dict:
+def filter_outline(outline: dict, preset: str = "all", ctype: str = "all", query: str = "") -> dict:
     """Filter the loaded outline and recompute counts for the visible findings.
 
     An item matches a query through its label or any title on its section path. Standalone review
@@ -192,36 +190,46 @@ def filter_outline(outline: dict, kind: str = "all", ctype: str = "all", query: 
     query = _fold(query)
     excluded_unknown_impact = 0
 
+    def count_local(items: list[dict]) -> int:
+        return sum(1 for item in items if item.get("kind") == "move"
+                   and "local_reorder" in (_impact(item).get("kinds") or []))
+
+    local_reorders = count_local(outline.get("unplaced") or [])
+    def count_sections(nodes: list[dict]) -> int:
+        return sum(count_local(node.get("items") or []) + count_sections(node.get("children") or [])
+                   for node in nodes)
+
+    local_reorders += count_sections(outline.get("sections") or [])
+
     def passes(item: dict) -> bool:
         nonlocal excluded_unknown_impact
         item_kind = item.get("kind")
         item_impact = _impact(item)
         if item_kind not in ("change", "table", "review", "move", "block"):
             return False
-        if kind != "all" and item_kind != kind and (kind, item_kind) != ("change", "block"):
-            return False
-        if flagged_only and not _is_flagged(item):
+        if item_kind == "move" and "local_reorder" in (item_impact.get("kinds") or []):
             return False
         if ctype != "all" and bucket(item) != ctype:
             return False
-        if item_kind == "move" and not show_local_reorders and "local_reorder" in (item_impact.get("kinds") or []):
-            return False
-        if impact == "important":
+        if preset == "review":
+            return _is_flagged(item)
+        if preset == "important":
             if not item_impact.get("level"):
                 excluded_unknown_impact += 1
             return item_impact.get("level") == "content" and item_impact.get("priority") == "high"
-        if impact != "all" and item_impact.get("level") != impact:
+        if preset == "content":
             if not item_impact.get("level"):
                 excluded_unknown_impact += 1
-            return False
+            return item_impact.get("level") in {"content", "moved"}
         return True
 
     sections = [n for n in (_filter_node(n, passes, query) for n in outline.get("sections") or []) if n]
     unplaced = [i for i in outline.get("unplaced") or []
                 if (not query or _matches(i, query)) and passes(i)]
     result = {"sections": sections, "unplaced": unplaced}
-    if impact != "all":
+    if preset in {"important", "content"}:
         result["excluded_unknown_impact"] = excluded_unknown_impact
+    result["local_reorders"] = local_reorders
     return result
 
 
@@ -355,10 +363,39 @@ def _placeholder_png(width: int, height: int) -> bytes:
 
 def _select(item: dict) -> None:
     st.session_state["selected"] = {"kind": item["kind"], "record_id": item["record_id"]}
+    st.session_state.pop("citation_selection", None)
 
 
 def _same(item: dict, selected: dict | None) -> bool:
     return bool(selected) and (item["kind"], item["record_id"]) == (selected.get("kind"), selected.get("record_id"))
+
+
+def _citation_item(outline: dict, selected: dict) -> dict | None:
+    items = flatten(outline)
+    item = next((i for i in items if _same(i, selected)), None)
+    if item is not None:
+        return item
+    if selected["kind"] == "change":
+        return next((i for i in items if i["kind"] == "block"
+                     and selected["record_id"] in (i.get("change_ids") or [])), None)
+    # A linked review has its own record but no separate row in the tree.
+    return next((i for i in outline.get("review") or [] if _same(i, selected)), None)
+
+
+def select_citation(job_id: str, citation: dict) -> None:
+    """Open a chat citation on the rerun Streamlit triggers after the click."""
+    _select(citation)
+    st.session_state["citation_selection"] = job_id
+
+
+def selected_section(client, job_id: str, selected: dict) -> str | None:
+    try:
+        outline = _outline(client, _key(client), job_id)
+    except ApiError:
+        return None
+    item = _citation_item(outline, selected)
+    path = item.get("section_path") if item else None
+    return path[-1] if path else None
 
 
 # --------------------------------------------------------------------------- header and filters
@@ -387,19 +424,15 @@ def _chips(counts: dict[str, int]) -> None:
     st.markdown(" ".join(f":{colors[k]}-badge[{labels[k]} {v}]" for k, v in counts.items()))
 
 
-def _filters() -> tuple[str, str, str, bool, str, bool]:
-    c1, c2, c3, c4 = st.columns([1, 1, 1, 2], vertical_alignment="bottom")
-    ctype = c1.selectbox(texts.TYPE_FILTER, list(TYPE_OPTIONS), key="f_type",
-                         format_func=lambda option: texts.TYPE_LABELS[TYPE_OPTIONS[option]])
-    kind = c2.selectbox(texts.KIND_FILTER, list(KIND_OPTIONS), key="f_kind",
-                        format_func=lambda option: texts.KIND_LABELS[KIND_OPTIONS[option]])
-    impact = c3.selectbox(texts.IMPACT_FILTER, list(texts.IMPACT_LABELS), key="f_impact",
-                          format_func=texts.IMPACT_LABELS.__getitem__)
-    query = c4.text_input(texts.SEARCH, key="f_search", placeholder=texts.SEARCH_HINT)
-    c5, c6 = st.columns(2)
-    flagged = c5.checkbox(texts.FLAGGED_ONLY, key="f_needs_review", value=False)
-    local = c6.checkbox(texts.LOCAL_REORDERS, key="f_local_reorders", value=False)
-    return KIND_OPTIONS[kind], TYPE_OPTIONS[ctype], query, flagged, impact, local
+def _filters() -> tuple[str, str, str]:
+    c1, c2, c3 = st.columns([2, 1, 2], vertical_alignment="bottom")
+    reset = {"on_change": st.session_state.pop, "args": ("citation_selection", None)}
+    preset = c1.radio(texts.PRESET, list(texts.PRESET_LABELS), key="f_preset", index=0,
+                      horizontal=True, format_func=texts.PRESET_LABELS.__getitem__, **reset)
+    ctype = c2.selectbox(texts.TYPE_FILTER, list(TYPE_OPTIONS), key="f_type",
+                         format_func=lambda option: texts.TYPE_LABELS[TYPE_OPTIONS[option]], **reset)
+    query = c3.text_input(texts.SEARCH, key="f_search", placeholder=texts.SEARCH_HINT, **reset)
+    return preset, TYPE_OPTIONS[ctype], query
 
 
 # --------------------------------------------------------------------------- tree
@@ -446,7 +479,7 @@ def _row(item: dict, selected: dict | None) -> None:
         label = " · ".join(filter(None, (_block_label(item), item.get("anchor"))))
     elif item.get("kind") == "table" and (match := _TABLE_LABEL.fullmatch(label)):
         table_page, cells = match.groups()
-        parts = [texts.KIND_LABELS["table"]]
+        parts = [texts.TABLE_LABEL]
         if table_page:
             parts.append(texts.PAGE_SHORT.format(page=table_page))
         if cells:
@@ -779,9 +812,8 @@ def _splitter() -> None:
 
 
 def render(client, job_id: str, status: dict | None = None) -> None:
-    expand_blocks = st.checkbox(texts.EXPAND_BLOCKS, key="f_expand_blocks", value=False)
     try:
-        outline = _outline(client, _key(client), job_id, expand_blocks)
+        outline = _outline(client, _key(client), job_id)
     except ApiError as exc:
         st.error(texts.RESULT_FAILED.format(job_id=job_id, error=texts.api_error(exc.code, exc.status)))
         return
@@ -797,6 +829,9 @@ def render(client, job_id: str, status: dict | None = None) -> None:
     excluded = filtered.get("excluded_unknown_impact", 0)
     if excluded:
         st.caption(texts.EXCLUDED_UNKNOWN_IMPACT.format(count=excluded))
+    local_reorders = filtered.get("local_reorders", 0)
+    if local_reorders:
+        st.caption(texts.EXCLUDED_LOCAL_REORDERS.format(count=local_reorders))
     _chips(chip_counts(filtered))
     _splitter()
     left, right = st.container(key="split").columns([2, 3])
@@ -806,9 +841,15 @@ def render(client, job_id: str, status: dict | None = None) -> None:
     flat = flatten(filtered)
 
     selected = st.session_state.get("selected")
-    if flat and not any(_same(i, selected) for i in flat):
+    current = next((i for i in flat if _same(i, selected)), None)
+    if selected and st.session_state.get("citation_selection") == job_id:
+        current = _citation_item(shown, selected) or selected
+        selected = {"kind": current["kind"], "record_id": current["record_id"]}
+        st.session_state["selected"] = selected
+    elif flat and current is None:
         _select(flat[0])  # default and fallback: first item in tree order
         selected = st.session_state["selected"]
+        current = flat[0]
     elif not flat:
         st.session_state.pop("selected", None)
         selected = None
@@ -820,8 +861,8 @@ def render(client, job_id: str, status: dict | None = None) -> None:
     with left:
         _tree(filtered, selected, bool(outline.get("sections")), mode)
     with right:
-        current = next((i for i in flat if _same(i, selected)), None)
         if current is None:
             st.info(texts.NO_MATCHING_FINDINGS if flatten(outline) else texts.NO_FINDINGS)
         else:
-            _viewer(client, job_id, current, flat)
+            navigation = flat if any(_same(i, selected) for i in flat) else [current]
+            _viewer(client, job_id, current, navigation)

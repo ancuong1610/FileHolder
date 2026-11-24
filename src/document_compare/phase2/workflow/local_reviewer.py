@@ -215,7 +215,7 @@ async def main(root: Path | None = None) -> None:
                     question = await asyncio.to_thread(input, "you> ")
                     if question.strip() in {"quit", "exit"}:
                         break
-                    answer = await asyncio.to_thread(agent.ask, question, job_id)
+                    answer = await asyncio.to_thread(agent.ask_text, question, job_id)
                     print("agent:", answer)
     finally:
         _stop_process(api)
@@ -247,7 +247,7 @@ async def chat_saved_workspace(workspace: Path, check_only: bool = False) -> Non
             break
         if question.strip().lower() in {"quit", "exit"}:
             break
-        print("agent:", await asyncio.to_thread(agent.ask, question, gateway.job_id))
+        print("agent:", await asyncio.to_thread(agent.ask_text, question, gateway.job_id))
 
 
 async def run_selected_phase(phase: str, workspace: Path, *, check_only: bool = False) -> None:

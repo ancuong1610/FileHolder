@@ -1,6 +1,7 @@
 """Offline tests for the Streamlit app's HTTP client (httpx.MockTransport)."""
 from __future__ import annotations
 
+import json
 import unittest
 
 import httpx
@@ -126,6 +127,23 @@ class ApiClientTests(unittest.TestCase):
         c.chat("0123456789ab", "why?")
         self.assertEqual(seen["/jobs/0123456789ab/read/summary"], 60.0)
         self.assertEqual(seen["/jobs/0123456789ab/chat"], 300.0)
+
+    def test_chat_sends_optional_history_and_context_only_when_given(self):
+        bodies = []
+
+        def handler(request):
+            bodies.append(json.loads(request.content))
+            return httpx.Response(200, json={"answer": "ok"})
+
+        client = _client(handler)
+        history = [{"role": "user", "content": "What changed?"}]
+        context = {"selected_kind": "change", "selected_record_id": "CHANGE-000001"}
+        client.chat("0123456789ab", "why?")
+        client.chat("0123456789ab", "why?", history=history, context=context)
+        self.assertEqual(bodies, [
+            {"question": "why?"},
+            {"question": "why?", "history": history, "context": context},
+        ])
 
     def test_invalid_job_id_never_reaches_transport(self):
         calls = []

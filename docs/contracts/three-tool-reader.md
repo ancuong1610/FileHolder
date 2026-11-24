@@ -120,6 +120,24 @@ LLM reasoning or company-provider validation.
 
 New read projection/schema helpers under `phase2/reader/`; additive HTTP read endpoints in `service.py`; new reader-only FastMCP module. Agent gateway/tools/planner and local reviewer integrate the three-tool surface. New synthetic tests and mock CLI live with the project; private development PDFs/raw DI are never required or uploaded. Preserve Phase 1 pipeline, canonical output, rendering and the original orchestration MCP behavior.
 
+## Comparison chat
+
+The comparison chat agent uses exactly `summarize`, `search` and `details`.
+The MCP surface is frozen and the chat behavior is implemented on the consuming
+agent and HTTP chat route. Usage-only questions can be answered directly from
+the built-in help. History and UI context resolve references, including to the
+selected finding. Comparison facts must come from reader results fetched in
+the current turn. Replies use the question's language, default to German if
+unclear, and flag relevant uncertainty and incomplete results.
+
+The final planner step is reserved for an answer that explains what was left
+unchecked. Before each planner call, older results are compacted when the
+serialized observations exceed 60,000 characters. Each compacted result
+retains up to 50 sorted record IDs. The newest result stays intact even if it
+alone exceeds the threshold. Citation checks use IDs from the full results
+of this turn and the selected ID. The [chat endpoint](view-endpoints.md#post-jobsjob_idchat)
+describes the input and citation metadata.
+
 ## Run and inspect the mock
 
 ```sh

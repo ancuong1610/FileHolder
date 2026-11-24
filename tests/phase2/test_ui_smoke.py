@@ -8,7 +8,7 @@ try:
 except ImportError:  # pragma: no cover - streamlit is an optional extra
     raise unittest.SkipTest("streamlit is not installed")
 
-from document_compare.phase2.ui import review, texts as ui_texts
+from document_compare.phase2.ui import chat, review, texts as ui_texts
 from tests.phase2.ui_stub import StubClient, default_outline, item
 
 
@@ -22,11 +22,15 @@ def make_app(stub: StubClient) -> AppTest:
     return AppTest.from_function(_script, args=(stub,), default_timeout=15)
 
 
-def open_job(at: AppTest, job_id: str = "job1") -> AppTest:
+def open_job(at: AppTest, job_id: str = "job1", preset: str = "all") -> AppTest:
     at.run()
     at.sidebar.text_input(key="open_job_id").set_value(job_id)
     at.sidebar.button(key="open_job").click()
-    return at.run()
+    at = at.run()
+    if preset != "important" and not at.exception and any(r.key == "f_preset" for r in at.main.radio):
+        at.main.radio(key="f_preset").set_value(preset)
+        at = at.run()
+    return at
 
 
 def texts(elements) -> str:
@@ -223,8 +227,8 @@ class OutlineHelperTests(unittest.TestCase):
         self.assertEqual([n["change_count"] for n in added["sections"]], [1, 0])
         self.assertNotIn("review", added)
         self.assertEqual([i["record_id"] for i in review.flatten(added)], ["CHANGE-000002"])
-        tables = review.filter_outline(outline, "table", "all")
-        self.assertEqual(review.flatten(tables), [])
+        tables = review.filter_outline(outline, preset="all")
+        self.assertEqual(len(review.flatten(tables)), 2)
         everything = review.filter_outline(outline)
         self.assertEqual([i["record_id"] for i in review.flatten(everything)], ["CHANGE-000001", "CHANGE-000002"])
 
@@ -266,10 +270,14 @@ class ReviewTests(unittest.TestCase):
             self.assertIn(chip, main_text)
         for gone in ("Limitations", "not legal or semantic ground truth", "Uncertain", "Supported"):
             self.assertNotIn(gone, main_text)
-        self.assertEqual({s.label for s in at.main.selectbox}, {"Änderungstyp", "Kategorie", "Auswirkung"})
+        self.assertEqual({s.label for s in at.main.selectbox}, {"Änderungstyp"})
         self.assertEqual(at.main.selectbox(key="f_type").options,
                          ["Alle", "Hinzugefügt", "Gelöscht", "Geändert", "Prüfung"])
-        self.assertEqual(at.main.selectbox(key="f_kind").options, ["Alle", "Änderung", "Tabelle", "Verschiebung"])
+        self.assertEqual(at.main.radio(key="f_preset").value, "all")
+        self.assertEqual(at.main.radio(key="f_preset").options,
+                         list(ui_texts.PRESET_LABELS.values()))
+        self.assertFalse(any(w.key in {"f_kind", "f_impact", "f_needs_review", "f_local_reorders", "f_expand_blocks"}
+                             for w in [*at.main.checkbox, *at.main.radio, *at.main.selectbox]))
         self.assertEqual([t.label for t in at.main.text_input], ["Suche"])
         self.assertEqual(at.main.text_input[0].placeholder, "Änderungen, Abschnitte oder IDs suchen")
         self.assertEqual(len(at.main.metric), 0)
@@ -277,7 +285,16 @@ class ReviewTests(unittest.TestCase):
         self.assertIn("Änderungs-ID: CHANGE-000001", main_text)
         self.assertNotIn(":blue-badge[Inhalt]", main_text)  # legacy change has unknown impact
 
-    def test_impact_badges_filter_counts_and_move_viewer(self):
+    def test_default_preset_lists_only_content_high(self):
+        outline = default_outline()
+        high, normal = outline["sections"][0]["items"][0], outline["sections"][0]["children"][0]["items"][0]
+        high["impact"] = {"level": "content", "priority": "high", "kinds": []}
+        normal["impact"] = {"level": "content", "priority": "normal", "kinds": []}
+        at = open_job(make_app(StubClient(outline_value=outline)), preset="important")
+        self.assertEqual(at.main.radio(key="f_preset").value, "important")
+        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001"])
+
+    def test_presets_filter_counts_and_move_viewer(self):
         outline = default_outline()
         top = outline["sections"][0]
         top["items"][0]["impact"] = {
@@ -297,18 +314,14 @@ class ReviewTests(unittest.TestCase):
         stub = StubClient(outline_value=outline)
         at = open_job(make_app(stub))
         self.assertFalse(at.exception)
-        self.assertEqual(at.selectbox(key="f_impact").options, [
-            "Alle", "Wichtig (Inhalt, hohe Priorität)", "Inhalt", "Redaktionell", "Verschoben",
-        ])
         important_id = top["items"][0]["record_id"]
-        at.selectbox(key="f_impact").select("important").run()
+        at.radio(key="f_preset").set_value("important").run()
         self.assertFalse(at.exception)
         self.assertEqual(tree_keys(at), [f"pick::change::{important_id}"])
-        at.selectbox(key="f_impact").select("all").run()
-        self.assertFalse(at.checkbox(key="f_local_reorders").value)
-        self.assertEqual(at.checkbox(key="f_local_reorders").label, "Lokale Umstellungen anzeigen")
+        at.radio(key="f_preset").set_value("all").run()
         self.assertIn("pick::move::MOVE-000001", tree_keys(at))
         self.assertNotIn("pick::move::MOVE-000002", tree_keys(at))
+        self.assertIn("1 vermutliche Umstellungen durch die Lesereihenfolge ausgeblendet.", texts(at.main.caption))
         main = texts(at.main.markdown)
         for badge in ("Inhalt 1", "Redaktionell 1", "Verschoben 1", "Wichtig"):
             self.assertIn(badge + "]", main)
@@ -316,26 +329,51 @@ class ReviewTests(unittest.TestCase):
         for signal in ui_texts.IMPACT_SIGNALS.values():
             self.assertIn(signal, captions)
 
-        at.selectbox(key="f_impact").select("moved").run()
+        at.radio(key="f_preset").set_value("content").run()
         self.assertFalse(at.exception)
-        self.assertEqual(tree_keys(at), ["pick::move::MOVE-000001"])
-        self.assertEqual(at.session_state["selected"]["record_id"], "MOVE-000001")
-        self.assertIn("Versetzter Absatz", texts(at.main.caption))
-        self.assertIn("Früher → Jetzt", texts(at.main.caption))
-        self.assertEqual(page_calls(stub)[-2:], [
-            ("page_png", "job1", "old", 1, "move", "MOVE-000001", False),
-            ("page_png", "job1", "new", 2, "move", "MOVE-000001", False),
-        ])
-        self.assertIn("Inhalt 0]", texts(at.main.markdown))
-        self.assertIn("Änderungen 0]", texts(at.main.markdown))
+        self.assertEqual(set(tree_keys(at)), {"pick::change::CHANGE-000001", "pick::move::MOVE-000001"})
+        self.assertIn("1 Prüffälle ohne Auswirkungsangabe – siehe „Offene Prüffälle“.", texts(at.main.caption))
+        at.radio(key="f_preset").set_value("review").run()
+        self.assertEqual(tree_keys(at), [])
 
-        at.checkbox(key="f_local_reorders").check().run()
-        self.assertEqual(tree_keys(at), ["pick::move::MOVE-000001", "pick::move::MOVE-000002"])
-        self.assertIn("Verschoben 2]", texts(at.main.markdown))
-        at.selectbox(key="f_impact").select("editorial").run()
-        self.assertIn("1 Befunde ohne Auswirkungsangabe sind ausgeblendet.", texts(at.main.caption))
-        self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000002"])
-        self.assertIn(":gray-badge[Redaktionell]", texts(at.main.markdown))
+    def test_each_preset_has_expected_members_and_local_reorders_are_never_listed(self):
+        outline = default_outline()
+        items = outline["sections"][0]["items"]
+        items[0]["impact"] = {"level": "content", "priority": "high", "kinds": []}
+        normal = item("change", "NORMAL", "MODIFIED", "normal", ["Section A"])
+        normal["impact"] = {"level": "content", "priority": "normal", "kinds": []}
+        editorial = item("change", "EDITORIAL", "MODIFIED", "editorial", ["Section A"])
+        editorial["impact"] = {"level": "editorial", "priority": "normal", "kinds": []}
+        move = item("move", "MOVE", None, "move", ["Section A"])
+        move["impact"] = {"level": "moved", "priority": "normal", "kinds": ["paragraph_move"]}
+        local = item("move", "LOCAL", None, "local", ["Section A"])
+        local["impact"] = {"level": "moved", "priority": "normal", "kinds": ["local_reorder"]}
+        flagged = item("change", "FLAGGED", "MODIFIED", "flagged", ["Section A"])
+        flagged.update(needs_review=True, impact={"level": "content", "priority": "normal", "kinds": []})
+        standalone = item("review", "REVIEW", None, "review", ["Section A"])
+        block = item("block", "BLOCK", None, "block", ["Section A"])
+        block["change_ids"] = ["MEMBER-1"]
+        items.extend([normal, editorial, move, local, block, flagged, standalone])
+        expected = {
+            "important": {"CHANGE-000001"},
+            "content": {"CHANGE-000001", "NORMAL", "MOVE", "FLAGGED"},
+            "review": {"FLAGGED", "REVIEW"},
+            "all": {"CHANGE-000001", "CHANGE-000002", "NORMAL", "EDITORIAL", "MOVE", "BLOCK", "FLAGGED", "REVIEW"},
+        }
+        for preset, ids in expected.items():
+            with self.subTest(preset=preset):
+                result = review.filter_outline(outline, preset)
+                self.assertEqual({i["record_id"] for i in review.flatten(result)}, ids)
+                self.assertNotIn("LOCAL", {i["record_id"] for i in review.flatten(result)})
+                self.assertEqual(result["local_reorders"], 1)
+
+    def test_block_member_search_keeps_block_grouped(self):
+        outline = default_outline()
+        block = item("block", "BLOCK-1", None, "Abschnitt geändert", ["Section A"])
+        block["change_ids"] = ["CHANGE-000777"]
+        outline["sections"][0]["items"].append(block)
+        filtered = review.filter_outline(outline, "all", query="CHANGE-000777")
+        self.assertEqual([i["record_id"] for i in review.flatten(filtered)], ["BLOCK-1"])
 
     def test_table_label_is_localized(self):
         outline = default_outline()
@@ -476,11 +514,10 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(at.session_state["selected"]["record_id"], "CHANGE-000002")
         self.assertIn(":gray-badge[1]", texts(at.main.markdown))
         self.assertEqual(len([c for c in stub.calls if c[0] == "outline"]), outline_calls)  # cached, no refetch
-        at.main.selectbox(key="f_kind").select("Table")
+        at.main.radio(key="f_preset").set_value("important")
         at.run()
         self.assertEqual(tree_keys(at), [])
         self.assertNotIn("selected", at.session_state)
-        self.assertIn("Keine Befunde entsprechen diesen Filtern.", texts(at.main.info))
         self.assertEqual(len(at.main.get("image")), 0)
 
     def test_deleted_item_shows_new_section_context_without_placeholder_text(self):
@@ -628,13 +665,11 @@ class NeedsReviewTests(unittest.TestCase):
         at.run()
         self.assertNotIn("Einschätzung des Sprachmodells · beratend", texts(at.main.markdown) + texts(at.main.caption))
 
-    def test_needs_review_only_filter_and_review_type(self):
+    def test_review_preset_and_review_type(self):
         stub = StubClient(outline_value=review_outline())
         at = open_job(make_app(stub))
-        self.assertEqual(at.main.checkbox(key="f_needs_review").label, "Nur mit Prüfbedarf")
-        self.assertFalse(at.main.checkbox(key="f_needs_review").value)
         self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001", "pick::review::REVIEW-000002"])
-        at.main.checkbox(key="f_needs_review").check()
+        at.main.radio(key="f_preset").set_value("review")
         at.run()
         self.assertFalse(at.exception)
         self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001", "pick::review::REVIEW-000002"])
@@ -650,7 +685,7 @@ class NeedsReviewTests(unittest.TestCase):
 
     def test_only_flagged_filter_hides_unflagged_items(self):
         outline = review_outline()
-        flagged = review.filter_outline(outline, flagged_only=True)
+        flagged = review.filter_outline(outline, preset="review")
         self.assertEqual([i["record_id"] for i in review.flatten(flagged)], ["CHANGE-000001", "REVIEW-000002"])
         self.assertEqual(review.chip_counts(outline)["Needs review"], 2)
         self.assertEqual(review.chip_counts(outline)["Changes"], 2)  # review items are not changes
@@ -678,10 +713,80 @@ class ChatTests(unittest.TestCase):
         history = at.session_state["chat_history"]
         self.assertEqual([(m["role"], m["content"]) for m in history],
                          [("user", "what changed?"), ("assistant", "stub answer")])
-        self.assertIn(("chat", "job1", "what changed?"), stub.calls)
-        self.assertIn("stub answer", texts(at.sidebar.text))
+        self.assertIn(("chat", "job1", "what changed?", [], {
+            "selected_kind": "change", "selected_record_id": "CHANGE-000001",
+            "preset": "all", "section": "Section A",
+        }), stub.calls)
+        self.assertIn("what changed?", texts(at.sidebar.text))
+        self.assertIn("stub answer", texts(at.sidebar.markdown))
         shown = texts(at.sidebar.caption) + texts(at.sidebar.markdown)
         self.assertNotIn("not legal or semantic ground truth", shown)
+
+    def test_chat_follow_up_sends_only_six_bounded_prior_turns_and_current_selection(self):
+        stub = StubClient()
+        at = open_job(make_app(stub))
+        at.session_state["chat_history"] = [
+            {"role": "assistant" if i % 2 else "user", "content": str(i) * (4100 if i == 7 else 1), "extra": True}
+            for i in range(8)
+        ]
+        at.main.button(key="tog::S2").click().run()
+        at.main.button(key="pick::change::CHANGE-000002").click().run()
+        at.sidebar.chat_input[0].set_value("Was ist damit?").run()
+        self.assertFalse(at.exception)
+        expected = [{"role": "assistant" if i % 2 else "user", "content": str(i) * (4000 if i == 7 else 1)}
+                    for i in range(2, 8)]
+        self.assertIn(("chat", "job1", "Was ist damit?", expected, {
+            "selected_kind": "change", "selected_record_id": "CHANGE-000002",
+            "preset": "all", "section": "Section B",
+        }), stub.calls)
+
+    def test_chat_history_budget_keeps_the_newest_turns(self):
+        history = [{"role": "assistant", "content": str(i) * 4500} for i in range(6)]
+        self.assertEqual(chat._recent_turns(history), [
+            {"role": "assistant", "content": str(i) * 4000} for i in range(3, 6)
+        ])
+
+    def test_sanitize_markdown_keeps_formatting_and_removes_images_links_and_html(self):
+        source = '- **Befund** ![Bild](https://example.test/a(b)) [Text](https://example.test)\n' \
+                 '<span title="a>b">Inhalt</span><!-- inline --> [Hinweis][ref]\n[ref]: https://example.test'
+        clean = chat.sanitize_markdown(source)
+        self.assertEqual(clean, "- **Befund**  Text\nInhalt Hinweis\n")
+
+    def test_chat_citation_selects_a_filtered_record_and_shows_limitations(self):
+        stub = StubClient(chat_value={
+            "answer": "**Befund** CHANGE-000002 und CHANGE-999999.",
+            "cited": [{"kind": "change", "record_id": "CHANGE-000002"}],
+            "unverified_ids": ["CHANGE-999999"],
+            "limitations": ["review_open", "partial_answer", "unverified_citation"],
+        })
+        at = self.ask(stub)
+        at.main.text_input(key="f_search").set_value("no matching records").run()
+        button = at.sidebar.button(key="chat_cite::job1::1::CHANGE-000002")
+        self.assertEqual(button.label, "CHANGE-000002")
+        self.assertEqual(button.proto.help, "Im Viewer öffnen")
+        self.assertFalse(any(b.label == "CHANGE-999999" for b in at.sidebar.button))
+        button.click().run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["selected"], {"kind": "change", "record_id": "CHANGE-000002"})
+        self.assertIn("Änderungs-ID: CHANGE-000002", texts(at.main.caption))
+        captions = texts(at.sidebar.caption)
+        self.assertIn("Teilantwort – nicht alles wurde geprüft.", captions)
+        self.assertIn("Nicht belegte IDs: CHANGE-999999", captions)
+        self.assertIn("Einschränkungen: Prüfungen offen", captions)
+
+    def test_chat_citation_selects_block_for_member_change(self):
+        stub = StubClient(chat_value={
+            "answer": "Siehe CHANGE-000777.",
+            "cited": [{"kind": "change", "record_id": "CHANGE-000777"}],
+        })
+        block = item("block", "BLOCK-000001", "DELETED", "removed section", [])
+        block.update(change_ids=["CHANGE-000777"], contains_heading=True)
+        stub.outline_value["unplaced"].append(block)
+        at = self.ask(stub)
+        at.sidebar.button(key="chat_cite::job1::1::CHANGE-000777").click().run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["selected"], {"kind": "block", "record_id": "BLOCK-000001"})
+        self.assertIn(("details", "job1", "block", "BLOCK-000001"), stub.calls)
 
     def test_chat_error_is_shown_not_raised(self):
         stub = StubClient()
