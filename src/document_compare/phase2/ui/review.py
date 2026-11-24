@@ -206,6 +206,10 @@ def filter_outline(outline: dict, kind: str = "all", ctype: str = "all", query: 
             return False
         if item_kind == "move" and not show_local_reorders and "local_reorder" in (item_impact.get("kinds") or []):
             return False
+        if impact == "important":
+            if not item_impact.get("level"):
+                excluded_unknown_impact += 1
+            return item_impact.get("level") == "content" and item_impact.get("priority") == "high"
         if impact != "all" and item_impact.get("level") != impact:
             if not item_impact.get("level"):
                 excluded_unknown_impact += 1

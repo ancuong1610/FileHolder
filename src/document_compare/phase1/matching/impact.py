@@ -146,6 +146,65 @@ def glyph_fold(text: str) -> str:
     return _fold_glyphs(text)[0]
 
 
+# Line-break hyphenation from PDF extraction: "Risikotragfähigkeitskon- zepte".
+# A suspended hyphen before a conjunction ("Ein- und Ausgang") is real text.
+_SUSPENDED_HYPHEN_NEXT = (
+    "und oder bis sowie bzw beziehungsweise respektive and or to"
+).split()
+_LINE_BREAK_HYPHEN = re.compile(
+    rf"(?<=[^\W\d_])- (?!(?:{'|'.join(_SUSPENDED_HYPHEN_NEXT)})\b)(?=[a-zäöüß])"
+)
+# Fixed German abbreviations with one unambiguous expansion (inflected forms
+# such as "sog." or "o. g." are left alone).
+_ABBREVIATIONS = tuple(
+    (re.compile(pattern), expansion)
+    for pattern, expansion in (
+        (r"\b[zZ]\. ?B\.", "zum Beispiel"),
+        (r"\b[dD]\. ?h\.", "das heißt"),
+        (r"\b[uU]\. ?a\.(?= |$)", "unter anderem"),
+        (r"\b[iI]\. ?d\. ?R\.", "in der Regel"),
+        (r"\b[uU]\. ?U\.", "unter Umständen"),
+        (r"\b[zZ]\. ?T\.", "zum Teil"),
+        (r"\bbzw\.", "beziehungsweise"),
+        (r"\bggf\.", "gegebenenfalls"),
+        (r"\bgem\.", "gemäß"),
+        (r"\bvgl\.", "vergleiche"),
+        (r"\binkl\.", "inklusive"),
+        (r"\busw\.", "und so weiter"),
+        (r"\bAbs\.", "Absatz"),
+        (r"\bNr\.", "Nummer"),
+        (r"\bTz\. ?", "Textziffer "),
+        (r"\bRn\. ?", "Randnummer "),
+    )
+)
+# Leading enumeration labels "a)", "(b)", "iv)", "3)"; "1." is not stripped
+# because it can be the day of a date ("1. Januar").
+_LIST_LABEL = re.compile(r"^\(?(?:[a-zA-Z]{1,2}|[ivxIVX]{1,4}|\d{1,3})\) +")
+
+
+def _editorial_text(text: str) -> tuple[str, set[str]]:
+    """Fold extraction hyphenation and fixed abbreviations before tokenizing."""
+    kinds: set[str] = set()
+    joined = _LINE_BREAK_HYPHEN.sub("", text)
+    if joined != text:
+        kinds.add("hyphenation")
+    expanded = joined
+    for pattern, expansion in _ABBREVIATIONS:
+        expanded = pattern.sub(expansion, expanded)
+    expanded = " ".join(expanded.split())
+    if expanded != " ".join(joined.split()):
+        kinds.add("abbreviation")
+    return expanded, kinds
+
+
+def _strip_shared_labels(old: str, new: str) -> tuple[str, str, set[str]]:
+    old_label, new_label = _LIST_LABEL.match(old), _LIST_LABEL.match(new)
+    if not (old_label and new_label):
+        return old, new, set()
+    kinds = {"list_label"} if old_label[0].strip() != new_label[0].strip() else set()
+    return old[old_label.end():], new[new_label.end():], kinds
+
+
 def _number_token(raw: str) -> str:
     unsigned = raw.removeprefix("-")
     value = "".join(
@@ -209,7 +268,7 @@ def _editorial_word(raw: str) -> str:
 
 def editorial_tokens(text: str) -> list[str]:
     """Tokenize folded text, keeping numeric, date and reference evidence."""
-    return _editorial_parts(glyph_fold(text))[0]
+    return _editorial_parts(_editorial_text(glyph_fold(text))[0])[0]
 
 
 def _editorial_kinds(
@@ -318,6 +377,18 @@ def classify_impact(old_text: str | None, new_text: str | None) -> dict:
     if not one_sided and old_folded == new_folded:
         return _result("non_content", "low", kinds=old_kinds | new_kinds or {"whitespace"})
 
+    abbreviation_use = [
+        tuple(len(pattern.findall(text)) for pattern, _ in _ABBREVIATIONS)
+        for text in (old_folded, new_folded)
+    ]
+    old_folded, old_editorial = _editorial_text(old_folded)
+    new_folded, new_editorial = _editorial_text(new_folded)
+    text_kinds = old_editorial | new_editorial
+    if abbreviation_use[0] == abbreviation_use[1]:
+        text_kinds.discard("abbreviation")
+    if not one_sided:
+        old_folded, new_folded, label_kinds = _strip_shared_labels(old_folded, new_folded)
+        text_kinds |= label_kinds
     old_parts = _editorial_parts(old_folded)
     new_parts = _editorial_parts(new_folded)
     old_tokens, new_tokens = old_parts[0], new_parts[0]
@@ -332,7 +403,9 @@ def classify_impact(old_text: str | None, new_text: str | None) -> dict:
         priority = "high" if word_count <= 40 and signals & _ONE_SIDED_PRIORITY_SIGNALS else "normal"
         return _result("content", priority, signals=signals)
     elif old_tokens == new_tokens:
-        kinds = _editorial_kinds(old_parts, new_parts, old, new)
+        kinds = _editorial_kinds(old_parts, new_parts, old_folded, new_folded)
+        if text_kinds:
+            kinds = (kinds - {"orthography"}) | text_kinds if kinds == {"orthography"} else kinds | text_kinds
         return _result("editorial", "low", kinds=kinds)
     else:
         signals = set()

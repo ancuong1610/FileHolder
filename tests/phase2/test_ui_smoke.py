@@ -297,7 +297,14 @@ class ReviewTests(unittest.TestCase):
         stub = StubClient(outline_value=outline)
         at = open_job(make_app(stub))
         self.assertFalse(at.exception)
-        self.assertEqual(at.selectbox(key="f_impact").options, ["Alle", "Inhalt", "Redaktionell", "Verschoben"])
+        self.assertEqual(at.selectbox(key="f_impact").options, [
+            "Alle", "Wichtig (Inhalt, hohe Priorität)", "Inhalt", "Redaktionell", "Verschoben",
+        ])
+        important_id = top["items"][0]["record_id"]
+        at.selectbox(key="f_impact").select("important").run()
+        self.assertFalse(at.exception)
+        self.assertEqual(tree_keys(at), [f"pick::change::{important_id}"])
+        at.selectbox(key="f_impact").select("all").run()
         self.assertFalse(at.checkbox(key="f_local_reorders").value)
         self.assertEqual(at.checkbox(key="f_local_reorders").label, "Lokale Umstellungen anzeigen")
         self.assertIn("pick::move::MOVE-000001", tree_keys(at))

@@ -53,7 +53,10 @@ TYPE_LABELS = {
     "MOVED": "Verschoben",
 }
 KIND_LABELS = {"all": "Alle", "change": "Änderung", "table": "Tabelle", "move": "Verschiebung"}
-IMPACT_LABELS = {"all": "Alle", "content": "Inhalt", "editorial": "Redaktionell", "moved": "Verschoben"}
+IMPACT_LABELS = {
+    "all": "Alle", "important": "Wichtig (Inhalt, hohe Priorität)", "content": "Inhalt",
+    "editorial": "Redaktionell", "moved": "Verschoben",
+}
 IMPACT_FILTER = "Auswirkung"
 EXCLUDED_UNKNOWN_IMPACT = "{count} Befunde ohne Auswirkungsangabe sind ausgeblendet."
 LOCAL_REORDERS = "Lokale Umstellungen anzeigen"
@@ -122,6 +125,17 @@ REVIEW_REASONS = {
     "Possible match on the other side not confirmed": "Mögliche Entsprechung auf der anderen Seite unbestätigt",
     "Block of content moved": "Ein Inhaltsblock wurde verschoben",
     "Short or ambiguous change — LLM could not decide": "Kurze oder mehrdeutige Änderung ohne eindeutige Modelleinschätzung",
+    "Duplicate exact assignment": "Identischer Text mehrfach vorhanden – Zuordnung unklar",
+    "Duplicate exact residual": "Identischer Text mehrfach vorhanden – ohne Gegenstück",
+    "Modified with review evidence": "Geänderter Absatz mit Prüfhinweisen aus der Extraktion",
+    "Hyphenation wrap artifact": "Vermutlich nur Silbentrennung am Zeilenende",
+    "List label only difference": "Nur die Aufzählungsmarke unterscheidet sich",
+    "Single glyph difference": "Ein einzelnes Zeichen unterscheidet sich (möglicher Erkennungsfehler)",
+    "Unresolved table group": "Tabellenzuordnung ungeklärt",
+    "Added table candidate": "Möglicherweise neue Tabelle",
+    "Resegmentation suspect": "Möglicherweise geteilter oder zusammengeführter Absatz",
+    "Beyond aligned coverage": "Außerhalb des abgeglichenen Bereichs",
+    "Structural heading boundary": "Grenze an einer Überschrift verschoben",
     "Needs review": NO_REVIEW_REASON,
     "review item": TYPE_LABELS["REVIEW"],
 }

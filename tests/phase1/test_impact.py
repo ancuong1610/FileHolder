@@ -368,3 +368,34 @@ class CanonicalImpactTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExtractionNoiseImpactTests(unittest.TestCase):
+    """Real-pair noise seen in German PDF extraction (packet 6 frontend audit)."""
+
+    def assertEditorial(self, old, new, kind):
+        impact = classify_impact(old, new)
+        self.assertEqual((impact["level"], impact["priority"]), ("editorial", "low"), (old, new))
+        self.assertIn(kind, impact["kinds"])
+
+    def assertContent(self, old, new):
+        self.assertEqual(classify_impact(old, new)["level"], "content", (old, new))
+
+    def test_line_break_hyphenation_is_editorial(self):
+        self.assertEditorial("Die Risikotragfähigkeitskon- zepte sind", "Die Risikotragfähigkeitskonzepte sind", "hyphenation")
+        self.assertEditorial("Ka- pitaldienstfähigkeit sowie", "Kapital- dienstfähigkeit so- wie", "hyphenation")
+
+    def test_suspended_hyphen_before_conjunction_is_kept(self):
+        self.assertContent("Kredit- und Handelsgeschäft", "Kreditund Handelsgeschäft")
+
+    def test_fixed_abbreviations_are_editorial(self):
+        self.assertEditorial("z. B. Kredite", "zum Beispiel Kredite", "abbreviation")
+        self.assertEditorial("Risikoanalyse gem. Tz.2", "Risikoanalyse gemäß Tz. 2", "abbreviation")
+        self.assertContent("gem. Tz. 2", "gemäß Tz. 3")
+
+    def test_renumbered_list_label_alone_is_editorial(self):
+        self.assertEditorial("f) Die Bank prüft Limits.", "b) Die Bank prüft Limits.", "list_label")
+        impact = classify_impact("f) Die Bank muss prüfen.", "b) Die Bank soll prüfen.")
+        self.assertEqual((impact["level"], impact["priority"]), ("content", "high"))
+        self.assertNotIn("reference", impact["signals"])
+        self.assertContent("1. Januar", "2. Januar")
