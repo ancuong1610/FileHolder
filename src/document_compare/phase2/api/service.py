@@ -564,12 +564,19 @@ def view_page_png(
             located = resolve_locations(_job_dir(job_id) / "output", canonical, kind, record_id)
         except reader.ReaderError as exc:
             raise _reader_http(exc) from exc
-        style = "review" if kind == "review" else style_for(str(located.get("change_type") or ""), side)
+        change_type = str(located.get("change_type") or "")
+        style = "review" if kind == "review" else style_for(change_type, side)
         uncertain = uncertain or bool(located.get("needs_review"))
-        regions = ((located.get("sides") or {}).get(side) or {}).get("regions") or []
+        side_info = (located.get("sides") or {}).get(side) or {}
+        regions = side_info.get("regions") or []
         on_page = [r for r in regions if r.get("page_number") == page]
         polygons = [r["polygon"] for r in on_page]
         roles = [r.get("role") or "element" for r in on_page]
+        marker = side_info.get("insertion_marker")
+        if marker and marker["page_number"] == page:
+            polygons.append(marker["polygon"])
+            roles.append("marker")
+            style = style_for(change_type.removeprefix("TABLE_"), side)
     pdf_path = _job_dir(job_id) / "input" / "document" / f"{side}.pdf"
     if not pdf_path.is_file():
         raise _coded(404, "source_pdf_unavailable", "The source PDF for this side is not available.")

@@ -36,6 +36,32 @@ def _canonical(count=4):
 
 
 class BlockReaderTests(unittest.TestCase):
+    def test_page_metadata_keeps_legacy_results_readable_and_bounds_pages(self):
+        canonical = _canonical()
+        block = canonical["change_blocks"][0]
+        self.assertNotIn("full_pages", reader.project_change_block(block))
+        self.assertNotIn("page_change_id", reader.project_change_block(block))
+        page_id = "PAGE-000001"
+        block.update(full_pages=[2, 1, 1, True, "3"], page_change_id=page_id,
+                     other_side_anchor={"page": 5, "element_id": "NEW-ANCHOR", "position": "after"})
+        details = reader.details(JOB, canonical, kind="block", record_id=BLOCK_ID)["block"]
+        self.assertEqual((details["full_pages"], details["page_change_id"]), ([1, 2], page_id))
+        self.assertNotIn("other_side_anchor", details)
+        with tempfile.TemporaryDirectory() as tmp:
+            canonical["changes"][0]["old"]["primary_page"] = None
+            item, = build_outline(Path(tmp), canonical)["unplaced"]
+            self.assertEqual(item["full_pages"], [1, 2])
+            self.assertEqual(item["page_side"], "old")
+            self.assertEqual(item["page_old"], block["pages"][0])
+            self.assertEqual(item["page_new"], 5)
+            self.assertTrue(item["anchor_new"] and item["context_new"])
+            self.assertFalse(item["anchor_old"] or item["context_old"])
+            block["full_pages"] = []
+            item, = build_outline(Path(tmp), canonical)["unplaced"]
+            self.assertNotIn("full_pages", item)
+        block["full_pages"] = list(range(1, reader.MAX_PAGES + 2))
+        self.assertEqual(len(reader.project_change_block(block)["full_pages"]), reader.MAX_PAGES)
+
     def test_default_search_collapses_members_and_searches_their_text(self):
         canonical = _canonical()
         hit, = reader.search(JOB, canonical, query="Meldung 4", priority="normal",
@@ -114,6 +140,51 @@ class BlockReaderTests(unittest.TestCase):
 
 
 class BlockIntegrationTests(unittest.TestCase):
+    def test_streamlit_labels_full_page_blocks_in_german(self):
+        from tests.phase2.test_ui_smoke import make_app, open_job, page_calls, structure_text, texts
+        from tests.phase2.ui_stub import StubClient
+
+        class PageClient(StubClient):
+            def details(self, job_id, kind, record_id, **options):
+                return reader.details(JOB, canonical, kind=kind, record_id=record_id, **options)
+
+        for side, change_type, pages, label in (
+            ("old", "DELETED", [34], "Seite 34 vollständig gelöscht (Alt)"),
+            ("old", "DELETED", [34, 35, 36], "Seiten 34–36 vollständig gelöscht (Alt)"),
+            ("new", "ADDED", [34, 35, 36], "Seiten 34–36 vollständig hinzugefügt (Neu)"),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                canonical = _canonical()
+                block = canonical["change_blocks"][0]
+                block.update(side=side, change_type=change_type, pages=pages, full_pages=pages,
+                             page_change_id="PAGE-000001",
+                             other_side_anchor={"page": 5, "element_id": "ANCHOR", "position": "after"})
+                for change in canonical["changes"]:
+                    change.update(change_type=change_type)
+                    change[side] = dict(change.pop("old"), primary_page=pages[0])
+                client = PageClient(outline_value=build_outline(Path(tmp), canonical))
+                app = open_job(make_app(client))
+                self.assertFalse(app.exception)
+                row = app.main.button(key=f"pick::block::{BLOCK_ID}")
+                self.assertIn(label, row.label.replace("\\", ""))
+                self.assertIn(label, structure_text(app))
+                self.assertEqual(app.main.expander[0].label, "Änderungen im Block")
+                self.assertIn("Meldung 3", structure_text(app))
+                other = "new" if side == "old" else "old"
+                own_name, other_name = ("Alt", "Neu") if side == "old" else ("Neu", "Alt")
+                action = "entfernt" if side == "old" else "eingefügt"
+                source = "Seite 34" if len(pages) == 1 else "Seiten 34–36"
+                self.assertIn(f":gray[S. 34 ({own_name})]", texts(app.main.markdown))
+                self.assertIn(f"{other_name} · Seite 5 · gestrichelte Linie: hier {action}: {source} ({own_name})",
+                              texts(app.main.caption))
+                if len(pages) > 1:
+                    app.main.selectbox(key=f"block_page::job1::{BLOCK_ID}").set_value(pages[-1]).run()
+                    own_request = [call for call in page_calls(client) if call[2] == side][-1]
+                    self.assertEqual(own_request[3:6], (pages[-1], "block", BLOCK_ID))
+                other_requests = [call[3:6] for call in page_calls(client) if call[2] == other]
+                self.assertTrue(other_requests)
+                self.assertEqual(set(other_requests), {(5, "block", BLOCK_ID)})
+
     def test_http_mcp_and_agent_forward_expansion_and_priority(self):
         from unittest.mock import Mock, patch
 

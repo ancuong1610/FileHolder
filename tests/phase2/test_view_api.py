@@ -135,6 +135,53 @@ class ViewApiTest(_Base):
         self.assertEqual(r.headers["cache-control"], "no-store")
         self.assertTrue(r.content.startswith(PNG))
 
+    def test_page_png_renders_insertion_marker_only_on_its_page(self):
+        ref = {"kind": "change", "record_id": "CHANGE-000002"}
+        root = f"/jobs/{self.job_id}"
+        path = self.root / self.job_id / "output" / "comparison_result.json"
+        original = path.read_text(encoding="utf-8")
+        self.addCleanup(path.write_text, original, encoding="utf-8")
+        canonical = json.loads(original)
+        change = next(row for row in canonical["changes"] if row["change_id"] == ref["record_id"])
+        change["other_side_anchor"] = {"element_id": None, "page": 1, "position": "document_start"}
+        path.write_text(json.dumps(canonical), encoding="utf-8")
+
+        location = self.client.get(f"{root}/view/locations", params=ref).json()
+        self.assertEqual(location["sides"]["new"]["insertion_marker"]["page_number"], 1)
+        self.assertNotIn("insertion_marker", location["sides"]["old"])
+        detail = self.client.get(f"{root}/read/details", params=ref)
+        self.assertEqual(detail.status_code, 200, detail.text)
+        self.assertNotIn("other_side_anchor", detail.json()["change"])
+        marked = self._page(page=1, **ref)
+        self.assertEqual(marked.status_code, 200, marked.text)
+        self.assertTrue(marked.content.startswith(PNG))
+        self.assertNotEqual(marked.content, self._page(page=1).content)
+        self.assertEqual(self._page(page=2, **ref).content, self._page(page=2).content)
+
+    def test_table_marker_uses_deletion_color_and_stays_out_of_reader_details(self):
+        path = self.root / self.job_id / "output" / "comparison_result.json"
+        original = path.read_text(encoding="utf-8")
+        self.addCleanup(path.write_text, original, encoding="utf-8")
+        canonical = json.loads(original)
+        table = {
+            "table_change_id": "TABLE-CHANGE-00001", "change_type": "TABLE_DELETED",
+            "old": {"logical_table_id": "OLD-LT1", "source_pages": [2]}, "new": None,
+            "cell_changes": [],
+            "other_side_anchor": {"element_id": None, "page": 1, "position": "document_start"},
+        }
+        canonical["table_changes"].append(table)
+        ref = {"kind": "table", "record_id": table["table_change_id"]}
+        path.write_text(json.dumps(canonical), encoding="utf-8")
+
+        detail = self.client.get(f"/jobs/{self.job_id}/read/details", params=ref)
+        self.assertEqual(detail.status_code, 200, detail.text)
+        self.assertNotIn("other_side_anchor", detail.json()["table"])
+        with patch.object(service, "render_page", wraps=service.render_page) as render:
+            marked = self._page(page=1, **ref)
+        self.assertEqual(marked.status_code, 200, marked.text)
+        self.assertEqual(render.call_args.kwargs["style"], "deleted")
+        self.assertEqual(render.call_args.kwargs["roles"], ["marker"])
+
     def test_page_png_with_highlight_differs_from_plain(self):
         plain = self._page()
         marked = self._page(**REC)

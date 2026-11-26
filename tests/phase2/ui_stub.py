@@ -11,9 +11,12 @@ PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4
 
 
 def item(kind, record_id, change_type, label, path, page_old=1, page_new=2, context_old=False, context_new=False):
+    pages = {"old": None if context_old else page_old, "new": None if context_new else page_new}
+    pref = ("old", "new") if change_type in ("DELETED", "TABLE_DELETED") else ("new", "old")
+    page_side = next((side for side in pref if pages[side] is not None), None)
     return {"kind": kind, "record_id": record_id, "change_type": change_type, "label": label,
             "page_old": page_old, "page_new": page_new, "context_old": context_old, "context_new": context_new,
-            "section_path": path}
+            "page_side": page_side, "anchor_old": False, "anchor_new": False, "section_path": path}
 
 
 def default_outline() -> dict:

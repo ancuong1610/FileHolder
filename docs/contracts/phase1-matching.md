@@ -73,6 +73,50 @@ using either evidence path. Without corroboration, the record carries
 `exclusion_confirmed_by_other_document: false` and the text stays comparable.
 Source roles, types, text and IDs remain available in the structured document.
 
+## Section parent evidence
+
+Stage 05 section records in `document.structure_evidence.sections` can carry
+`parent_basis` alongside `parent_section_id`, `parent_known`, `level` and
+`level_known`.
+
+| `parent_basis` | Evidence |
+| --- | --- |
+| `numeric_label` | The dotted numeric prefix identifies a unique parent at the preceding level in the same namespace. |
+| `preceding_toc_section` | An unlisted body heading with unknown level and parent follows a TOC- or native-outline-linked section with a known level. The child gets the linked section's level plus one and the uncertainty code `parent_inferred_from_position`. |
+
+The positional pass follows heading reading order and uses the nearest eligible
+linked predecessor. It leaves known levels alone and does not chain inferred
+children. Without a usable printed TOC, unlisted headings use flat fallback.
+These are structure hypotheses. The optional field is absent when neither rule
+supplies a parent. Validation accepts legacy records without the field and checks
+that section parent references resolve and are acyclic.
+
+## Logical table continuation
+
+Stage 10 considers consecutive physical tables in reading order. Both join
+paths require adjacent physical pages, equal nonzero column counts and no
+contradictory local labels or heading boundary. Repeated headers join at
+similarity ≥ 0.80 with shared provisional context
+(`shared_context_repeated_header`) or at ≥ 0.92 without that requirement
+(`strong_repeated_header`).
+
+The geometry fallback requires the previous fragment to be last and the next
+fragment first among body elements on their respective pages. Body order
+skips layout, confirmed furniture and paragraphs represented inside tables.
+Every column needs usable same-page cell geometry and both pages need valid
+widths. Stage 10 divides the leftmost cell edge of each column by the page
+width and requires each absolute column offset to be ≤ 0.02. If both headers
+exist and their similarity is below 0.50, the geometry fallback is vetoed.
+
+The continuation audit (`old_continuation_joins` / `new_continuation_joins`)
+records the decision and `reason_codes`. A geometry join adds
+`geometry_continuation`. When attempted, `evidence.geometry` includes
+`previous_is_last_body_on_page`, `current_is_first_body_on_page` and
+`column_offsets` (null if either set of column starts cannot be measured).
+Other rejection codes include `missing_page_provenance`, `not_adjacent_pages`,
+`column_count_differs`, `contradictory_local_boundary_evidence`,
+`missing_repeated_header` and `header_similarity_below_continuation_threshold`.
+
 ## Gate A: source-bound material evidence and residual safety
 
 Owners: `contracts/semantic_assessment.py`, `matching/semantic_evidence.py`,
@@ -209,6 +253,65 @@ the block entry (listed in `proposal_group_ids`). A residual group with at
 least one counterpart proposal, or spanning several blocks, keeps its own
 review entry. Member change records are never removed. Change disposition still comes from Stage 14's deterministic
 rules, and Stage 13 remains advisory.
+
+## Whole-page changes
+
+Stage 14 groups consecutive qualifying physical pages by side. A page must
+contain at least one non-layout element with an integer primary page. All
+counted elements must belong to same-direction one-sided changes, including TOC
+elements and physical table fragments that belong to a one-sided table change.
+A surviving or modified element disqualifies the page. When structured elements
+are unavailable and table evidence exists for the side, a movement-only replay
+skips this summary on that side because it cannot account for all fragments.
+
+The additive top-level `page_changes` list holds these records.
+
+| Field | Value |
+| --- | --- |
+| `page_change_id` | Positional `PAGE-…` identifier. |
+| `side`, `change_type` | `old` with `DELETED` or `new` with `ADDED`. |
+| `pages` | Ascending consecutive physical page numbers. |
+| `change_ids`, `table_change_ids`, `block_ids` | Member text changes, distinct one-sided table changes and blocks represented by the text members. |
+| `element_count` | Number of counted source elements, including each physical table fragment. |
+| `anchor` | Nearest preceding heading on the changed side, or null. |
+| `other_side_anchor_page` | Physical page of the counterpart of the nearest preceding paired element, or null. |
+| `impact` | Normal-priority `content` with kind `page_deleted` or `page_added`, empty `signals` and the standard deterministic impact metadata. |
+
+Opposite-side anchors use Stage 06 exact matches when available and Stage 09
+`modified`, `modified_review` and `duplicate_exact_review` pairs. Pairs listed
+in `moves` are excluded. The resulting anchor is approximate.
+`statistics.page_changes` counts records, which may each span several pages.
+
+Text members carry `page_change_id`. A logical table change carries it when
+linked to exactly one page group. Every new block has `full_pages`, the sorted
+intersection of its pages with qualifying pages on its side, which may be
+empty. A block also carries `page_change_id` when all its members belong to
+one page group. These summaries preserve member records and their resolution.
+The reviewer uses `full_pages` on blocks for whole-page labels. A page group
+without a block remains in the canonical result and has no standalone UI item.
+
+### Opposite-side display anchors
+
+One-sided change and table records carry `other_side_anchor`. It contains the
+opposite-side `element_id`, its integer `page` (or null when unavailable), and
+`position: "after"` for the counterpart of the nearest preceding paired
+element. The walk uses the same pair set and layout exclusions as whole-page
+changes. A table uses its first source fragment in reading order. A block uses
+the anchor of its first member. If there is no preceding pair and the opposite
+document has elements, the anchor is
+`{"element_id": null, "page": 1, "position": "document_start"}`. If the opposite
+document has no elements and there is no preceding pair, the anchor is null.
+Two-sided changes do not carry the field.
+
+The pair set is exact matches plus modified, modified-review and duplicate-exact
+review pairs, without moved elements, without pairs joining a printed-TOC element
+to a non-TOC element, and reduced to the longest chain that increases in reading
+order on both sides. This keeps anchors in page order when a repeated sentence
+is matched far away. Whole-page anchors use the same pair set.
+
+Whole-page records also carry `other_side_anchor_element_id`, the counterpart ID
+from the same match as `other_side_anchor_page`, or null when unavailable. The
+existing page field keeps its null value when no preceding pair exists.
 
 ## Known limits
 

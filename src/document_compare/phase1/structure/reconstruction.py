@@ -8,9 +8,9 @@ document and returns a versioned, self-contained hypothesis layer:
 * entry-to-body links by conservative exact title matching (duplicates stay
   ambiguous, missing titles stay unmatched, printed and physical pages stay
   separate),
-* tentative section levels/parents only when dotted numeric labels support
-  them (no invented root parents), plus a flat body-anchor fallback when the
-  TOC is absent or unusable,
+* tentative section levels/parents from numeric labels, native outline levels
+  and the position of unlisted headings after linked sections, plus a flat
+  body-anchor fallback when the TOC is absent or unusable,
 * a derived element-membership mapping that accounts for every element once.
 
 The function never reads files, accesses providers, mutates its input or
@@ -930,8 +930,8 @@ def build_structure_evidence(
         section_by_heading_id[heading_id] = section["section_id"]
         section_by_id[section["section_id"]] = section
 
-    # Numeric parent evidence only: never invent a root parent, never cross a
-    # naming namespace, and never resolve a duplicate parent label first-wins.
+    # Numeric parent evidence stays within the same namespace and needs
+    # a unique prefix match.
     for section in sections:
         if not section["level_known"]:
             continue
@@ -950,11 +950,36 @@ def build_structure_evidence(
         if len(parent_matches) == 1:
             section["parent_section_id"] = parent_matches[0]["section_id"]
             section["parent_known"] = True
+            section["parent_basis"] = "numeric_label"
         elif len(parent_matches) > 1:
             # A duplicate parent label must stay ambiguous, never first-wins.
             section["uncertainty"].append("parent_label_ambiguous")
         else:
             section["uncertainty"].append("parent_label_not_found")
+
+    # Outline sections can be stored before earlier TOC sections, so use
+    # heading reading order for positional parent evidence.
+    preceding_linked_section = None
+    for element in ordered:
+        section_id = section_by_heading_id.get(element_id_of(element))
+        if section_id is None:
+            continue
+        section = section_by_id[section_id]
+        if section["basis"] in {"toc_entry_link", "pdf_outline_link"} and section["level_known"]:
+            preceding_linked_section = section
+        elif (
+            preceding_linked_section is not None
+            and section["basis"] == "body_heading_unlisted"
+            and not section["parent_known"]
+            and not section["level_known"]
+        ):
+            section["parent_section_id"] = preceding_linked_section["section_id"]
+            section["parent_known"] = True
+            section["level"] = preceding_linked_section["level"] + 1
+            section["level_known"] = True
+            section["parent_basis"] = "preceding_toc_section"
+            section["uncertainty"].remove("level_and_parent_unknown")
+            section["uncertainty"].append("parent_inferred_from_position")
 
     # ---- derived element membership: every element accounted for once ----
     furniture_layout_ids = furniture_exclusion_ids(derived_furniture)
@@ -1050,7 +1075,11 @@ def build_structure_evidence(
         "limitations": [
             "toc_classification_is_a_hypothesis_not_authoritative_hierarchy",
             "printed_page_references_are_not_mapped_to_physical_pages",
-            "levels_and_parents_are_unknown_without_dotted_numeric_labels",
+            (
+                "positional_parents_require_a_preceding_linked_section_with_a_known_level"
+                if any(section.get("parent_basis") == "preceding_toc_section" for section in sections)
+                else "levels_and_parents_are_unknown_without_dotted_numeric_labels"
+            ),
             "duplicate_or_changed_titles_remain_ambiguous_or_unmatched",
             "repeated_titles_resolve_only_by_a_unique_full_qualified_label_namespace_and_numeric_or_an_unlabeled_exact_title",
             "duplicate_parent_labels_remain_ambiguous",
@@ -1124,11 +1153,28 @@ def validate_structure_evidence(document: dict[str, Any], evidence: dict[str, An
     section_ids = [section.get("section_id") for section in sections]
     require(len(section_ids) == len(set(section_ids)), "structure: duplicate section_id")
     known_sections = set(section_ids)
-    for section in sections:
+    parent_by_section = {}
+    for section_id, section in zip(section_ids, sections):
         require(section.get("heading_element_id") in document_element_ids, "structure: unknown section heading")
         parent = section.get("parent_section_id")
         if parent is not None:
             require(parent in known_sections, f"structure: unknown parent section {parent!r}")
+        parent_basis = section.get("parent_basis")
+        require(
+            parent_basis in (None, "numeric_label", "preceding_toc_section"),
+            f"structure: unknown parent_basis {parent_basis!r}",
+        )
+        parent_by_section[section_id] = parent
+
+    checked_sections = set()
+    for section_id in section_ids:
+        ancestors = set()
+        current = section_id
+        while current is not None and current not in checked_sections:
+            require(current not in ancestors, f"structure: parent cycle at {current!r}")
+            ancestors.add(current)
+            current = parent_by_section[current]
+        checked_sections.update(ancestors)
 
     membership = evidence.get("membership")
     require(isinstance(membership, dict), "structure: membership block missing")

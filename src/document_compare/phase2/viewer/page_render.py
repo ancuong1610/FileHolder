@@ -11,7 +11,7 @@ STYLES = {"deleted": (220, 38, 38), "added": (22, 163, 74), "modified": (217, 11
 FILL_OPACITY = 0.25
 MIN_SCALE, MAX_SCALE = 0.5, 3.0
 MAX_PIXELS = 40_000_000
-ROLES = ("element", "cell", "table")
+ROLES = ("element", "cell", "table", "marker")
 
 
 def style_for(change_type: str, side: str) -> str:
@@ -61,7 +61,7 @@ def render_page(
     if roles is None:
         roles = ["element"] * len(checked)
     if len(roles) != len(checked) or any(r not in ROLES for r in roles):
-        raise ValueError("roles must align with polygons and be table, cell or element")
+        raise ValueError("roles must align with polygons and be table, cell, element or marker")
     color = tuple(c / 255 for c in STYLES[style])
     document = pymupdf.open(str(pdf_path))
     try:
@@ -81,10 +81,11 @@ def render_page(
             ]
             shape = page.new_shape()
             shape.draw_polyline(points + [points[0]])
-            outline_only = role == "table"  # whole-table frame: no tint, thin line
+            outline_only = role in ("table", "marker")
+            stroke_width = {"table": 1, "marker": 2}.get(role, 1.5)
             shape.finish(
                 color=color, fill=None if outline_only else color, fill_opacity=FILL_OPACITY, stroke_opacity=1.0,
-                width=1 if outline_only else 1.5, dashes="[4 3] 0" if uncertain else None, closePath=True,
+                width=stroke_width, dashes="[4 3] 0" if uncertain or role == "marker" else None, closePath=True,
             )
             shape.commit()
         return page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False).tobytes("png")

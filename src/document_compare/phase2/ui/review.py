@@ -333,12 +333,9 @@ def chip_counts(outline: dict) -> dict[str, int]:
 
 
 def _item_page(item: dict) -> int | None:
-    order = ("page_old", "page_new") if bucket(item) == "DELETED" else ("page_new", "page_old")
-    for name in order:
-        page = item.get(name)
-        if isinstance(page, int) and not isinstance(page, bool):
-            return page
-    return None
+    side = item.get("page_side")
+    page = item.get(f"page_{side}")
+    return page if isinstance(page, int) and not isinstance(page, bool) else None
 
 
 def _png_size(data: bytes | None) -> tuple[int, int]:
@@ -463,8 +460,19 @@ def _move_label(item: dict) -> str:
     )
 
 
+def _page_span(pages: list[int]) -> str:
+    first, last = pages[0], pages[-1]
+    return f"{first}–{last}" if last - first + 1 == len(pages) else ", ".join(map(str, pages))
+
+
 def _block_label(item: dict) -> str:
     ctype = item["change_type"]
+    if pages := item.get("full_pages"):
+        action = texts.BLOCK_FULL_PAGE_ACTIONS[ctype]
+        side = texts.SIDE_LABELS[item["side"]]
+        if len(pages) == 1:
+            return texts.BLOCK_FULL_PAGE.format(page=pages[0], action=action, side=side)
+        return texts.BLOCK_FULL_PAGES.format(pages=_page_span(pages), action=action, side=side)
     if item.get("contains_heading"):
         return texts.BLOCK_SECTION[ctype]
     return texts.BLOCK_PARAGRAPHS[ctype].format(count=item["element_count"])
@@ -472,6 +480,7 @@ def _block_label(item: dict) -> str:
 
 def _row(item: dict, selected: dict | None) -> None:
     page = _item_page(item)
+    side = texts.SIDE_LABELS.get(item.get("page_side"))
     label = item.get("label") or item.get("record_id")
     if item.get("kind") == "review":
         label = texts.REVIEW_REASONS.get(label, label)
@@ -480,8 +489,8 @@ def _row(item: dict, selected: dict | None) -> None:
     elif item.get("kind") == "table" and (match := _TABLE_LABEL.fullmatch(label)):
         table_page, cells = match.groups()
         parts = [texts.TABLE_LABEL]
-        if table_page:
-            parts.append(texts.PAGE_SHORT.format(page=table_page))
+        if table_page and side:
+            parts.append(texts.PAGE_SHORT_SIDE.format(page=table_page, side=side))
         if cells:
             cell_text = texts.TABLE_CELLS_ONE if cells == "1" else texts.TABLE_CELLS_MANY
             parts.append(cell_text.format(count=cells))
@@ -498,8 +507,8 @@ def _row(item: dict, selected: dict | None) -> None:
                 key=f"pick::{item['kind']}::{item['record_id']}",
                 on_click=_select, args=(item,), help=str(label),
                 type="primary" if _same(item, selected) else "secondary", **_BUTTON_FILL)
-    if page is not None:
-        right.markdown(f":gray[{texts.PAGE_SHORT.format(page=page)}]")
+    if page is not None and side:
+        right.markdown(f":gray[{texts.PAGE_SHORT_SIDE.format(page=page, side=side)}]")
 
 
 def _open_set() -> set:
@@ -633,6 +642,19 @@ def _show_block_members(client, job_id: str, record_id: str, payload: dict) -> N
                        on_click=st.session_state.__setitem__, args=(key, next_offset))
 
 
+def _anchor_caption(item: dict, payload: dict, side: str, page: int) -> str:
+    caption = texts.ANCHOR_PAGE.format(
+        side=texts.SIDE_LABELS[side], page=page, action=texts.ANCHOR_ACTIONS[bucket(item)],
+    )
+    if item["kind"] == "block" and (pages := payload.get("full_pages") or item.get("full_pages")):
+        source = texts.SIDE_LABELS[item["side"]]
+        if len(pages) == 1:
+            caption += texts.ANCHOR_SOURCE_PAGE.format(page=pages[0], side=source)
+        else:
+            caption += texts.ANCHOR_SOURCE_PAGES.format(pages=_page_span(pages), side=source)
+    return caption
+
+
 def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
     kind, record_id, ck = item["kind"], item["record_id"], _key(client)
     st.markdown(_breadcrumb(item))
@@ -675,7 +697,7 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
     targets: dict[str, int | None] = {}
     context: dict[str, bool] = {}
     for name in ("old", "new"):
-        # a side with no element of this finding shows its section's page, never a highlight
+        # The missing side can show a marked anchor or a plain section page.
         context[name] = bool(item.get(f"context_{name}")) or infos[name].get("counterpart") == "none"
         page = item.get(f"page_{name}")
         if context[name] and isinstance(page, int) and not isinstance(page, bool):
@@ -695,7 +717,7 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
         if page is None:
             continue
         try:
-            if context[side]:
+            if context[side] and not item.get(f"anchor_{side}"):
                 images[side] = _page_png(client, ck, job_id, side, page, None, None, False)
             else:
                 images[side] = _page_png(client, ck, job_id, side, page, kind, record_id, uncertain)
@@ -713,7 +735,10 @@ def _viewer(client, job_id: str, item: dict, flat: list[dict]) -> None:
             name = texts.SIDE_LABELS[side]
             if data:
                 _show_image(data)
-                st.caption(texts.PAGE.format(side=name, page=page) + (texts.SECTION_CONTEXT if context[side] else ""))
+                if item.get(f"anchor_{side}"):
+                    st.caption(_anchor_caption(item, payload, side, page))
+                else:
+                    st.caption(texts.PAGE.format(side=name, page=page) + (texts.SECTION_CONTEXT if context[side] else ""))
             else:
                 _show_image(_placeholder_png(*size))
                 if page is None:

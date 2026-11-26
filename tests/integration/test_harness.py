@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR = ROOT / "tools" / "harness" / "validate.py"
 KNOWLEDGE_TRANSFER = ROOT / "docs" / "KnowlesgeTranser Phase 1.md"
 KNOWLEDGE_TRANSFER_SHA256 = (
-    "2eb2543551dbee3502abec2dce7531708496a77f5596dccc15c7773e317c0b11"
+    "c9ac06a216e6481d45f78820fdae0414934d369610fa59d3f499c13de0447268"
 )
 SKILL_IDS = (
     "bbk-plan",

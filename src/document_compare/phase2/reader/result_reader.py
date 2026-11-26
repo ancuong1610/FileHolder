@@ -681,7 +681,7 @@ def project_change_block(block: dict[str, Any]) -> dict[str, Any]:
     """Expose bounded block metadata without loading member text."""
     anchor = block.get("anchor")
     change_ids = _as_list(block.get("change_ids"))
-    return {
+    projected = {
         "block_id": _record_id(block, "block"),
         "change_type": block.get("change_type"),
         "side": block.get("side"),
@@ -693,6 +693,14 @@ def project_change_block(block: dict[str, Any]) -> dict[str, Any]:
         "change_ids": change_ids[:MAX_METADATA_ITEMS],
         "change_ids_truncated": len(change_ids) > MAX_METADATA_ITEMS,
     }
+    if "full_pages" in block:
+        projected["full_pages"] = sorted({
+            page for page in _as_list(block["full_pages"]) if type(page) is int
+        })[:MAX_PAGES]
+    page_change_id = block.get("page_change_id")
+    if isinstance(page_change_id, str) and 0 < len(page_change_id) <= MAX_RECORD_ID_LENGTH:
+        projected["page_change_id"] = page_change_id
+    return projected
 
 
 def _build_search_records(canonical: dict[str, Any], expand_blocks: bool) -> list[dict[str, Any]]:

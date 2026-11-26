@@ -311,6 +311,25 @@ def _table_side(record: dict[str, Any], side: str, doc: _Doc) -> dict[str, Any]:
     return _side("present", "unavailable", doc)
 
 
+def _insertion_marker(anchor: dict[str, Any], doc: _Doc) -> dict[str, Any] | None:
+    page = _page_of(anchor.get("page"))
+    if page is None or page < 1:
+        return None
+    top = 0.02
+    element_id = anchor.get("element_id")
+    if anchor.get("position") == "after" and isinstance(element_id, str):
+        element = doc.elements.get(element_id) or {}
+        bottom = max(
+            (max(region["polygon"][1::2]) for region in doc.element_regions(element)
+             if region["page_number"] == page),
+            default=None,
+        )
+        if bottom is not None:
+            top = round(min(0.99, bottom + 0.004), 6)
+    bottom = round(top + 0.006, 6)
+    return {"page_number": page, "polygon": [0.04, top, 0.96, top, 0.96, bottom, 0.04, bottom]}
+
+
 def resolve_locations(output_dir: Path, canonical: dict, kind: str, record_id: str) -> dict:
     """Return pages and normalized polygons (0-1) per side for one finding."""
     if kind not in ID_FIELDS:
@@ -345,6 +364,11 @@ def resolve_locations(output_dir: Path, canonical: dict, kind: str, record_id: s
         result["change_type"] = record.get("change_type") if kind == "block" else None
         ids = _review_ids(record, canonical)
         sides = {s: _elements_side(ids[s], docs[s]) for s in SIDES}
+    anchor = record.get("other_side_anchor")
+    if kind in ("change", "block", "table") and isinstance(anchor, dict):
+        for side, info in sides.items():
+            if info["counterpart"] == "none" and (marker := _insertion_marker(anchor, docs[side])):
+                info["insertion_marker"] = marker
     result["sides"] = sides
     linked = []
     if kind == "change":

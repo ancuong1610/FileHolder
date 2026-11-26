@@ -164,6 +164,47 @@ class HandBuiltLocationTests(unittest.TestCase):
             ]
         }
 
+    def test_marker_is_below_lowest_region_on_anchor_page_only(self) -> None:
+        anchor = _element("E1", [
+            _rect(2, 1, 2, 5, 4), _rect(2, 1, 5, 5, 8), _rect(3, 0, 0, 10, 20),
+        ], 2)
+        _write_docs(self.out, None, {"pages": [_page(2), _page(3)], "elements": [anchor]})
+        canonical = self._canonical("OLD", None)
+        canonical["changes"][0].update(change_type="DELETED", other_side_anchor={
+            "element_id": "E1", "page": 2, "position": "after",
+        })
+        sides = resolve_locations(self.out, canonical, "change", "C1")["sides"]
+        self.assertNotIn("insertion_marker", sides["old"])
+        self.assertEqual(sides["new"]["regions"], [])
+        self.assertEqual(sides["new"]["insertion_marker"], {
+            "page_number": 2,
+            "polygon": [0.04, 0.404, 0.96, 0.404, 0.96, 0.41, 0.04, 0.41],
+        })
+        anchor["bounding_regions"].append(_rect(2, 1, 18, 5, 20))
+        _write_docs(self.out, None, {"pages": [_page(2), _page(3)], "elements": [anchor]})
+        marker = resolve_locations(self.out, canonical, "change", "C1")["sides"]["new"]["insertion_marker"]
+        self.assertEqual(marker["polygon"][1::2], [0.99, 0.99, 0.996, 0.996])
+
+    def test_document_start_and_missing_region_use_top_of_anchor_page(self) -> None:
+        canonical = self._canonical(None, "NEW")
+        change = canonical["changes"][0]
+        change["change_type"] = "ADDED"
+        for anchor in (
+            {"element_id": None, "page": 1, "position": "document_start"},
+            {"element_id": "NO-REGION", "page": 2, "position": "after"},
+        ):
+            with self.subTest(anchor=anchor):
+                change["other_side_anchor"] = anchor
+                side = resolve_locations(self.out, canonical, "change", "C1")["sides"]["old"]
+                self.assertEqual(side["insertion_marker"], {
+                    "page_number": anchor["page"],
+                    "polygon": [0.04, 0.02, 0.96, 0.02, 0.96, 0.026, 0.04, 0.026],
+                })
+        for anchor in (None, {"element_id": "E1", "page": None, "position": "after"}):
+            change["other_side_anchor"] = anchor
+            side = resolve_locations(self.out, canonical, "change", "C1")["sides"]["old"]
+            self.assertNotIn("insertion_marker", side)
+
     def test_multi_region_element_returns_every_region(self) -> None:
         pages = [_page(1), _page(2), _page(3)]
         regions = [_rect(2, 1, 2, 5, 4), _rect(3, 0, 0, 10, 20)]

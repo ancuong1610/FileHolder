@@ -101,6 +101,21 @@ class PageRenderTests(unittest.TestCase):
         self.assertNotEqual(table.pixel(*edge), base.pixel(*edge))
         self.assertEqual(_png_pixmap(render_page(self.pdf, 1, [POLY])).samples, cell.samples)  # default = element
 
+    def test_marker_is_dashed_and_unfilled_even_when_certain(self):
+        band = [0.04, 0.50, 0.96, 0.50, 0.96, 0.506, 0.04, 0.506]
+        base = _png_pixmap(render_page(self.pdf, 1, [], scale=2))
+        png = render_page(self.pdf, 1, [band], roles=["marker"], style="deleted", scale=2)
+        self.assertEqual(png, render_page(
+            self.pdf, 1, [band], roles=["marker"], style="deleted", scale=2, uncertain=True,
+        ))
+        marker = _png_pixmap(png)
+        y = marker.height // 2
+        pixels = [marker.pixel(x, y) for x in range(100, 200)]
+        self.assertIn((255, 255, 255), pixels)  # gaps along the stroke
+        self.assertTrue(any(r > 2 * g and r > 2 * b for r, g, b in pixels))
+        y = round(marker.height * 0.503)
+        self.assertEqual(marker.pixel(180, y), base.pixel(180, y))
+
     def test_review_style_is_purple_and_roles_are_validated(self):
         s = 1.5 * 72
         inside = (int(3.0 * s), int(2.97 * s) - 1)

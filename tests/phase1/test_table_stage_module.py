@@ -663,6 +663,123 @@ class ContinuationEvidenceTest(unittest.TestCase):
         self.assertEqual(audit[0]["missing_evidence"], ["local_boundary_context"])
 
 
+class GeometryContinuationTest(unittest.TestCase):
+    @staticmethod
+    def _fragment(page, order, *, width=100, offset=0, columns=2, headers=()):
+        texts = headers or ["Entry"] * columns
+        row = []
+        for column, text in enumerate(texts):
+            left = (0.1 + column * 0.3 + offset) * width
+            cell = _cell(column, text, page=page, kind="columnHeader" if headers else None)
+            cell["primary_polygon"] = [left, 1, left + 2, 1, left + 2, 2, left, 2]
+            row.append(cell)
+        table = _physical_table(page, rows=[row], element_id=f"T{page}", reading_order=order)
+        return {**table, "element_type": "table"}
+
+    @staticmethod
+    def _element(kind, page, order, **flags):
+        return {
+            "element_id": f"P{order}",
+            "primary_page": page,
+            "reading_order": order,
+            "element_type": kind,
+            **flags,
+        }
+
+    def _join(self, previous, current, *others, pages=None, structure_evidence=None):
+        import document_compare.phase1.stages.s10_tables as s10
+
+        if pages is None:
+            pages = [{"page_number": 6, "width": 100}, {"page_number": 7, "width": 200}]
+        context = s10.build_continuation_context(
+            [current, *others, previous], pages=pages, structure_evidence=structure_evidence,
+        )
+        _, audit = s10.group_physical_tables([previous, current], {}, context)
+        return audit[0]
+
+    def test_aligned_columns_join_at_page_edges_without_repeated_headers(self):
+        previous = self._fragment(6, 1)
+        current = self._fragment(7, 6, width=200, offset=0.02)
+        audit = self._join(
+            previous, current,
+            self._element("paragraph", 6, 2, inside_table=True),
+            self._element("footer", 6, 3),
+            self._element("pageHeader", 7, 4),
+            self._element("paragraph", 7, 5),
+            structure_evidence={"membership": {"by_element": {"P5": {"category": "layout"}}}},
+        )
+
+        self.assertTrue(audit["joined"])
+        self.assertEqual(audit["reason_codes"], ["geometry_continuation"])
+        geometry = audit["evidence"]["geometry"]
+        self.assertTrue(geometry["previous_is_last_body_on_page"])
+        self.assertTrue(geometry["current_is_first_body_on_page"])
+        self.assertEqual(len(geometry["column_offsets"]), 2)
+        for offset in geometry["column_offsets"]:
+            self.assertAlmostEqual(offset, 0.02)
+
+    def test_heading_between_fragments_blocks_join(self):
+        for title in ("heading", "title"):
+            with self.subTest(title=title):
+                audit = self._join(
+                    self._fragment(6, 1), self._fragment(7, 3, width=200),
+                    self._element(title, 7, 2),
+                )
+                self.assertFalse(audit["joined"])
+                self.assertEqual(audit["reason_codes"], ["contradictory_local_boundary_evidence"])
+
+    def test_misaligned_columns_block_join(self):
+        previous = self._fragment(6, 1)
+        current = self._fragment(7, 3, width=200)
+        current["table"]["cells"][1]["primary_polygon"] = [85, 1, 87, 1, 87, 2, 85, 2]
+        audit = self._join(previous, current)
+
+        self.assertFalse(audit["joined"])
+        self.assertGreater(audit["evidence"]["geometry"]["column_offsets"][1], 0.02)
+
+    def test_body_element_between_fragments_blocks_join(self):
+        for page, flag in ((6, "previous_is_last_body_on_page"), (7, "current_is_first_body_on_page")):
+            with self.subTest(page=page):
+                audit = self._join(
+                    self._fragment(6, 1), self._fragment(7, 3, width=200),
+                    self._element("paragraph", page, 2),
+                )
+                self.assertFalse(audit["joined"])
+                self.assertFalse(audit["evidence"]["geometry"][flag])
+
+    def test_different_column_counts_block_join(self):
+        audit = self._join(self._fragment(6, 1), self._fragment(7, 3, width=200, columns=3))
+
+        self.assertFalse(audit["joined"])
+        self.assertEqual(audit["reason_codes"], ["column_count_differs"])
+
+    def test_conflicting_headers_block_geometry_join(self):
+        audit = self._join(
+            self._fragment(6, 1, headers=("Region", "Volume")),
+            self._fragment(7, 3, width=200, headers=("Usage", "Limit")),
+        )
+
+        self.assertFalse(audit["joined"])
+        self.assertEqual(audit["reason_codes"], ["header_similarity_below_continuation_threshold"])
+
+    def test_geometry_checks_headers_below_existing_join_thresholds(self):
+        audit = self._join(
+            self._fragment(6, 1, headers=("Region", "Volume")),
+            self._fragment(7, 3, width=200, headers=("Region", "Limit")),
+        )
+
+        self.assertTrue(audit["joined"])
+        self.assertEqual(audit["reason_codes"], ["geometry_continuation"])
+
+    def test_missing_geometry_blocks_join(self):
+        previous = self._fragment(6, 1)
+        current = self._fragment(7, 3, width=200)
+
+        self.assertFalse(self._join(previous, current, pages=[])["joined"])
+        del current["table"]["cells"][1]["primary_polygon"]
+        self.assertFalse(self._join(previous, current)["joined"])
+
+
 class BoundedTableRetrievalTest(unittest.TestCase):
     """Bounded retrieval must retain uncertainty rather than infer absence."""
 

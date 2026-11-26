@@ -377,12 +377,16 @@ class ReviewTests(unittest.TestCase):
 
     def test_table_label_is_localized(self):
         outline = default_outline()
-        outline["sections"][0]["items"].append(
-            item("table", "TABLE-000001", "TABLE_MODIFIED", "Table · p.2 · 1 cell changed", ["Section A"])
-        )
+        outline["sections"][0]["items"].extend([
+            item("table", "TABLE-000001", "TABLE_MODIFIED", "Table · p.2 · 1 cell changed", ["Section A"]),
+            item("table", "TABLE-000002", "TABLE_DELETED", "Table · p.1", ["Section A"], context_new=True),
+        ])
         at = open_job(make_app(StubClient(outline_value=outline)))
         button = at.main.button(key="pick::table::TABLE-000001")
-        self.assertIn("Tabelle · S\\. 2 · 1 Zelle geändert", button.label)
+        self.assertIn("Tabelle · S. 2 (Neu) · 1 Zelle geändert", button.label.replace("\\", ""))
+        button = at.main.button(key="pick::table::TABLE-000002")
+        self.assertIn("Tabelle · S. 1 (Alt)", button.label.replace("\\", ""))
+        self.assertIn(":gray[S. 1 (Alt)]", texts(at.main.markdown))
 
     def test_tree_structure_and_default_selection(self):
         stub = StubClient()
@@ -403,7 +407,7 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(tree_keys(at), ["pick::change::CHANGE-000001"])  # B's item hidden while collapsed
         self.assertTrue(labels["pick::change::CHANGE-000001"].startswith(":orange[\u25cf]"))
         self.assertIn("supported snippet", labels["pick::change::CHANGE-000001"])
-        self.assertIn(":gray[S. 2]", texts(at.main.markdown))
+        self.assertIn(":gray[S. 2 (Neu)]", texts(at.main.markdown))
         self.assertIn(":gray-badge[2]", texts(at.main.markdown))
         types = {b.key: b.proto.type for b in at.main.button if (b.key or "").startswith(("pick::", "tog::"))}
         self.assertEqual(types["pick::change::CHANGE-000001"], "primary")
@@ -531,6 +535,30 @@ class ReviewTests(unittest.TestCase):
         self.assertIn("Neu \u00b7 Seite 2 \u00b7 Abschnittskontext", texts(at.main.caption))
         new_call = [c for c in page_calls(stub) if c[2] == "new"][-1]
         self.assertEqual(new_call[4:6], (None, None))
+
+    def test_one_sided_finding_requests_the_anchor_with_record_and_uses_german_caption(self):
+        for change_type, own, other, own_label, other_label, action in (
+            ("DELETED", "old", "new", "Alt", "Neu", "entfernt"),
+            ("ADDED", "new", "old", "Neu", "Alt", "eingefügt"),
+        ):
+            with self.subTest(change_type=change_type):
+                cid = "CHANGE-000001"
+                outline = default_outline()
+                row = item("change", cid, change_type, "Text", ["Section A"],
+                           context_old=other == "old", context_new=other == "new")
+                row.update({f"page_{own}": 3, f"page_{other}": 4, f"anchor_{other}": True})
+                outline["sections"][0]["items"] = [row]
+                stub = StubClient(outline_value=outline, locations_value={
+                    "sides": {own: side(primary_page=3), other: side("none", "unavailable", 4, None)},
+                })
+                app = open_job(make_app(stub))
+                self.assertFalse(app.exception)
+                self.assertIn(f":gray[S. 3 ({own_label})]", texts(app.main.markdown))
+                self.assertIn(
+                    f"{other_label} · Seite 4 · gestrichelte Linie: hier {action}", texts(app.main.caption),
+                )
+                call = next(call for call in page_calls(stub) if call[2] == other)
+                self.assertEqual(call[3:6], (4, "change", cid))
 
     def test_unrenderable_context_side_keeps_placeholder(self):
         stub = StubClient(png=None)

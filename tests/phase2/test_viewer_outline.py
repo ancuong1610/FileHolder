@@ -125,7 +125,8 @@ class SeededJobTests(unittest.TestCase):
         self.assertEqual(self.outline["documents"], {"old": {"page_count": 3}, "new": {"page_count": 3}})
         item = next(i for n in _walk(self.outline["sections"]) for i in n["items"] if i["kind"] == "change")
         self.assertEqual(set(item), {"kind", "record_id", "change_type", "label", "page_old", "page_new",
-                                    "context_old", "context_new", "section_path", "needs_review", "review_reason",
+                                    "page_side", "anchor_old", "anchor_new", "context_old", "context_new",
+                                    "section_path", "needs_review", "review_reason",
                                     "review_ids", "llm_opinion", "impact"})
         self.assertTrue(item["section_path"])
         self.assertEqual([n["side"] for n in self.outline["sections"]], ["new"] * len(self.outline["sections"]))
@@ -134,18 +135,19 @@ class SeededJobTests(unittest.TestCase):
         by_id = {i["record_id"]: (n["title"], i) for n in _walk(self.outline["sections"]) for i in n["items"]}
         title, deleted = by_id["CHANGE-000002"]
         self.assertEqual(deleted["change_type"], "DELETED")
+        self.assertEqual(deleted["page_side"], "old")
         self.assertTrue(deleted["context_new"] and not deleted["context_old"])
-        self.assertIsNotNone(deleted["page_new"])  # section context page on the new side
+        self.assertTrue(deleted["anchor_new"] and not deleted["anchor_old"])
+        self.assertIsNotNone(deleted["page_new"])
         self.assertEqual(deleted["section_path"][-1], title)
-        added_title, added = by_id["CHANGE-000003"]
+        _, added = by_id["CHANGE-000003"]
         self.assertEqual(added["change_type"], "ADDED")
+        self.assertEqual(added["page_side"], "new")
         self.assertTrue(added["context_old"] and not added["context_new"])
-        self.assertIsNotNone(added["page_old"])
-        old_doc = json.loads((self.out / "old_document_structured.json").read_text("utf-8"))["document"]
-        heading = next(sec["heading_element_id"] for sec in old_doc["structure_evidence"]["sections"]
-                       if sec["title"] == added_title)
-        expected = next(e["primary_page"] for e in old_doc["elements"] if e["element_id"] == heading)
-        self.assertEqual(added["page_old"], expected)
+        self.assertTrue(added["anchor_old"] and not added["anchor_new"])
+        canonical_by_id = {item["change_id"]: item for item in self.canonical["changes"]}
+        for item, other in ((deleted, "new"), (added, "old")):
+            self.assertEqual(item[f"page_{other}"], canonical_by_id[item["record_id"]]["other_side_anchor"]["page"])
 
     def test_no_structured_files_everything_unplaced(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -275,6 +277,45 @@ class ReviewLinkTests(unittest.TestCase):
                  "cell_changes": [{"classification": "UNCHANGED", "old": None, "new": {"primary_page": 2}}]}
         result = build_outline(self.out, {"table_changes": [table]})
         self.assertEqual(result["unplaced"][0]["label"], "Table \u00b7 p.2")
+        self.assertEqual(result["unplaced"][0]["page_side"], "new")
+
+    def test_table_reviews_use_first_source_page_on_preferred_side(self):
+        deleted = {
+            "table_change_id": "TABLE-CHANGE-00001", "change_type": "TABLE_DELETED",
+            "source_table_match_id": "OLD-LT1",
+            "old": {"logical_table_id": "OLD-LT1", "source_pages": [7, 8]}, "new": None,
+            "cell_changes": [{"classification": "DELETED", "old": {"primary_page": 8}}],
+            "other_side_anchor": {"element_id": "N1", "page": 3, "position": "after"},
+        }
+        modified = {
+            "table_change_id": "TABLE-CHANGE-00002", "change_type": "TABLE_MODIFIED",
+            "old": {"logical_table_id": "OLD-LT2", "source_pages": [9]},
+            "new": {"logical_table_id": "NEW-LT2", "source_pages": [5, 6]},
+            "cell_changes": [{"classification": "MODIFIED", "new": {"primary_page": 6}}],
+        }
+        reviews = [
+            {"review_id": "R1", "source_kind": "table_change", "table_change_id": deleted["table_change_id"]},
+            {"review_id": "R2", "source_kind": "table_change", "source_candidate_id": "OLD-LT1"},
+            {"review_id": "R3", "source_kind": "table_change", "evidence": {"logical_table_id": "NEW-LT2"}},
+            {"review_id": "R4", "source_kind": "unresolved_table_group", "evidence": {
+                "old_tables": [{"logical_table_id": "OLD-LT3", "source_pages": [11]}],
+                "new_tables": [{"logical_table_id": "NEW-LT3", "source_pages": [12, 13]}],
+            }},
+            {"review_id": "R5", "source_kind": "unresolved_table_group",
+             "evidence": {"old_table_ids": ["OLD-LT2"], "new_table_ids": ["NEW-LT2"]}},
+        ]
+        result = build_outline(self.out, {"table_changes": [deleted, modified], "review_queue": reviews})
+        rows = {item["record_id"]: item for item in result["unplaced"]}
+        table = rows[deleted["table_change_id"]]
+        self.assertEqual((table["page_side"], table["page_old"], table["page_new"]), ("old", 8, 3))
+        self.assertTrue(table["context_new"] and table["anchor_new"])
+        self.assertEqual(table["label"], "Table · p.8 · 1 cell changed")
+        for record_id, side, page in (("R1", "old", 7), ("R2", "old", 7), ("R3", "new", 5),
+                                      ("R4", "new", 12), ("R5", "new", 5)):
+            with self.subTest(record_id=record_id):
+                item = rows[record_id]
+                self.assertEqual((item["page_side"], item[f"page_{side}"]), (side, page))
+                self.assertFalse(item["anchor_old"] or item["anchor_new"])
 
 
 class HandMadeTests(unittest.TestCase):
@@ -400,6 +441,7 @@ class HandMadeTests(unittest.TestCase):
         self.assertEqual(moved["impact"], move["impact"])
         self.assertEqual((moved["from_anchor"], moved["to_anchor"]), ("Früher", "Jetzt"))
         self.assertEqual((moved["page_old"], moved["page_new"]), (1, 2))
+        self.assertEqual(moved["page_side"], "new")
         self.assertFalse(moved["context_old"] or moved["context_new"])
         self.assertIsNone(legacy["impact"])
 
@@ -446,6 +488,17 @@ class ContextPageTests(unittest.TestCase):
         self.assertEqual((self._item({"changes": [change]}, "C1")["page_old"]), 3)  # span 1-3, change on p.3
         change["new"]["primary_page"] = 7
         self.assertEqual((self._item({"changes": [change]}, "C1")["page_old"]), 3)  # clamped to span end
+
+    def test_preferred_side_without_own_page_falls_back_to_other_own_page(self):
+        self._docs([_section("N1", "Scope")], [_section("O1", "Scope")],
+                   {"N1": 2}, {"O1": 4}, {"NE": "N1"}, {"OE": "O1"})
+        change = _change("C1", "MODIFIED", old="OE", new="NE")
+        change["old"]["primary_page"] = 6
+        change["new"]["primary_page"] = None
+        row = self._item({"changes": [change]}, "C1")
+        self.assertTrue(row["context_new"])
+        self.assertFalse(row["anchor_new"])
+        self.assertEqual((row["page_side"], row["page_old"], row["page_new"]), ("old", 6, 2))
 
     def test_section_only_on_one_side_uses_nearest_previous_section(self):
         self._docs([_section("N1", "Intro"), _section("N2", "Fresh"), _section("N3", "Outro")],

@@ -7,8 +7,8 @@ Input  : ``<root>/output/old_document_structured.json`` and
          movement/structural reconciliation evidence).
 
 Work   : Groups physical table elements into logical tables across
-         adjacent-page continuations (same columns, repeated header, with
-         optional shared provisional-context support), matches logical
+         adjacent-page continuations using repeated headers or aligned
+         columns at body page edges, matches logical
          tables exactly then by reciprocal similarity with provisional
          context support, aligns rows, compares cells with conservative
          layout normalization (aggressive artifact normalization is
@@ -39,10 +39,12 @@ cells only).
 from document_compare.shared.paths import find_project_root
 from document_compare.phase1.extraction.di_fields import get_page_number, set_page_number
 from document_compare.phase1.contracts.validation import require
+from document_compare.phase1.structure.furniture import LAYOUT_ELEMENT_TYPES, furniture_exclusion_ids
 
 # ---- imports and configuration constants ----
 
 import json
+import math
 import re
 import unicodedata
 from collections import Counter, defaultdict
@@ -368,6 +370,33 @@ def _continuation_boundary_evidence(
     }
 
 
+def _normalized_column_starts(
+    fragment: dict[str, Any], column_count: int, page_width: float | None,
+) -> list[float] | None:
+    """Measure a left edge for every column from cells on the fragment page."""
+    if not isinstance(page_width, (int, float)) or not math.isfinite(page_width) or page_width <= 0:
+        return None
+
+    left_edges: dict[int, float] = {}
+    for cell in table_cells(fragment):
+        column = cell.get("column_index")
+        if not isinstance(column, int) or not 0 <= column < column_count:
+            continue
+        if cell.get("primary_page") != fragment.get("primary_page"):
+            continue
+        polygon = cell.get("primary_polygon")
+        if not isinstance(polygon, list) or len(polygon) < 6 or len(polygon) % 2:
+            continue
+        if not all(isinstance(coordinate, (int, float)) and math.isfinite(coordinate) for coordinate in polygon):
+            continue
+        left = min(polygon[::2]) / page_width
+        left_edges[column] = min(left, left_edges.get(column, left))
+
+    if len(left_edges) != column_count:
+        return None
+    return [left_edges[column] for column in range(column_count)]
+
+
 def can_continue_logical_table(
     previous: dict[str, Any],
     current: dict[str, Any],
@@ -415,10 +444,7 @@ def can_continue_logical_table(
     )
     evidence["header_similarity"] = similarity
 
-    if not previous_header or not current_header:
-        evidence["reason_codes"].append("missing_repeated_header")
-        return False, evidence
-
+    has_both_headers = bool(previous_header and current_header)
     context_support = same_document_context_support(previous, current, key_map)
     evidence["context_support"] = context_support
     boundary = _continuation_boundary_evidence(
@@ -439,7 +465,39 @@ def can_continue_logical_table(
         evidence["reason_codes"].append("strong_repeated_header")
         return True, evidence
 
-    evidence["reason_codes"].append("header_similarity_below_continuation_threshold")
+    # A conflicting pair of real headers cannot be rescued by alignment.
+    if not has_both_headers or similarity >= 0.50:
+        by_table = (continuation_context or {}).get("by_table") or {}
+        previous_info = by_table.get(previous.get("element_id")) or {}
+        current_info = by_table.get(current.get("element_id")) or {}
+        previous_starts = _normalized_column_starts(
+            previous, previous_columns, previous_info.get("page_width"),
+        )
+        current_starts = _normalized_column_starts(
+            current, current_columns, current_info.get("page_width"),
+        )
+        column_offsets = (
+            [round(abs(left - right), 12) for left, right in zip(previous_starts, current_starts)]
+            if previous_starts is not None and current_starts is not None
+            else None
+        )
+        is_last_body = bool(previous_info.get("is_last_body_on_page"))
+        is_first_body = bool(current_info.get("is_first_body_on_page"))
+        evidence["geometry"] = {
+            "previous_is_last_body_on_page": is_last_body,
+            "current_is_first_body_on_page": is_first_body,
+            "column_offsets": column_offsets,
+        }
+        if (
+            is_last_body and is_first_body and column_offsets is not None
+            and all(offset <= 0.02 for offset in column_offsets)
+        ):
+            evidence["reason_codes"].append("geometry_continuation")
+            return True, evidence
+
+    evidence["reason_codes"].append(
+        "header_similarity_below_continuation_threshold" if has_both_headers else "missing_repeated_header"
+    )
     return False, evidence
 
 
@@ -1651,12 +1709,24 @@ def residual_context_key(
     return table.get("nearest_provisional_context_key")
 
 
-def build_continuation_context(elements: list[dict[str, Any]]) -> dict[str, Any]:
-    """Collect conservative local labels/boundaries around physical tables.
+def build_continuation_context(
+    elements: list[dict[str, Any]],
+    *,
+    pages: list[dict[str, Any]] | None = None,
+    structure_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Collect local boundaries and body page edges around physical tables.
 
-    This is deliberately evidence-only.  It uses adjacent reading-order
-    elements on the same page where available and never infers hierarchy.
+    Labels and headings use immediate same-page neighbors. Body positions
+    exclude layout, furniture and source paragraphs represented by tables.
     """
+    page_widths = {page.get("page_number"): page.get("width") for page in pages or []}
+    structure = structure_evidence or {}
+    membership = (structure.get("membership") or {}).get("by_element") or {}
+    layout_ids = furniture_exclusion_ids(structure.get("furniture") or {}) | {
+        element_id for element_id, member in membership.items() if member.get("category") == "layout"
+    }
+    layout_types = LAYOUT_ELEMENT_TYPES | {"pageHeader", "pageFooter", "pageNumber"}
     ordered = sorted(
         elements,
         key=lambda item: (
@@ -1665,6 +1735,20 @@ def build_continuation_context(elements: list[dict[str, Any]]) -> dict[str, Any]
             item.get("element_id") or "",
         ),
     )
+    first_body: dict[int, int] = {}
+    last_body: dict[int, int] = {}
+    for index, element in enumerate(ordered):
+        page = element.get("primary_page")
+        if (
+            not isinstance(page, int)
+            or element.get("element_type") in layout_types
+            or element.get("element_id") in layout_ids
+            or element.get("inside_table")
+        ):
+            continue
+        first_body.setdefault(page, index)
+        last_body[page] = index
+
     by_table: dict[str, dict[str, Any]] = {}
     for index, element in enumerate(ordered):
         if element.get("element_type") != "table" or not element.get("element_id"):
@@ -1687,6 +1771,9 @@ def build_continuation_context(elements: list[dict[str, Any]]) -> dict[str, Any]
             "nearby_labels": nearby_labels,
             "preceding_boundaries": preceding_boundaries,
             "following_boundaries": following_boundaries,
+            "is_last_body_on_page": last_body.get(page) == index,
+            "is_first_body_on_page": first_body.get(page) == index,
+            "page_width": page_widths.get(page),
         }
     return {"by_table": by_table}
 
@@ -1877,10 +1964,14 @@ def main() -> None:
     old_anchor_keys = anchor_key_map(old_meta)
     new_anchor_keys = anchor_key_map(new_meta)
     old_continuation_context = build_continuation_context(
-        list(old_meta.get("elements") or [])
+        list(old_meta.get("elements") or []),
+        pages=old_meta.get("pages"),
+        structure_evidence=old_meta.get("structure_evidence"),
     )
     new_continuation_context = build_continuation_context(
-        list(new_meta.get("elements") or [])
+        list(new_meta.get("elements") or []),
+        pages=new_meta.get("pages"),
+        structure_evidence=new_meta.get("structure_evidence"),
     )
 
     old_tables, old_join_audit = make_logical_tables(
@@ -2054,7 +2145,7 @@ def main() -> None:
                 "document.elements[element_type=table]",
             "page_continuation_joining_performed": True,
             "page_continuation_evidence":
-                "adjacent_page_same_columns_repeated_header_with_optional_provisional_context_support",
+                "adjacent_page_same_columns_repeated_header_or_page_edge_geometry",
             "repeated_continuation_headers_omitted": True,
             "authoritative_hierarchy_used": False,
             "automatic_anchor_repairs_used": False,

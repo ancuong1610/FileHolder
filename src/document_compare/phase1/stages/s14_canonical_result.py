@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections import Counter
+from bisect import bisect_left
+from collections import Counter, defaultdict
 from collections.abc import Callable
+from itertools import groupby
 from pathlib import Path
 from typing import Any
 
@@ -1086,17 +1088,17 @@ def _block_source(movement: dict[str, Any], side: str, structure_dir: Path | Non
         if path.is_file():
             elements = load_json(path)["document"]["elements"]
             layout, anchors = load_structure_context(structure_dir, side, comparable)
-            return elements, layout, anchors
+            return elements, layout, anchors, True
     return comparable.values(), set(), {
         order: element["text"]
         for element in comparable.values()
         if element.get("element_type") in STRUCTURAL_TYPES and element.get("text")
         and not is_layout(element) and (order := reading_order(element)) is not None
-    }
+    }, False
 
 
 def _build_change_blocks(
-    changes: list[dict[str, Any]], movement: dict[str, Any], structure_dir: Path | None,
+    changes: list[dict[str, Any]], sources: dict[str, tuple],
 ) -> list[dict[str, Any]]:
     blocks = []
 
@@ -1140,7 +1142,7 @@ def _build_change_blocks(
         }
         if len(by_element) < 3:
             continue
-        elements, layout, headings = _block_source(movement, side, structure_dir)
+        elements, layout, headings, _ = sources[side]
         ordered = sorted(
             (element for element in elements if reading_order(element) is not None),
             key=reading_order,
@@ -1166,6 +1168,249 @@ def _build_change_blocks(
             heading = heading_text or heading
         add_block(run, anchor, contains_heading, side, change_type)
     return blocks
+
+
+def _toc_element_ids(structure_dir: Path | None, side: str) -> set[str]:
+    """Element IDs Stage 05 assigned to the printed table of contents."""
+    path = structure_dir / f"{side}_document_structured.json" if structure_dir is not None else None
+    if path is None or not path.is_file():
+        return set()
+    evidence = load_json(path)["document"].get("structure_evidence") or {}
+    by_element = (evidence.get("membership") or {}).get("by_element") or {}
+    return {eid for eid, info in by_element.items() if (info or {}).get("category") == "toc"}
+
+
+def _matched_anchor_pairs(movement, moves, exact_matches, toc_ids=None):
+    """Index the same non-moved, in-order pairs in each direction.
+
+    Skipped: moved elements; a pair that joins a TOC line on one side to a body
+    element on the other (it would anchor body changes on the TOC page); and
+    pairs off the longest run that is increasing in reading order on both sides
+    (a repeated sentence matched far away would send the anchor there).
+    """
+    toc_ids = toc_ids or {"old": set(), "new": set()}
+    moved_ids = {
+        element_id for move in moves or []
+        for key in ("old_element_ids", "new_element_ids") for element_id in move.get(key) or []
+    }
+    pairs = [
+        pair for pair in list(exact_matches or []) + [
+            pair for group in ("modified", "modified_review", "duplicate_exact_review")
+            for pair in movement.get(group) or []
+        ]
+        if (pair.get("old") or {}).get("element_id") and (pair.get("new") or {}).get("element_id")
+        and pair["old"]["element_id"] not in moved_ids and pair["new"]["element_id"] not in moved_ids
+        and (pair["old"]["element_id"] in toc_ids["old"]) == (pair["new"]["element_id"] in toc_ids["new"])
+    ]
+    pairs = _in_order_pairs(pairs)
+    return {
+        side: {pair[side]["element_id"]: pair[other] for pair in pairs}
+        for side, other in (("old", "new"), ("new", "old"))
+    }
+
+
+def _in_order_pairs(pairs):
+    """Pairs on one longest chain increasing in old and new reading order.
+
+    Pairs without a reading order on both sides are kept unchanged.
+    """
+    ordered, unordered = [], []
+    for pair in pairs:
+        old_order, new_order = reading_order(pair["old"]), reading_order(pair["new"])
+        if type(old_order) is int and type(new_order) is int:
+            ordered.append((old_order, new_order, pair))
+        else:
+            unordered.append(pair)
+    # Sort by old order; equal old orders by descending new order so at most one is chosen.
+    ordered.sort(key=lambda item: (item[0], -item[1]))
+    tails: list[int] = []
+    tail_index: list[int] = []
+    previous = [-1] * len(ordered)
+    for index, (_, new_order, _) in enumerate(ordered):
+        slot = bisect_left(tails, new_order)
+        if slot == len(tails):
+            tails.append(new_order)
+            tail_index.append(index)
+        else:
+            tails[slot] = new_order
+            tail_index[slot] = index
+        previous[index] = tail_index[slot - 1] if slot else -1
+    chain = []
+    index = tail_index[-1] if tail_index else -1
+    while index != -1:
+        chain.append(ordered[index][2])
+        index = previous[index]
+    return unordered + chain[::-1]
+
+
+def _walk_anchor_context(source, matches):
+    """Yield eligible elements with their preceding heading and paired counterpart."""
+    elements, layout, headings, _ = source
+    ordered = sorted(elements, key=lambda element: (
+        (order := reading_order(element)) is None, order or 0,
+    ))
+    heading = preceding = None
+    for element in ordered:
+        element_id = element["element_id"]
+        if element_id in layout or is_layout(element):
+            continue
+        yield element, heading, preceding
+        heading = headings.get(reading_order(element)) or heading
+        preceding = matches.get(element_id, preceding)
+
+
+def _anchor_page(element):
+    page = (element or {}).get("primary_page")
+    return page if type(page) is int else None
+
+
+def _add_other_side_anchors(records, context, matches, has_other_elements):
+    """Attach display anchors to records keyed by their first source element."""
+    if not records:
+        return
+    preceding_by_id = {element["element_id"]: preceding for element, _, preceding in context}
+    # A replay can carry table metadata without the physical fragments. Use
+    # the first fragment's saved reading order against the same eligible walk.
+    ordered_matches = [
+        (order, matches[element["element_id"]]) for element, _, _ in context
+        if element["element_id"] in matches and (order := reading_order(element)) is not None
+    ]
+    match_orders = [order for order, _ in ordered_matches]
+    for record, element_id, order in records:
+        preceding = preceding_by_id.get(element_id)
+        if element_id not in preceding_by_id and type(order) is int:
+            index = bisect_left(match_orders, order)
+            if index:
+                preceding = ordered_matches[index - 1][1]
+        if preceding is not None:
+            anchor = {
+                "element_id": preceding.get("element_id"),
+                "page": _anchor_page(preceding),
+                "position": "after",
+            }
+        elif has_other_elements:
+            anchor = {"element_id": None, "page": 1, "position": "document_start"}
+        else:
+            anchor = None
+        record["other_side_anchor"] = anchor
+
+
+def _has_table_elements(tables, side, table_group):
+    return (
+        bool(tables.get(table_group))
+        or any(pair.get(side) for pair in tables.get("table_matches") or [])
+        or any(group.get(f"{side}_tables") for group in tables.get("unresolved_table_groups") or [])
+    )
+
+
+def _build_page_changes(
+    changes: list[dict[str, Any]],
+    table_changes: list[dict[str, Any]],
+    blocks: list[dict[str, Any]],
+    movement: dict[str, Any],
+    tables: dict[str, Any],
+    sources: dict[str, tuple],
+    moves: list[dict[str, Any]] | None = None,
+    exact_matches: list[dict[str, Any]] | None = None,
+    toc_ids: dict[str, set[str]] | None = None,
+) -> list[dict[str, Any]]:
+    page_changes = []
+    matches = _matched_anchor_pairs(movement, moves, exact_matches, toc_ids)
+    table_groups = {"old": "deleted_table_candidates", "new": "added_table_candidates"}
+    has_table_elements = {
+        side: _has_table_elements(tables, side, group) for side, group in table_groups.items()
+    }
+    pages_by_side: dict[str, set[int]] = {"old": set(), "new": set()}
+    changes_to_page_group: dict[str, str] = {}
+    groups_by_table_change = defaultdict(list)
+
+    for side, counterpart, change_type in (("old", "new", "DELETED"), ("new", "old", "ADDED")):
+        one_sided_changes = [
+            item for item in changes if item["change_type"] == change_type and item.get(side)
+        ]
+        anchor_targets = [
+            (item, item[side]["element_id"], reading_order(item[side])) for item in one_sided_changes
+        ]
+        changes_by_element = {item[side]["element_id"]: item for item in one_sided_changes}
+        tables_by_element = {}
+        for item in table_changes:
+            if item["change_type"] == f"TABLE_{change_type}" and (part := item.get(side)):
+                fragment_ids = part.get("source_table_ids") or [part.get("element_id")]
+                anchor_targets.append((item, fragment_ids[0], part.get("first_reading_order")))
+                for element_id in fragment_ids:
+                    if element_id:
+                        tables_by_element[element_id] = item
+
+        context = list(_walk_anchor_context(sources[side], matches[side]))
+        other_elements, _, _, other_structured = sources[counterpart]
+        has_other_elements = bool(other_elements) or (
+            not other_structured and bool(matches[counterpart] or has_table_elements[counterpart])
+        )
+        _add_other_side_anchors(anchor_targets, context, matches[side], has_other_elements)
+        if not sources[side][3] and has_table_elements[side]:
+            # Movement-only replays omit physical table fragments, including
+            # fragments whose logical tables have no canonical change record.
+            continue
+
+        page_members = defaultdict(list)
+        page_context = {}
+        for index, (element, heading, preceding) in enumerate(context):
+            if type(page := element.get("primary_page")) is int:
+                page_context.setdefault(page, (index, heading, preceding))
+                records = tables_by_element if element.get("element_type") == "table" else changes_by_element
+                page_members[page].append(records.get(element["element_id"]))
+
+        qualifying = sorted(page for page, members in page_members.items() if all(members))
+        for _, run in groupby(enumerate(qualifying), key=lambda pair: pair[1] - pair[0]):
+            pages = [page for _, page in run]
+            members = [item for page in pages for item in page_members[page]]
+            member_changes = [item for item in members if "change_id" in item]
+            table_change_ids = list(dict.fromkeys(
+                item["table_change_id"] for item in members if "table_change_id" in item
+            ))
+            page_change_id = f"PAGE-{len(page_changes)+1:06d}"
+            _, anchor, preceding = min(page_context[page] for page in pages)
+            page_changes.append({
+                "page_change_id": page_change_id,
+                "side": side,
+                "change_type": change_type,
+                "pages": pages,
+                "change_ids": [item["change_id"] for item in member_changes],
+                "table_change_ids": table_change_ids,
+                "block_ids": sorted({item["block_id"] for item in member_changes if "block_id" in item}),
+                "element_count": len(members),
+                "anchor": anchor,
+                "other_side_anchor_page": _anchor_page(preceding),
+                "other_side_anchor_element_id": (preceding or {}).get("element_id"),
+                "impact": {
+                    "version": IMPACT_VERSION,
+                    "level": "content",
+                    "priority": "normal",
+                    "kinds": ["page_deleted" if side == "old" else "page_added"],
+                    "signals": [],
+                    "basis": "deterministic_rule",
+                    "language_profile": "de-en",
+                },
+            })
+            pages_by_side[side].update(pages)
+            for item in member_changes:
+                item["page_change_id"] = page_change_id
+                changes_to_page_group[item["change_id"]] = page_change_id
+            for table_change_id in table_change_ids:
+                groups_by_table_change[table_change_id].append(page_change_id)
+
+    for item in table_changes:
+        groups = groups_by_table_change.get(item["table_change_id"])
+        if groups and len(groups) == 1:
+            item["page_change_id"] = groups[0]
+    change_anchors = {item["change_id"]: item.get("other_side_anchor") for item in changes}
+    for block in blocks:
+        block["other_side_anchor"] = change_anchors[block["change_ids"][0]]
+        block["full_pages"] = sorted(pages_by_side[block["side"]].intersection(block["pages"]))
+        groups = {changes_to_page_group.get(cid) for cid in block["change_ids"]}
+        if len(groups) == 1 and None not in groups:
+            block["page_change_id"] = groups.pop()
+    return page_changes
 
 
 def _collapse_block_reviews(
@@ -1331,7 +1576,14 @@ def build_comparison_result(
     )
     _preserve_previous_identities(movement, tables, routing, changes, review_queue, non_semantic_events)
     moves = _canonical_moves(movement, changes)
-    change_blocks = _build_change_blocks(changes, movement, structure_dir)
+    sources = {side: _block_source(movement, side, structure_dir) for side in ("old", "new")}
+    change_blocks = _build_change_blocks(changes, sources)
+    exact_path = structure_dir / "exact_element_matches.json" if structure_dir is not None else None
+    exact_matches = load_json(exact_path).get("matches") or [] if exact_path and exact_path.is_file() else []
+    page_changes = _build_page_changes(
+        changes, table_changes, change_blocks, movement, tables, sources, moves, exact_matches,
+        {side: _toc_element_ids(structure_dir, side) for side in ("old", "new")},
+    )
     review_queue = _collapse_block_reviews(review_queue, change_blocks)
     change_ids = {item["change_id"] for item in changes}
     block_member_ids = [cid for block in change_blocks for cid in block["change_ids"]]
@@ -1381,6 +1633,7 @@ def build_comparison_result(
             "changes": len(changes),
             "moves": len(moves),
             "change_blocks": len(change_blocks),
+            "page_changes": len(page_changes),
             "changes_in_blocks": len(block_member_ids),
             "table_changes": len(table_changes),
             "review_queue": len(review_queue),
@@ -1398,6 +1651,7 @@ def build_comparison_result(
         "changes": changes,
         "moves": moves,
         "change_blocks": change_blocks,
+        "page_changes": page_changes,
         "table_changes": table_changes,
         "review_queue": review_queue,
         "non_semantic_events": non_semantic_events,

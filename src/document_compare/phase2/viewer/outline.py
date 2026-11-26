@@ -223,7 +223,38 @@ def _build_tree(sides: dict[str, _Side]) -> tuple[list[_Node], dict[tuple[str, s
     return roots, index
 
 
-def _table_pages(record: dict[str, Any], side: str) -> int | None:
+def _preferred_sides(record: dict[str, Any]) -> tuple[str, str]:
+    if record.get("change_type") in ("DELETED", "TABLE_DELETED"):
+        return ("old", "new")
+    return ("new", "old")
+
+
+def _page_side(item: dict[str, Any], pref: tuple[str, ...]) -> str | None:
+    return next((side for side in pref if item.get(f"page_{side}") is not None
+                 and not item.get(f"context_{side}")), None)
+
+
+def _apply_anchor(item: dict[str, Any], record: dict[str, Any]) -> None:
+    anchor = record.get("other_side_anchor")
+    page = _int(anchor.get("page")) if isinstance(anchor, dict) else None
+    if page is None or page < 1:
+        return
+    _, other = _preferred_sides(record)
+    item[f"page_{other}"] = page
+    item[f"anchor_{other}"] = item[f"context_{other}"] = True
+
+
+def _table_source_page(part: Any, source: _Side) -> int | None:
+    if not isinstance(part, dict):
+        return None
+    for value in part.get("source_pages") or []:
+        if (page := _int(value)) is not None:
+            return page
+    element = source.elements.get(source.table_element_for(part)) or {}
+    return _int(element.get("primary_page"))
+
+
+def _table_page(record: dict[str, Any], side: str, source: _Side) -> int | None:
     cells = [c for c in record.get("cell_changes") or [] if isinstance(c, dict)]
     changed = [c for c in cells if c.get("classification") != "UNCHANGED"]
     for change in changed or cells:
@@ -231,7 +262,16 @@ def _table_pages(record: dict[str, Any], side: str) -> int | None:
         page = _int(cell.get("primary_page")) if isinstance(cell, dict) else None
         if page is not None:
             return page
-    return None
+    return _table_source_page(record.get(side), source)
+
+
+def _table_label(record: dict[str, Any], page: int | None) -> str:
+    cells = [c for c in record.get("cell_changes") or [] if isinstance(c, dict)
+             and c.get("classification") != "UNCHANGED"]
+    label = "Table" + (f" \u00b7 p.{page}" if page is not None else "")
+    if cells:
+        label += f" \u00b7 {len(cells)} cell{'s' if len(cells) != 1 else ''} changed"
+    return label
 
 
 def _first_move_element(record: dict[str, Any], side: str) -> dict[str, Any]:
@@ -245,14 +285,15 @@ def _item(kind: str, record: dict[str, Any], sides: dict[str, _Side]) -> dict[st
     ctype = record.get("change_type") if isinstance(record.get("change_type"), str) else None
     item: dict[str, Any] = {
         "kind": kind, "record_id": record.get(ID_FIELDS[kind]), "change_type": ctype,
-        "label": "", "page_old": None, "page_new": None, "section_path": [],
+        "label": "", "page_old": None, "page_new": None, "page_side": None,
+        "anchor_old": False, "anchor_new": False, "context_old": False, "context_new": False,
+        "section_path": [],
     }
     if kind != "review":
         item["impact"] = project_impact(record)
     if kind == "change":
-        pref = ("old", "new") if ctype == "DELETED" else ("new", "old")
         text = ""
-        for side in pref:
+        for side in _preferred_sides(record):
             part = record.get(side)
             if isinstance(part, dict) and _collapse(part.get("text")):
                 text = part["text"]
@@ -266,16 +307,8 @@ def _item(kind: str, record: dict[str, Any], sides: dict[str, _Side]) -> dict[st
                 page = _int(element.get("primary_page")) if element else None
             item[f"page_{side}"] = page
     elif kind == "table":
-        pref = ("old", "new") if ctype and "DELETED" in ctype else ("new", "old")
         for side in SIDES:
-            item[f"page_{side}"] = _table_pages(record, side)
-        page = next((item[f"page_{side}"] for side in pref if item[f"page_{side}"] is not None), None)
-        cells = [c for c in record.get("cell_changes") or [] if isinstance(c, dict)
-                 and c.get("classification") != "UNCHANGED"]
-        label = "Table" + (f" \u00b7 p.{page}" if page is not None else "")
-        if cells:
-            label += f" \u00b7 {len(cells)} cell{'s' if len(cells) != 1 else ''} changed"
-        item["label"] = label
+            item[f"page_{side}"] = _table_page(record, side, sides[side])
     elif kind == "move":
         item["label"] = _label(
             _first_move_element(record, "new").get("text")
@@ -356,7 +389,6 @@ def _fill_context_pages(roots: list[_Node], placed: list[tuple[_Node, dict[str, 
     def fill(item: dict[str, Any], node: _Node | None) -> None:
         for side in SIDES:
             other = "new" if side == "old" else "old"
-            item[f"context_{side}"] = False
             if item["kind"] == "move" or item.get(f"page_{side}") is not None:
                 continue
             span = context[id(node)][side] if node is not None else None
@@ -430,6 +462,29 @@ def _review_pages(item: dict[str, Any], record: dict[str, Any], sides: dict[str,
         item[f"page_{side}"] = _int(element.get("primary_page")) if element else None
 
 
+def _table_review_subject(record: dict[str, Any], table_index: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    if any(_review_element(record, side) is not None for side in SIDES):
+        return None
+    evidence = record.get("evidence") if isinstance(record.get("evidence"), dict) else {}
+    for ref in (record.get("table_change_id"), evidence.get("table_change_id"),
+                evidence.get("logical_table_id"), record.get("source_candidate_id")):
+        if isinstance(ref, str) and ref in table_index:
+            return table_index[ref]
+
+    parts = {}
+    for side in SIDES:
+        # Stage 14 carries compact table metadata. Stage 12 packets identify
+        # the same tables by logical ID.
+        tables = evidence.get(f"{side}_tables") or []
+        parts[side] = next((table for table in tables if isinstance(table, dict)), None)
+        if parts[side] is None:
+            ids = evidence.get(f"{side}_table_ids") or []
+            ref = next((value for value in ids if isinstance(value, str)), None)
+            if ref is not None:
+                parts[side] = table_index.get(ref, {}).get(side) or {"logical_table_id": ref}
+    return parts if any(parts.values()) else None
+
+
 def build_outline(output_dir: Path, canonical: dict, *, expand_blocks: bool = False) -> dict:
     """Section tree (NEW document first, OLD-only sections appended) with findings placed in it."""
     sides = {side: _Side(_load_structured(output_dir, side)) for side in SIDES}
@@ -439,10 +494,13 @@ def build_outline(output_dir: Path, canonical: dict, *, expand_blocks: bool = Fa
     review: list[dict[str, Any]] = []
     canonical = canonical if isinstance(canonical, dict) else {}
     by_id: dict[str, dict[str, Any]] = {}
+    table_index: dict[str, dict[str, Any]] = {}
 
     def put(kind: str, record: dict[str, Any], item: dict[str, Any], position: int) -> None:
-        ctype = record.get("change_type") if isinstance(record.get("change_type"), str) else ""
-        pref = ("old", "new") if "DELETED" in ctype else ("new", "old")
+        pref = _preferred_sides(record)
+        side = item["page_side"] = _page_side(item, pref)
+        if item["kind"] == "table":
+            item["label"] = _table_label(record, item[f"page_{side}"] if side else None)
         if kind == "move":
             pref = ("new",)
         node = _place(kind, record, sides, index, pref)
@@ -468,6 +526,11 @@ def build_outline(output_dir: Path, canonical: dict, *, expand_blocks: bool = Fa
             if not isinstance(record, dict) or not isinstance(record.get(ID_FIELDS[kind]), str):
                 continue
             record_id = record[ID_FIELDS[kind]]
+            if kind == "table":
+                refs = [record_id, record.get("source_table_match_id")]
+                refs.extend(part.get("logical_table_id") for side in SIDES
+                            if isinstance(part := record.get(side), dict))
+                table_index.update((ref, record) for ref in refs if isinstance(ref, str))
             if kind == "change" and record_id in blocks:
                 block = blocks[record_id]
                 block_id = block["block_id"]
@@ -481,6 +544,12 @@ def build_outline(output_dir: Path, canonical: dict, *, expand_blocks: bool = Fa
                     if flagged:
                         item.update(needs_review=True, review_reason=review_reason(flagged))
                     item.update(project_change_block(block), kind="block", record_id=block_id)
+                    own_page = f"page_{_preferred_sides(block)[0]}"
+                    if item[own_page] is None and item["pages"]:
+                        item[own_page] = item["pages"][0]
+                    if not item.get("full_pages"):
+                        item.pop("full_pages", None)
+                    _apply_anchor(item, block)
                     item["label"] = item.get("anchor") or ""
                     item["llm_opinion"] = None
                     block_items[block_id] = item
@@ -488,6 +557,8 @@ def build_outline(output_dir: Path, canonical: dict, *, expand_blocks: bool = Fa
                 by_id[record_id] = block_items[block_id]
                 continue
             item = _item(kind, record, sides)
+            if kind in ("change", "table"):
+                _apply_anchor(item, record)
             if kind != "move":
                 by_id[record[ID_FIELDS[kind]]] = item
             put(kind, record, item, position)
@@ -499,7 +570,13 @@ def build_outline(output_dir: Path, canonical: dict, *, expand_blocks: bool = Fa
         rid = record[ID_FIELDS["review"]]
         linked = [cid for cid in linked_change_ids(record, changes) if cid in by_id]
         entry = _item("review", record, sides)
-        entry["context_old"] = entry["context_new"] = False
+        table = _table_review_subject(record, table_index)
+        if table is None:
+            _review_pages(entry, record, sides)
+        else:
+            for side in SIDES:
+                entry[f"page_{side}"] = _table_source_page(table.get(side), sides[side])
+        entry["page_side"] = _page_side(entry, _preferred_sides(table or record))
         entry["linked_to"] = list(linked)
         review.append(entry)
         if linked:
@@ -514,8 +591,7 @@ def build_outline(output_dir: Path, canonical: dict, *, expand_blocks: bool = Fa
         item = dict(entry, review_ids=list(entry["review_ids"]))
         item.pop("linked_to")
         item["change_type"] = "REVIEW"
-        _review_pages(item, record, sides)
-        put("review", record, item, position)
+        put("review" if table is None else "table", table or record, item, position)
 
     for item in [i for _, i in placed_items] + unplaced:
         if item["needs_review"] and not item["review_reason"]:
