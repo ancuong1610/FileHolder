@@ -1,0 +1,24 @@
+M	docs/KnowlesgeTranser Phase 1.md
+M	docs/contracts/phase1-matching.md
+A	docs/plans/2026-11-24-german-impact-classification.md
+M	src/document_compare/phase1/stages/s10_tables.py
+M	src/document_compare/phase1/stages/s14_canonical_result.py
+M	src/document_compare/phase1/structure/reconstruction.py
+M	src/document_compare/phase2/api/service.py
+M	src/document_compare/phase2/reader/result_reader.py
+M	src/document_compare/phase2/ui/review.py
+M	src/document_compare/phase2/ui/texts.py
+M	src/document_compare/phase2/viewer/locations.py
+M	src/document_compare/phase2/viewer/outline.py
+M	src/document_compare/phase2/viewer/page_render.py
+M	tests/integration/test_harness.py
+A	tests/phase1/test_page_changes.py
+A	tests/phase1/test_structure_nesting.py
+M	tests/phase1/test_table_stage_module.py
+M	tests/phase2/test_change_blocks.py
+M	tests/phase2/test_page_render.py
+M	tests/phase2/test_ui_smoke.py
+M	tests/phase2/test_view_api.py
+M	tests/phase2/test_viewer_locations.py
+M	tests/phase2/test_viewer_outline.py
+M	tests/phase2/ui_stub.py
