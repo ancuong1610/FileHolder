@@ -507,7 +507,9 @@ def _strategy_numeric(observations):
         old_text = ((detail.get("change") or {}).get("old") or {}).get("text", "")
         new_text = ((detail.get("change") or {}).get("new") or {}).get("text", "")
         context = ((detail.get("context") or {}).get("new") or {}).get("available")
-        return {"action": "final", "answer": f"old={old_text} new={new_text} context_available={context}"}
+        return {"action": "final", "answer": (
+            f"{detail.get('record_id')}: old={old_text} new={new_text} context_available={context}"
+        )}
     return {"action": "final", "answer": "done"}
 
 
@@ -533,7 +535,9 @@ def _strategy_review(observations):
         return {"action": "search", "arguments": {"query": "", "kind": "review"}}
     if len(searches) == 1:
         return {"action": "search", "arguments": {"query": "", "kind": "change", "status": "accepted"}}
-    return {"action": "final", "answer": "review items distinguished from accepted changes"}
+    review_ids = [record["record_id"] for result in _results_of(observations, "search")
+                  for record in result.get("returned", [])]
+    return {"action": "final", "answer": "Review and accepted findings: " + ", ".join(review_ids)}
 
 
 def _observe_review(answer, observations, calls, error):
@@ -560,8 +564,9 @@ def _strategy_multipage(observations):
             "action": "search",
             "arguments": {"query": MAIN_MARKER, "kind": "all", "cursor": last.get("next_cursor")},
         }
-    collected = sum(len((s.get("result") or {}).get("returned") or []) for s in searches)
-    return {"action": "final", "answer": f"total_matches={last.get('total_matches')} collected={collected}"}
+    ids = [record["record_id"] for result in _results_of(observations, "search")
+           for record in result.get("returned", [])]
+    return {"action": "final", "answer": f"total_matches={last.get('total_matches')} collected={len(ids)}: {', '.join(ids)}"}
 
 
 def _observe_multipage(answer, observations, calls, error):
@@ -602,7 +607,7 @@ def _strategy_table(observations):
                     "cell_limit": 2,
                 },
             }
-        return {"action": "final", "answer": "table cells paged to the last cell"}
+        return {"action": "final", "answer": f"{detail.get('record_id')}: table cells paged to the last cell"}
     return {"action": "final", "answer": "done"}
 
 
@@ -642,12 +647,13 @@ def _strategy_long(observations):
         new = (detail.get("change") or {}).get("new") or {}
         next_offset = new.get("text_next_offset")
         if next_offset is None:
-            return {"action": "final", "answer": "no continuation available"}
+            return {"action": "final", "answer": f"{detail.get('record_id')}: no continuation available"}
         return {
             "action": "details",
             "arguments": {"kind": "change", "record_id": detail.get("record_id"), "text_offset": next_offset, "text_limit": 4000},
         }
-    return {"action": "final", "answer": "long paragraph tail retrieved"}
+    detail = _last_result(observations) or {}
+    return {"action": "final", "answer": f"{detail.get('record_id')}: long paragraph tail retrieved"}
 
 
 def _observe_long(answer, observations, calls, error):

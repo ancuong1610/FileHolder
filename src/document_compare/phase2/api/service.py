@@ -33,12 +33,14 @@ import threading
 import time
 import unicodedata
 import uuid
+from collections.abc import Iterator
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from document_compare.phase2.reader import result_reader as reader
@@ -48,6 +50,10 @@ from document_compare.phase2.viewer.artifact_cache import load_json
 from document_compare.phase2.viewer.locations import resolve_locations
 from document_compare.phase2.viewer.outline import build_outline
 from document_compare.phase2.viewer.page_render import render_page, style_for
+
+if TYPE_CHECKING:
+    from document_compare.phase2.workflow.saved_workspace import SavedWorkspaceGateway
+
 
 app = FastAPI(title="Document Comparison API", version="0.1.0")
 
@@ -634,8 +640,7 @@ def _chat_client() -> Any | None:
     return TiaTextClient(api_key)
 
 
-@app.post("/jobs/{job_id}/chat")
-def chat(job_id: str, body: ChatRequest) -> dict:
+def _prepare_chat(job_id: str, body: ChatRequest) -> tuple[str, Any, SavedWorkspaceGateway]:
     _validate_read_job_id(job_id)
     job_status = _read_status(job_id)
     _reader_canonical(job_id, job_status)
@@ -648,7 +653,6 @@ def chat(job_id: str, body: ChatRequest) -> dict:
     if client is None:
         raise _coded(503, "chat_not_configured", "Chat is not configured on this server.")
 
-    from document_compare.phase2.agent.controller import TiaComparisonAgent
     from document_compare.phase2.workflow import saved_workspace
 
     try:
@@ -657,21 +661,74 @@ def chat(job_id: str, body: ChatRequest) -> dict:
         raise _reader_http(reader.ReaderError("invalid_artifact", "saved result is not readable")) from exc
     if gateway.job_id != job_id:
         raise _reader_http(reader.ReaderError("invalid_artifact", "job status does not match this job"))
-    try:
-        result = TiaComparisonAgent(client, gateway, max_steps=10, result_limit=8).ask(
-            question, job_id, history=[turn.model_dump() for turn in body.history],
-            ui_context=body.context.model_dump(exclude_none=True) if body.context is not None else None,
-        )
-        limitations = gateway.summarize(job_id).get("limitations") or []
-    except reader.ReaderError as exc:
-        raise _reader_http(exc) from exc
-    except Exception as exc:  # planner/SDK failure: never echo model or provider text
-        raise _coded(502, "chat_failed", "The assistant could not produce an answer.") from exc
-    if result.partial:
+    return question, client, gateway
+
+
+def _chat_kwargs(body: ChatRequest) -> dict[str, Any]:
+    return {
+        "history": [turn.model_dump() for turn in body.history],
+        "ui_context": body.context.model_dump(exclude_none=True) if body.context is not None else None,
+    }
+
+
+def _chat_payload(
+    job_id: str, gateway: SavedWorkspaceGateway, *, answer: str,
+    cited: list[dict[str, str]], unverified_ids: list[str], partial: bool, suggestions: list[str],
+) -> dict:
+    from document_compare.phase2.agent.controller import contains_tool_dump
+
+    if contains_tool_dump(answer):
+        raise ValueError("The assistant did not produce a user-facing answer.")
+    limitations = list(gateway.summarize(job_id).get("limitations") or [])
+    if partial:
         limitations.append("partial_answer")
-    if result.unverified_ids:
+    if unverified_ids:
         limitations.append("unverified_citation")
     return {
-        "job_id": job_id, "answer": result.answer, "limitations": limitations,
-        "cited": result.cited, "unverified_ids": result.unverified_ids,
+        "job_id": job_id, "answer": answer, "limitations": limitations,
+        "cited": cited, "unverified_ids": unverified_ids, "suggestions": suggestions,
     }
+
+
+@app.post("/jobs/{job_id}/chat")
+def chat(job_id: str, body: ChatRequest) -> dict:
+    question, client, gateway = _prepare_chat(job_id, body)
+    from document_compare.phase2.agent.controller import TiaComparisonAgent
+
+    try:
+        result = TiaComparisonAgent(client, gateway, max_steps=10, result_limit=8).ask(
+            question, job_id, **_chat_kwargs(body),
+        )
+        return _chat_payload(job_id, gateway, **asdict(result))
+    except reader.ReaderError as exc:
+        raise _coded(
+            _READER_HTTP_STATUS.get(exc.code, 400), exc.code, "The assistant could not read the comparison.",
+        ) from exc
+    except Exception as exc:  # planner/SDK failure: never echo model or provider text
+        raise _coded(502, "chat_failed", "The assistant could not produce an answer.") from exc
+
+
+@app.post("/jobs/{job_id}/chat/stream", response_class=StreamingResponse)
+def chat_stream(job_id: str, body: ChatRequest) -> StreamingResponse:
+    question, client, gateway = _prepare_chat(job_id, body)
+
+    def lines() -> Iterator[str]:
+        try:
+            from document_compare.phase2.agent.controller import TiaComparisonAgent
+
+            agent = TiaComparisonAgent(client, gateway, max_steps=10, result_limit=8)
+            for event in agent.stream(question, job_id, **_chat_kwargs(body)):
+                if event["type"] == "final":
+                    final = _chat_payload(
+                        job_id, gateway, answer=event["answer"], cited=event["cited"],
+                        unverified_ids=event["unverified_ids"], partial=event["partial"],
+                        suggestions=event["suggestions"],
+                    )
+                    event = {"type": "final", **final}
+                yield json.dumps(event) + "\n"
+        except reader.ReaderError as exc:
+            yield json.dumps({"type": "error", "code": exc.code}) + "\n"
+        except Exception:  # Never echo planner or provider output.
+            yield json.dumps({"type": "error", "code": "chat_failed"}) + "\n"
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson")

@@ -9,6 +9,7 @@ from document_compare.phase2.ui import review, texts
 from document_compare.phase2.ui.api_client import ApiError
 
 HISTORY_HEIGHT = 420
+_PENDING_SUGGESTION = "chat_pending_suggestion"
 
 _MARKDOWN_LINK = re.compile(
     r"(?P<image>!)?\[(?P<label>(?:\\.|[^\[\]\\]|\[[^\[\]]*\])*)\]"
@@ -54,13 +55,49 @@ def _ui_context(client, job_id: str) -> dict[str, str]:
     return context
 
 
+def _stream_reply(client, job_id: str, question: str, history: list[dict], context: dict) -> dict:
+    reply = None
+    with st.status(texts.CHAT_PENDING, expanded=False) as status:
+        for event in client.chat_stream(job_id, question, history=history, context=context):
+            if event["type"] == "final":
+                reply = event
+            elif event["type"] == "fallback":
+                status.update(label=texts.CHAT_STEP_FALLBACK.format(
+                    query=sanitize_markdown(event["query"]), variant=sanitize_markdown(event["variant"]),
+                ))
+            elif event["type"] == "step":
+                action = event["action"]
+                if action == "search":
+                    query = event["query"]
+                    label = (
+                        texts.CHAT_STEP_SEARCH.format(query=sanitize_markdown(query))
+                        if query else texts.CHAT_STEP_SEARCH_ALL
+                    )
+                elif action == "details":
+                    record_id = event["record_id"]
+                    label = (
+                        texts.CHAT_STEP_DETAILS.format(record_id=record_id)
+                        if record_id else texts.CHAT_STEP_DETAILS_UNKNOWN
+                    )
+                else:
+                    label = texts.CHAT_STEP_SUMMARY
+                status.update(label=label)
+        if reply is None:
+            raise ApiError(None, "chat_failed", "")
+        status.update(label=texts.CHAT_COMPLETE, state="complete")
+    return reply
+
+
 def _ask(client, job_id: str, question: str, history: list[dict]) -> None:
     recent_turns = _recent_turns(history)
     history.append({"role": "user", "content": question})
     st.session_state.pop("chat_error", None)
     try:
-        with st.spinner(texts.CHAT_PENDING):
-            reply = client.chat(job_id, question, history=recent_turns, context=_ui_context(client, job_id))
+        if hasattr(client, "chat_stream"):
+            reply = _stream_reply(client, job_id, question, recent_turns, _ui_context(client, job_id))
+        else:
+            with st.spinner(texts.CHAT_PENDING):
+                reply = client.chat(job_id, question, history=recent_turns, context=_ui_context(client, job_id))
     except ApiError as exc:
         st.session_state["chat_error"] = {"code": exc.code, "message": exc.message}
         return
@@ -68,7 +105,12 @@ def _ask(client, job_id: str, question: str, history: list[dict]) -> None:
         "role": "assistant", "content": str(reply.get("answer") or ""),
         "limitations": [str(x) for x in reply.get("limitations") or []],
         "cited": reply.get("cited") or [], "unverified_ids": reply.get("unverified_ids") or [],
+        "suggestions": reply.get("suggestions") or [],
     })
+
+
+def _queue_suggestion(job_id: str, question: str) -> None:
+    st.session_state[_PENDING_SUGGESTION] = (job_id, question)
 
 
 def _show_answer(job_id: str, index: int, message: dict) -> None:
@@ -86,6 +128,9 @@ def _show_answer(job_id: str, index: int, message: dict) -> None:
               if code not in {"partial_answer", "unverified_citation"}]
     if labels:
         st.caption(texts.LIMITATIONS.format(items=", ".join(labels)))
+    for suggestion_index, suggestion in enumerate(message.get("suggestions") or []):
+        st.button(sanitize_markdown(suggestion), key=f"chat_suggest::{job_id}::{index}::{suggestion_index}",
+                  on_click=_queue_suggestion, args=(job_id, suggestion))
 
 
 def render(client, job_id: str) -> None:
@@ -93,6 +138,9 @@ def render(client, job_id: str) -> None:
     history = st.session_state.setdefault("chat_history", [])
     box = st.container(height=HISTORY_HEIGHT)  # scrolls internally; the input stays below it
     question = st.chat_input(texts.CHAT_HINT, key="chat_question")
+    pending = st.session_state.pop(_PENDING_SUGGESTION, None)
+    if pending and pending[0] == job_id:
+        question = pending[1]
     if question and question.strip():
         _ask(client, job_id, question.strip(), history)
     with box:

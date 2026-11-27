@@ -196,12 +196,14 @@ The request requires `question`, 1–2,000 characters after trimming.
   `content`, `review` or `all`. `section` accepts up to 200 characters.
 - Invalid history or context returns HTTP 422 with FastAPI validation details.
 
-The response includes `job_id`, `answer`, `limitations`, `cited` and
-`unverified_ids`. Each entry in `cited` is a `{kind, record_id}` object.
+The response includes `job_id`, `answer`, `limitations`, `cited`,
+`unverified_ids` and `suggestions`. Each entry in `cited` is a `{kind, record_id}` object.
 The list contains unique IDs in answer order that appeared in reader results
 from this turn or matched the selected ID. `unverified_ids` lists other IDs
 found in the answer and adds `unverified_citation` to `limitations` when
 nonempty. An answer from the last allowed planner call adds `partial_answer`.
+`suggestions` contains up to three plain-text follow-up questions, each at
+most 120 characters, and is empty when the planner supplies none.
 
 - Uses the existing agent over `SavedWorkspaceGateway` for that job, so it can
   call only `summarize`, `search` and `details`. The tenth planner call is
@@ -211,6 +213,18 @@ nonempty. An answer from the last allowed planner call adds `partial_answer`.
   chat. No new environment key exists.
 - A question sends the supplied history and context and bounded reader output
   to the configured model. Provider and model text is never echoed in errors.
+
+## `POST /jobs/{job_id}/chat/stream`
+
+Uses the same request and pre-stream HTTP validation as `/chat`. A successful
+HTTP response has media type `application/x-ndjson` and one JSON event per line.
+
+| `type` | Other fields | When |
+| --- | --- | --- |
+| `step` | `step` (one-based planner step, or `0` for selected-finding prefetch), `action` (`search`, `details`, `summarize`), `query`, `record_id` | Before the announced tool runs. Prefetch uses no planner step. Query text is limited to 120 characters. Unused fields are null. |
+| `fallback` | `query`, `variant` | A broader query returned hits after a no-hit literal search. Retries preserve the search filters and use the same planner step. |
+| `final` | `job_id`, `answer`, `limitations`, `cited`, `unverified_ids`, `suggestions` | Last event on success. These fields match the `/chat` payload. |
+| `error` | `code` | Last event on failure after the stream starts. The code is `chat_failed` or a reader error code. |
 
 ## Job status file names
 

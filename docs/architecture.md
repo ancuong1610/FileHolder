@@ -162,18 +162,23 @@ Legacy `structure_evidence` versions `1.1.x` remain readable.
    `phase2/reader/result_reader.py` over saved canonical artifacts. It reports
    normalized `supported`/`uncertain`/`non_semantic` state while keeping legacy
    review fields readable.
-5. The agent (`phase2/agent/`) plans only over those three reader tools; it does
-   not download the full report and re-implement search.
+5. The agent (`phase2/agent/`) uses a LangGraph state graph to run the TIA
+   JSON planner and works with bounded reader results throughout. It can
+   prefetch a selected finding before planning. The planner sees a slimmed
+   observation with change briefs while citations use the full reader result.
+   A final-answer check can spend one remaining planner call on repairs. After a
+   zero-hit literal search, the agent can try up to three broader queries in the
+   same planner step.
 6. The viewer (`phase2/viewer/`) maps a saved finding to pages and normalized
    polygons (`locations.py`) and renders a source-PDF page with the region
    outlined (`page_render.py`). The API exposes it read-only as
    `/jobs/{id}/view/locations` and `/jobs/{id}/view/pages/{side}/{page}.png`
    ([contract](contracts/view-endpoints.md)); it never writes into a job.
 7. The Streamlit UI (`phase2/ui/`) talks to the API over HTTP only (reader
-   routes, view routes and `POST /jobs/{id}/chat`). It does not import the
-   engine or read workspaces from disk. Chat reuses the agent and the three
-   reader tools through the internal hub client, and only when `TIA_API_KEY`
-   and `LLM_MODEL` are set. `phase2/viewer/synthetic.py` builds offline demo
+   routes, view routes and `POST /jobs/{id}/chat/stream`). Streaming chat
+   reports progress before returning the same answer payload as `/chat`.
+   The API supplies all result data. Chat uses the internal hub client when
+   `TIA_API_KEY` and `LLM_MODEL` are set. `phase2/viewer/synthetic.py` builds offline demo
    PDFs and a seeded job for UI checks.
 
 ### Selecting phases and saved workspaces

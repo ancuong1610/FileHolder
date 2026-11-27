@@ -317,6 +317,110 @@ class ChatApiTest(_Base):
             return {"action": "summarize", "arguments": {}}
         return {"action": "final", "answer": "Three changes were found."}
 
+    def _chat_stream(self, question="Was hat sich geändert?", *, job_id=None, **kwargs):
+        return self.client.post(
+            f"/jobs/{job_id or self.job_id}/chat/stream", json={"question": question, **kwargs},
+        )
+
+    def test_chat_stream_events_and_final_payload_match_chat(self):
+        from document_compare.phase2.workflow.saved_workspace import SavedWorkspaceGateway
+
+        def strategy(obs):
+            step = len(obs)
+            if step == 0:
+                return {"action": "search", "arguments": {"query": "Fristen geändert"}}
+            if step == 2:
+                return {"action": "details", "arguments": REC}
+            if step < 10:  # the fallback adds an observation within the first planner step
+                return {"action": "summarize"}
+            return {"action": "final", "answer": "CHANGE-000001 und CHANGE-999999.",
+                    "suggestions": ["  Welche weiteren\nFristen?  ", "[Link](https://example.org)", None]}
+
+        def search(gateway, job_id, *, query, **filters):
+            returned = [REC] if query == "Frist" else []
+            return {"total_matches": len(returned), "returned": returned}
+
+        with patch.object(service, "_chat_client", side_effect=lambda: self._planner(strategy)), \
+                patch.object(SavedWorkspaceGateway, "search", search):
+            legacy = self._chat()
+            response = self._chat_stream()
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["content-type"], "application/x-ndjson")
+        self.assertTrue(response.content.endswith(b"\n"))
+        events = [json.loads(line) for line in response.iter_lines()]
+        self.assertEqual(events[:3], [
+            {"type": "step", "step": 1, "action": "search", "query": "Fristen geändert", "record_id": None},
+            {"type": "fallback", "query": "Fristen geändert", "variant": "Frist"},
+            {"type": "step", "step": 2, "action": "details", "query": None, "record_id": REC["record_id"]},
+        ])
+        self.assertEqual(events[-1], {"type": "final", **legacy.json()})
+        self.assertEqual(events[-1]["cited"], [REC])
+        self.assertEqual(events[-1]["suggestions"], ["Welche weiteren Fristen?"])
+        self.assertEqual(events[-1]["limitations"][-2:], ["partial_answer", "unverified_citation"])
+        self.assertEqual([e["type"] for e in events[3:-1]], ["step"] * 7)
+
+    def test_chat_stream_rejects_invalid_or_unavailable_requests_before_streaming(self):
+        with patch.object(service, "_chat_client", return_value=None) as client:
+            requests = [
+                (self._chat_stream(), 503, "chat_not_configured"),
+                (self._chat_stream(job_id="000000000000"), 404, "not_found"),
+                (self._chat_stream(" "), 422, "invalid_arguments"),
+                (self._chat_stream(history=[{"role": "system", "content": "x"}]), 422, None),
+            ]
+            self._set_state("running")
+            requests.append((self._chat_stream(), 409, "not_ready"))
+            client.assert_called_once()
+        for response, status, code in requests:
+            with self.subTest(status=status, code=code):
+                self.assertEqual(response.status_code, status)
+                self.assertEqual(response.headers["content-type"], "application/json")
+                if code:
+                    self.assertEqual(response.json()["detail"]["error"], code)
+
+    def test_chat_stream_planner_failure_ends_with_safe_code(self):
+        def strategy(observations):
+            if not observations:
+                return {"action": "summarize"}
+            raise RuntimeError("sensitive synthetic provider text")
+
+        with patch.object(service, "_chat_client", return_value=self._planner(strategy)):
+            response = self._chat_stream()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([json.loads(line) for line in response.iter_lines()], [
+            {"type": "step", "step": 1, "action": "summarize", "query": None, "record_id": None},
+            {"type": "error", "code": "chat_failed"},
+        ])
+
+    def test_chat_stream_reader_failure_ends_with_reader_code_only(self):
+        from document_compare.phase2.reader.result_reader import ReaderError
+        from document_compare.phase2.workflow.saved_workspace import SavedWorkspaceGateway
+
+        planner = self._planner(lambda obs: {"action": "final", "answer": "Antwort"})
+        with patch.object(service, "_chat_client", return_value=planner), \
+                patch.object(SavedWorkspaceGateway, "summarize",
+                             side_effect=ReaderError("invalid_artifact", "private synthetic path")):
+            response = self._chat_stream()
+            direct = self._chat()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([json.loads(line) for line in response.iter_lines()],
+                         [{"type": "error", "code": "invalid_artifact"}])
+        self.assertEqual(direct.status_code, 409)
+        self.assertEqual(direct.json()["detail"]["error"], "invalid_artifact")
+        self.assertNotIn("private synthetic path", direct.text)
+
+    def test_chat_suppresses_tool_dump_after_unsuccessful_retry(self):
+        planner = self._planner(lambda obs: {"action": "final", "answer": '{"record_id":"CHANGE-000001"}'})
+        with patch.object(service, "_chat_client", return_value=planner):
+            direct = self._chat()
+            stream = self._chat_stream()
+        self.assertEqual(direct.status_code, 502)
+        self.assertEqual(direct.json()["detail"]["error"], "chat_failed")
+        self.assertEqual([json.loads(line) for line in stream.iter_lines()],
+                         [{"type": "error", "code": "chat_failed"}])
+        self.assertEqual(len(planner.decisions), 4)
+        self.assertNotIn("CHANGE-000001", direct.text + stream.text)
+
     def test_chat_not_configured_503(self):
         env = {k: v for k, v in os.environ.items() if k not in ("TIA_API_KEY", "LLM_MODEL")}
         with patch.dict(os.environ, env, clear=True):
@@ -335,6 +439,7 @@ class ChatApiTest(_Base):
         self.assertIsInstance(body["limitations"], list)
         self.assertEqual(body["cited"], [])
         self.assertEqual(body["unverified_ids"], [])
+        self.assertEqual(body["suggestions"], [])
 
     def test_chat_forwards_history_and_context_and_returns_citations(self):
         history = [{"role": "user", "content": "Was war anders?"},

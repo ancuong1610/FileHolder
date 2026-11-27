@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 try:
     from streamlit.testing.v1 import AppTest
@@ -749,6 +750,84 @@ class ChatTests(unittest.TestCase):
         self.assertIn("stub answer", texts(at.sidebar.markdown))
         shown = texts(at.sidebar.caption) + texts(at.sidebar.markdown)
         self.assertNotIn("not legal or semantic ground truth", shown)
+
+    def test_chat_suggestion_button_reasks_with_history_and_selection(self):
+        suggestion = "Welche Fristen sind noch offen?"
+        stub = StubClient(chat_value={"answer": "Eine Frist wurde geändert.", "suggestions": [suggestion]})
+        at = self.ask(stub, "Welche Frist?")
+        button = at.sidebar.button(key="chat_suggest::job1::1::0")
+        self.assertEqual(button.label, suggestion)
+        self.assertEqual(at.session_state["chat_history"][1]["suggestions"], [suggestion])
+        button.click().run()
+        self.assertFalse(at.exception)
+        self.assertIn(("chat", "job1", suggestion, [
+            {"role": "user", "content": "Welche Frist?"},
+            {"role": "assistant", "content": "Eine Frist wurde geändert."},
+        ], {"selected_kind": "change", "selected_record_id": "CHANGE-000001", "preset": "all",
+            "section": "Section A"}), stub.calls)
+        self.assertEqual(at.session_state["chat_history"][2], {"role": "user", "content": suggestion})
+        at.run()
+        self.assertEqual(len([call for call in stub.calls if call[0] == "chat"]), 2)
+
+    def test_chat_stream_updates_german_status_and_matches_legacy_history(self):
+        class StreamingStub(StubClient):
+            def chat_stream(self, job_id, question, *, history=None, context=None):
+                self.calls.append(("chat_stream", job_id, question, history, context))
+                yield {"type": "step", "action": "summarize", "query": None, "record_id": None}
+                yield {"type": "step", "action": "search", "query": "Fristen geändert", "record_id": None}
+                yield {"type": "fallback", "query": "Fristen geändert", "variant": "Frist"}
+                yield {"type": "step", "action": "details", "query": None, "record_id": "CHANGE-000001"}
+                yield {"type": "final", **self.chat_value}
+
+        reply = {
+            "answer": "Frist in CHANGE-000001.",
+            "limitations": ["partial_answer", "unverified_citation"],
+            "cited": [{"kind": "change", "record_id": "CHANGE-000001"}],
+            "unverified_ids": ["CHANGE-999999"],
+        }
+        legacy = self.ask(StubClient(chat_value=reply))
+        stub = StreamingStub(chat_value=reply)
+        updates = []
+        original_status = chat.st.status
+
+        def status(label, *, expanded):
+            updates.append((label, expanded))
+            widget = original_status(label, expanded=expanded)
+            original_update = widget.update
+
+            def update(*args, **kwargs):
+                if "label" in kwargs:
+                    updates.append(kwargs["label"])
+                original_update(*args, **kwargs)
+
+            widget.update = update
+            return widget
+
+        with patch.object(chat.st, "status", side_effect=status):
+            streaming = self.ask(stub)
+        self.assertFalse(streaming.exception)
+        self.assertEqual(streaming.session_state["chat_history"], legacy.session_state["chat_history"])
+        self.assertIn(("chat_stream", "job1", "what changed?", [], {
+            "selected_kind": "change", "selected_record_id": "CHANGE-000001",
+            "preset": "all", "section": "Section A",
+        }), stub.calls)
+        self.assertEqual(updates, [
+            (ui_texts.CHAT_PENDING, False), ui_texts.CHAT_STEP_SUMMARY,
+            "Suche nach „Fristen geändert“ …",
+            "Keine Treffer für „Fristen geändert“, versuche „Frist“ …",
+            "Lese CHANGE-000001 …", ui_texts.CHAT_COMPLETE,
+        ])
+
+    def test_chat_stream_error_keeps_existing_ui_error_and_history(self):
+        class StreamingStub(StubClient):
+            def chat_stream(self, job_id, question, *, history=None, context=None):
+                yield {"type": "step", "action": "summarize", "query": None, "record_id": None}
+                raise self.make_error(None, "chat_failed", "")
+
+        at = self.ask(StreamingStub())
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["chat_history"], [{"role": "user", "content": "what changed?"}])
+        self.assertIn(ui_texts.ERRORS["chat_failed"], texts(at.sidebar.error))
 
     def test_chat_follow_up_sends_only_six_bounded_prior_turns_and_current_selection(self):
         stub = StubClient()

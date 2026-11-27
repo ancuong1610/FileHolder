@@ -13,7 +13,8 @@ filters, then two columns (2:3): the Structure tree (left) and the viewer (right
 legend, old and new page side by side at the same width, Previous/Next in displayed order).
 The tree is a Confluence-style page tree: one-line rows (ellipsis, full title in the tooltip),
 a fixed chevron slot, a muted count pill at the right, 16px indent with a thin guide line,
-change rows with a coloured dot and `S. N`; "Nicht zugeordnet" is a last root node when non-empty.
+change rows with a coloured dot and `S. N (Alt)` or `S. N (Neu)`;
+"Nicht zugeordnet" is a last root node when non-empty.
 Display inference only (the API outline is unchanged): when the engine found no hierarchy
 (no section has children) and the first section has neither a TOC rank nor a recognizable section label, it is shown
 as the title root with every other top-level section as its child; the root starts expanded.
@@ -47,7 +48,9 @@ German as the default. Assistant messages support short Markdown.
 Each verified finding ID has an „Im Viewer öffnen“ button, including when
 filters hide the finding. A grouped member opens its block. Captions flag
 partial answers and IDs that could not be verified. Chat history is scoped to
-the open job and stored in the Streamlit session.
+the open job and stored in the Streamlit session. Status lines show search and
+reading progress. Follow-up question buttons below an answer send the question
+with the current selection and recent chat history.
 
 Input/output: talks only to the local HTTP API at `CRR_API_BASE` (loopback http,
 default `http://127.0.0.1:8321`). Reads results; writes nothing into a job.
@@ -66,3 +69,20 @@ in `localStorage` (`dc_tree_width`), limited to 260 px – 65 % of the row, and 
 double-click resets it. It is a small script injected through
 `streamlit.components.v1.html` (no new dependency); on narrow screens where the
 columns stack it switches itself off.
+
+## Chat evaluation on the work PC
+
+With a completed job and a configured, approved chat API running locally, run
+this from the repository root in the project's Python environment:
+
+```sh
+python tools/agent_eval.py --job <id>
+python tools/agent_eval.py --job <id> --api http://127.0.0.1:8321 --questions file.txt --out <dir>
+```
+
+The default set exercises ten questions, including a follow-up and questions
+about findings from the job outline. A custom UTF-8 file supplies one question
+per nonblank line. The command prints a counts-only summary. It writes a
+UTC-timestamped Markdown report with the answers, tool steps, citations and
+limitations to `workspace/agent_eval/` or the specified directory. The report
+can contain document excerpts and belongs in the approved environment.

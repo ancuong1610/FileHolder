@@ -145,6 +145,38 @@ class ApiClientTests(unittest.TestCase):
             {"question": "why?", "history": history, "context": context},
         ])
 
+    def test_chat_stream_decodes_lines_and_uses_chat_body_and_timeout(self):
+        history = [{"role": "user", "content": "Frage"}]
+        context = {"preset": "important"}
+
+        def handler(request):
+            self.assertEqual(request.method, "POST")
+            self.assertEqual(request.url.path, "/jobs/0123456789ab/chat/stream")
+            self.assertEqual(request.extensions["timeout"]["read"], 300.0)
+            self.assertEqual(json.loads(request.content), {
+                "question": "Was ist neu?", "history": history, "context": context,
+            })
+            return httpx.Response(200, text='{"type":"step","action":"summarize"}\n\n'
+                                            '{"type":"final","answer":"Antwort"}\n')
+
+        events = list(_client(handler).chat_stream("0123456789ab", "Was ist neu?", history=history, context=context))
+        self.assertEqual(events, [
+            {"type": "step", "action": "summarize"}, {"type": "final", "answer": "Antwort"},
+        ])
+
+    def test_chat_stream_maps_http_and_in_band_errors(self):
+        cases = [
+            (httpx.Response(503, json={"detail": {"error": "chat_not_configured", "message": "not configured"}}),
+             (503, "chat_not_configured", "not configured")),
+            (httpx.Response(422, json={"detail": [{"msg": "invalid question"}]}),
+             (422, "invalid_arguments", "invalid question")),
+            (httpx.Response(200, text='{"type":"error","code":"chat_failed"}\n'), (None, "chat_failed", "")),
+        ]
+        for response, expected in cases:
+            with self.subTest(expected=expected), self.assertRaises(ApiError) as ctx:
+                list(_client(lambda request: response).chat_stream("0123456789ab", "Frage"))
+            self.assertEqual((ctx.exception.status, ctx.exception.code, ctx.exception.message), expected)
+
     def test_invalid_job_id_never_reaches_transport(self):
         calls = []
 

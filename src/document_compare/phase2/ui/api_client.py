@@ -1,9 +1,11 @@
 """Small httpx client for the local comparison API. Never logs bodies or bytes."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import urllib.parse
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -71,6 +73,17 @@ def _error_from(response: httpx.Response) -> ApiError:
     if isinstance(detail, str) and detail:
         return ApiError(status, "error", detail)
     return ApiError(status, "error", f"HTTP {status}")
+
+
+def _chat_body(
+    question: str, history: list[dict[str, str]] | None, context: dict[str, str] | None,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {"question": question}
+    if history is not None:
+        body["history"] = history
+    if context is not None:
+        body["context"] = context
+    return body
 
 
 class ApiClient:
@@ -150,9 +163,36 @@ class ApiClient:
         self, job_id: str, question: str, *, history: list[dict[str, str]] | None = None,
         context: dict[str, str] | None = None,
     ) -> dict:
-        body: dict[str, Any] = {"question": question}
-        if history is not None:
-            body["history"] = history
-        if context is not None:
-            body["context"] = context
-        return self._json("POST", f"/jobs/{_job(job_id)}/chat", json=body, timeout=CHAT_TIMEOUT_SECONDS)
+        return self._json(
+            "POST", f"/jobs/{_job(job_id)}/chat",
+            json=_chat_body(question, history, context), timeout=CHAT_TIMEOUT_SECONDS,
+        )
+
+    def chat_stream(
+        self, job_id: str, question: str, *, history: list[dict[str, str]] | None = None,
+        context: dict[str, str] | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        try:
+            with self._http.stream(
+                "POST", f"/jobs/{_job(job_id)}/chat/stream",
+                json=_chat_body(question, history, context), timeout=CHAT_TIMEOUT_SECONDS,
+            ) as response:
+                if response.status_code >= 400:
+                    response.read()
+                    raise _error_from(response)
+                for line in response.iter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        raise ApiError(None, "chat_failed", "") from None
+                    if not isinstance(event, dict):
+                        raise ApiError(None, "chat_failed", "")
+                    if event.get("type") == "error":
+                        raise ApiError(None, event.get("code") or "chat_failed", "")
+                    yield event
+        except httpx.TimeoutException:
+            raise ApiError(None, "timeout", "The API did not answer in time; it may still be working.") from None
+        except httpx.HTTPError:
+            raise ApiError(None, "api_unreachable", f"Could not reach the API at {self.base_url}.") from None
