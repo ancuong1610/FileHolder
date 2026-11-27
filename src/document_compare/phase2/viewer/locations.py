@@ -8,12 +8,12 @@ Polygons are never invented; every degraded case is labelled ``page_only`` or
 
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 from typing import Any
 
 from document_compare.phase2.reader.result_reader import ID_FIELDS, ReaderError
+from document_compare.phase2.viewer.artifact_cache import load_json
 
 SIDES = ("old", "new")
 _CONTAINERS = {"change": "changes", "table": "table_changes", "review": "review_queue", "move": "moves", "block": "change_blocks"}
@@ -31,7 +31,7 @@ def _load_document(output_dir: Path, side: str) -> dict[str, Any] | None:
         resolved = path.resolve()
         if resolved.parent != base or not resolved.is_file() or resolved.stat().st_size > _MAX_DOC_BYTES:
             return None
-        data = json.loads(resolved.read_text(encoding="utf-8"))
+        data = load_json(resolved)
     except (OSError, ValueError):
         return None
     document = data.get("document") if isinstance(data, dict) else None
@@ -173,9 +173,19 @@ def needs_review_status(record: dict[str, Any]) -> bool:
     return isinstance(resolution, dict) and resolution.get("status") == "review"
 
 
-def linked_change_ids(review: dict[str, Any], changes: list[Any]) -> list[str]:
-    """Existing change IDs a review record is about: named in its evidence, or sharing its candidate ID."""
+def _index_changes(changes: list[Any]) -> tuple[dict[str, dict[str, Any]], dict[str, list[str]]]:
     existing = {c["change_id"]: c for c in changes if isinstance(c, dict) and isinstance(c.get("change_id"), str)}
+    by_candidate: dict[str, list[str]] = {}
+    for change_id, change in existing.items():
+        candidate = change.get("source_candidate_id")
+        if isinstance(candidate, str) and candidate:
+            by_candidate.setdefault(candidate, []).append(change_id)
+    return existing, by_candidate
+
+
+def _linked_change_ids(
+    review: dict[str, Any], existing: dict[str, dict[str, Any]], by_candidate: dict[str, list[str]],
+) -> list[str]:
     evidence = review.get("evidence") if isinstance(review.get("evidence"), dict) else {}
     named = [i for i in evidence.get("change_ids") or [] if isinstance(i, str)] + [review.get("change_id")]
     if review.get("block_id"):
@@ -183,8 +193,13 @@ def linked_change_ids(review: dict[str, Any], changes: list[Any]) -> list[str]:
     out = [i for i in named if isinstance(i, str) and i in existing]
     candidate = review.get("source_candidate_id")
     if isinstance(candidate, str) and candidate:
-        out += [cid for cid, c in existing.items() if c.get("source_candidate_id") == candidate]
+        out.extend(by_candidate.get(candidate, ()))
     return list(dict.fromkeys(out))
+
+
+def linked_change_ids(review: dict[str, Any], changes: list[Any]) -> list[str]:
+    """Existing change IDs a review record is about: named in its evidence, or sharing its candidate ID."""
+    return _linked_change_ids(review, *_index_changes(changes))
 
 
 def reviews_by_change(canonical: Any) -> dict[str, list[dict[str, Any]]]:
@@ -192,10 +207,11 @@ def reviews_by_change(canonical: Any) -> dict[str, list[dict[str, Any]]]:
     canonical = canonical if isinstance(canonical, dict) else {}
     changes = canonical.get("changes") if isinstance(canonical.get("changes"), list) else []
     reviews = canonical.get("review_queue") if isinstance(canonical.get("review_queue"), list) else []
+    existing, by_candidate = _index_changes(changes)
     out: dict[str, list[dict[str, Any]]] = {}
     for review in reviews:
         if isinstance(review, dict) and isinstance(review.get("review_id"), str):
-            for cid in linked_change_ids(review, changes):
+            for cid in _linked_change_ids(review, existing, by_candidate):
                 out.setdefault(cid, []).append(review)
     return out
 

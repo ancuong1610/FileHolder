@@ -1,6 +1,6 @@
 # Issue + plan: reviewer clicks are slow (server-side latency)
 
-Status: PROPOSED (no task released yet). Owner: Claude (lead), implementer per task.
+Status: ACTIVE (T1, T2 done; T0, T3 open). Owner: Claude (lead), implementer per task.
 
 ## Issue
 
@@ -138,6 +138,6 @@ would need changes; memory for one job exceeds about 1 GB.
 | Task | State | Evidence |
 |---|---|---|
 | T0 | open | prototype in session scratchpad |
-| T1 | open | — |
-| T2 | open | prototype (memoized `json.loads`) gave 490–680 → 270–450 ms per selection |
+| T1 | done | output identical (reference + seeded random tests); 163 real-job response hashes unchanged |
+| T2 | done | with T1, off-site real job: selection API 440–640 → 84–153 ms (total 130–204 ms), open job API 895 → 394 ms; suite 1141 / 6 known failures |
 | T3 | open | — |

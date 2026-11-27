@@ -8,7 +8,6 @@ a record whose element has no section is listed under ``unplaced``, never guesse
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
@@ -16,6 +15,7 @@ from typing import Any
 from document_compare.phase2.reader.result_reader import (
     ID_FIELDS, ReaderError, project_change_block, project_impact,
 )
+from document_compare.phase2.viewer.artifact_cache import load_json
 from document_compare.phase2.viewer.locations import (
     SIDES, _CONTAINERS, _load_document, linked_change_ids, needs_review_status, record_side_ref, review_reason,
 )
@@ -52,7 +52,7 @@ def _load_structured(output_dir: Path, side: str) -> dict[str, Any] | None:
         resolved = path.resolve()
         if resolved.parent != base or not resolved.is_file() or resolved.stat().st_size > _MAX_DOC_BYTES:
             return None
-        data = json.loads(resolved.read_text(encoding="utf-8"))
+        data = load_json(resolved)
     except OSError:
         return None
     except ValueError as exc:

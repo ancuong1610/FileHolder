@@ -4,14 +4,90 @@ from __future__ import annotations
 
 import copy
 import json
+import random
 import tempfile
 import unittest
 from pathlib import Path
 
 from document_compare.phase2.agent import mock_reader
 from document_compare.phase2.reader.result_reader import ReaderError
-from document_compare.phase2.viewer.locations import resolve_locations
+from document_compare.phase2.viewer.locations import linked_change_ids, resolve_locations, reviews_by_change
 from document_compare.phase2.viewer.synthetic import seed_demo_job
+
+
+def _reference_linked_change_ids(review, changes):
+    existing = {c["change_id"]: c for c in changes if isinstance(c, dict) and isinstance(c.get("change_id"), str)}
+    evidence = review.get("evidence") if isinstance(review.get("evidence"), dict) else {}
+    named = [i for i in evidence.get("change_ids") or [] if isinstance(i, str)] + [review.get("change_id")]
+    if review.get("block_id"):
+        named.extend(i for i in review.get("change_ids") or [] if isinstance(i, str))
+    out = [i for i in named if isinstance(i, str) and i in existing]
+    candidate = review.get("source_candidate_id")
+    if isinstance(candidate, str) and candidate:
+        out += [cid for cid, c in existing.items() if c.get("source_candidate_id") == candidate]
+    return list(dict.fromkeys(out))
+
+
+def _reference_reviews_by_change(canonical):
+    canonical = canonical if isinstance(canonical, dict) else {}
+    changes = canonical.get("changes") if isinstance(canonical.get("changes"), list) else []
+    reviews = canonical.get("review_queue") if isinstance(canonical.get("review_queue"), list) else []
+    out = {}
+    for review in reviews:
+        if isinstance(review, dict) and isinstance(review.get("review_id"), str):
+            for cid in _reference_linked_change_ids(review, changes):
+                out.setdefault(cid, []).append(review)
+    return out
+
+
+class ReviewLinksTests(unittest.TestCase):
+    def _assert_reference(self, changes, reviews):
+        canonical = {"changes": changes, "review_queue": reviews}
+        expected = _reference_reviews_by_change(canonical)
+        self.assertEqual(list(reviews_by_change(canonical).items()), list(expected.items()))
+        for review in reviews:
+            if isinstance(review, dict):
+                self.assertEqual(linked_change_ids(review, changes), _reference_linked_change_ids(review, changes))
+
+    def test_links_preserve_reference_order_and_duplicates(self):
+        changes = [
+            {"change_id": "C1", "source_candidate_id": "other"},
+            {"change_id": "C2", "source_candidate_id": "shared"},
+            {"change_id": "C3", "source_candidate_id": "shared"},
+            {"change_id": "C4", "source_candidate_id": "other"},
+            {"change_id": "C1", "source_candidate_id": "shared"},
+            {"change_id": "C5", "source_candidate_id": ["unhashable"]},
+            {"change_id": 3}, None,
+        ]
+        review = {
+            "review_id": "R1", "evidence": {"change_ids": ["C3", "missing", "C3", None]},
+            "change_id": "C4", "block_id": "B1", "change_ids": ["C2", "C3", "missing"],
+            "source_candidate_id": "shared",
+        }
+        reviews = [
+            review, {"review_id": "R2", "change_id": "C2", "change_ids": ["C5"]},
+            review, {"review_id": None, "change_id": "C5"}, "invalid review",
+        ]
+        self.assertEqual(linked_change_ids(review, changes), ["C3", "C4", "C2", "C1"])
+        self._assert_reference(changes, reviews)
+
+    def test_seeded_random_links_match_reference(self):
+        rng = random.Random(2711)
+        ids = [f"C{i}" for i in range(180)] + [None, 3, "missing"]
+        candidates = [f"S{i}" for i in range(24)] + [None, {}, ""]
+        changes = [
+            {"change_id": cid, "source_candidate_id": rng.choice(candidates)}
+            for cid in rng.choices(ids[:-3], k=200)
+        ] + [None, {"change_id": 3}]
+        reviews = [
+            {
+                "review_id": f"R{i}", "evidence": {"change_ids": rng.choices(ids, k=rng.randrange(5))},
+                "change_id": rng.choice(ids), "block_id": rng.choice([None, "B1"]),
+                "change_ids": rng.choices(ids, k=rng.randrange(5)), "source_candidate_id": rng.choice(candidates),
+            }
+            for i in range(150)
+        ] + [None, {}]
+        self._assert_reference(changes, reviews)
 
 
 def _page(number: int, width: float = 10.0, height: float = 20.0) -> dict:

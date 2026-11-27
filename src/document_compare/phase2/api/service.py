@@ -44,6 +44,7 @@ from pydantic import BaseModel, Field, field_validator
 from document_compare.phase2.reader import result_reader as reader
 from document_compare.shared.paths import REPO_ROOT
 from document_compare.phase2.api.summary import build_summary
+from document_compare.phase2.viewer.artifact_cache import load_json
 from document_compare.phase2.viewer.locations import resolve_locations
 from document_compare.phase2.viewer.outline import build_outline
 from document_compare.phase2.viewer.page_render import render_page, style_for
@@ -190,7 +191,7 @@ def _load_canonical(job_id: str) -> dict:
     if not path.exists():
         raise HTTPException(404, "Job not finished or failed")
     try:
-        canonical = json.loads(path.read_text(encoding="utf-8"))
+        canonical = load_json(path)
     except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(409, "Comparison result is malformed") from exc
     if not isinstance(canonical, dict) or canonical.get("comparison_stage") != "phase_1_final_comparison":
@@ -418,7 +419,7 @@ def _structured_elements(job_id: str, side: str) -> list[dict[str, Any]] | None:
     if not path.is_file():
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = load_json(path)
     except (OSError, json.JSONDecodeError):
         return None
     document = data.get("document") if isinstance(data, dict) else None
